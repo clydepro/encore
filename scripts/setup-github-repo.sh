@@ -4,109 +4,125 @@
 #   scripts/setup-github-repo.sh [--repo owner/name] [--dry-run]
 #   scripts/setup-github-repo.sh --verify
 #
-# Applies everything that can be applied from the API: the label taxonomy, the
-# branch protection rules for `main`, Dependabot alerts, and the code-scanning
-# setting our CodeQL workflow depends on. Settings with no endpoint are reported
-# as a checklist instead — the script never pretends to have done them.
+# Applies everything the API allows: the label taxonomy, branch protection,
+# Dependabot alerts, the code-scanning arrangement our workflows assume, private
+# vulnerability reporting and the merge/branch options. What has no endpoint is
+# printed as a checklist — the script never pretends to have done it.
+#
+# `gh` must be authenticated with admin access to the repository. Note that this
+# environment's gh (2.23) has no `--repo` flag for `gh api`, so API calls spell
+# out full `repos/OWNER/REPO/...` paths; `gh label` does take `--repo`.
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
-
-REPO="${GITHUB_REPO:-}"
+REPO="${GITHUB_REPOSITORY:-}"
 DRY_RUN=0
 VERIFY_ONLY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --repo) REPO="${2:?--repo needs owner/name}"; shift 2 ;;
-    --dry-run) DRY_RUN=1; shift ;;
-    --verify) VERIFY_ONLY=1; shift ;;
-    -h|--help) sed -n '1,12p' "$0"; exit 0 ;;
-    *) echo "unknown argument: $1" >&2; exit 2 ;;
+    --repo)
+      REPO="$2"
+      shift 2
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    --verify)
+      VERIFY_ONLY=1
+      shift
+      ;;
+    -h | --help)
+      sed -n '2,13p' "${BASH_SOURCE[0]}"
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      exit 2
+      ;;
   esac
 done
 
-if ! command -v gh >/dev/null 2>&1; then
-  echo "gh (GitHub CLI) is required: https://cli.github.com" >&2
+command -v gh >/dev/null || {
+  echo "gh is required: https://cli.github.com/ (then 'gh auth login')" >&2
+  exit 1
+}
+if ! gh auth status >/dev/null 2>&1; then
+  echo "gh is not authenticated. Run: gh auth login --scope repo" >&2
   exit 1
 fi
-
-if ! gh auth status --hostname github.com >/dev/null 2>&1; then
-  cat >&2 <<'AUTH'
-Not authenticated with github.com. Run:
-
-  gh auth login            # browser flow, or
-  gh auth login --scopes repo,read:org --web
-
-A token with the `repo` scope is enough for labels, branch protection and
-Dependabot alerts. Then re-run this script.
-AUTH
-  exit 1
-fi
-
 if [[ -z "$REPO" ]]; then
-  REPO="$(git remote get-url origin | sed -E 's#.*github\.com[:/]##; s#\.git$##')"
+  REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || true)
 fi
-echo "Repository: ${REPO}  (as $(gh api user --jq .login))"
+[[ -n "$REPO" ]] || {
+  echo "cannot determine the repository; pass --repo owner/name" >&2
+  exit 1
+}
+REPO="${REPO#https://github.com/}"
+REPO="${REPO%.git}"
 
 status() { printf '  %-34s %s\n' "$1" "$2"; }
 
+# Ask the API; failures are reported as "unknown" rather than aborting the run.
+probe() { gh api "$@" 2>/dev/null || true; }
+
 if [[ "$VERIFY_ONLY" == "1" ]]; then
-  echo "==> Current state"
-  status "labels present in repository" \
-    "$(gh api "repos/$REPO/labels" --paginate --jq '.[].name' | wc -l | tr -d ' ')"
-  for required in bug P0 "area:playback" ready-for-review; do
-    if gh api "repos/$REPO/labels/$required" >/dev/null 2>&1; then
-      status "label ${required}" "present"
-    else
-      status "label ${required}" "MISSING"
-    fi
-  done
-  if gh api "repos/$REPO/branches/main/protection" >/dev/null 2>&1; then
-    status "branch protection on main" \
-      "$(gh api "repos/$REPO/branches/main/protection" --jq '[.required_status_checks.contexts[]] | length') required checks"
-  else
-    status "branch protection on main" "MISSING (run: scripts/configure-branch-protection.sh)"
-  fi
+  echo "==> Verifying $REPO"
+  status "labels" "$(python3 tools/sync_labels.py "$REPO" --check || true)"
+  status "branch protection on main" \
+    "$(probe "repos/$REPO/branches/main/protection" | python3 -c "
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: print('not set'); sys.exit()
+print(f\"{len(d['required_status_checks']['contexts'])} required checks, \"
+      f\"{d['required_pull_request_reviews']['required_approving_review_count']} approvals, \"
+      f\"code owners={d['required_pull_request_reviews']['require_code_owner_reviews']}\")
+" 2>/dev/null || echo "?")"
   if gh api "repos/$REPO/vulnerability-alerts" >/dev/null 2>&1; then
     status "Dependabot alerts" "enabled"
   else
     status "Dependabot alerts" "disabled"
   fi
-  case "$(gh api "repos/$REPO/code-scanning/default-setup" --jq .state 2>/dev/null)" in
+  case "$(probe "repos/$REPO/code-scanning/default-setup" --jq .state)" in
     not-configured) status "CodeQL default setup" "off (security.yml owns CodeQL)" ;;
     configured) status "CodeQL default setup" "ON - conflicts with security.yml" ;;
-    *) status "CodeQL default setup" "unknown (no read permission?)" ;;
+    *) status "CodeQL default setup" "unknown (needs admin read)" ;;
   esac
+  status "private vulnerability reporting" \
+    "$(case "$(probe "repos/$REPO/private-vulnerability-reporting" --jq .enabled)" in
+        true) echo enabled ;;
+        false) echo disabled ;;
+        *) echo unknown ;;
+      esac)"
+  merge_options=$(probe "repos/$REPO" --jq '
+    [.allow_squash_merge, .allow_rebase_merge, .allow_merge_commit, .delete_branch_on_merge]
+    | "squash=\(.[0]) rebase=\(.[1]) merge-commit=\(.[2]) auto-delete-branch=\(.[3])"')
+  status "merge options" "${merge_options:-unknown}"
+  if [[ "$(probe "repos/$REPO/secret-scanning/alerts" --jq 'type')" == "array" ]]; then
+    status "secret scanning" "alerts endpoint reachable (verify push protection in Settings)"
+  else
+    status "secret scanning" "unknown (check Settings)"
+  fi
   status "workflows visible" \
-    "$(gh api "repos/$REPO/actions/workflows" --jq '[.workflows[] | select(.path|startswith(".github/workflows/"))] | length') of 5 Encore workflows"
-  echo
-  echo "UI-only settings cannot be verified reliably via the API; check"
-  echo "Settings → Security → Code security and analysis for code scanning,"
-  echo "secret scanning and push protection."
+    "$(probe "repos/$REPO/actions/workflows" --jq '[.workflows[] | select(.path|startswith(".github/workflows/"))] | length') of 5 Encore workflows"
   exit 0
 fi
 
-echo "==> 1/4 Labels (.github/labels.yml)"
-if [[ "$DRY_RUN" == "1" ]]; then
-  uv run python tools/sync_labels.py "$REPO" --dry-run
+echo "==> 1/6 Labels (.github/labels.yml)"
+if [[ "$DRY_RUN" == "0" ]]; then
+  python3 tools/sync_labels.py "$REPO"
 else
-  uv run python tools/sync_labels.py "$REPO"
+  python3 tools/sync_labels.py "$REPO" --dry-run
 fi
 
-echo "==> 2/4 Branch protection for main"
-if [[ "$DRY_RUN" == "1" ]]; then
-  uv run python -c '
-import json, pathlib
-rules = json.loads(pathlib.Path(".github/branch_protection.json").read_text())
-print("  would require", len(rules["required_status_checks"]["contexts"]), "checks:",
-      ", ".join(rules["required_status_checks"]["contexts"]))
-'
+echo "==> 2/6 Branch protection for main"
+if [[ "$DRY_RUN" == "0" ]]; then
+  REPO="$REPO" bash scripts/configure-branch-protection.sh
 else
-  scripts/configure-branch-protection.sh "$REPO"
+  echo "  would apply .github/branch_protection.json"
 fi
 
-echo "==> 3/4 Dependabot alerts (also enables the dependency graph)"
+echo "==> 3/6 Dependabot alerts (also enables the dependency graph)"
 if [[ "$DRY_RUN" == "0" ]]; then
   if gh api "repos/$REPO/vulnerability-alerts" >/dev/null 2>&1; then
     echo "  already enabled"
@@ -117,44 +133,68 @@ if [[ "$DRY_RUN" == "0" ]]; then
   fi
 fi
 
-echo "==> 4/4 Code scanning: CodeQL default setup must be off"
-# GitHub rejects SARIF from advanced-configuration workflows while default setup
-# is on, which would leave Security / codeql permanently red.
+echo "==> 4/6 Code scanning: default setup off, our workflow owns CodeQL"
+# GitHub rejects SARIF from advanced-configuration workflows while the default
+# setup is on, which would leave Security / codeql permanently red.
 if [[ "$DRY_RUN" == "0" ]]; then
-  case "$(gh api "repos/$REPO/code-scanning/default-setup" --jq .state 2>/dev/null)" in
+  case "$(probe "repos/$REPO/code-scanning/default-setup" --jq .state)" in
     configured)
-      gh api -X PATCH "repos/$REPO/code-scanning/default-setup" -f state=not-configured \
-        >/dev/null && echo "  default setup disabled; security.yml now owns CodeQL"
+      if gh api -X PATCH "repos/$REPO/code-scanning/default-setup" -f state=not-configured \
+        >/dev/null 2>&1; then
+        echo "  default setup disabled; security.yml now owns CodeQL"
+      else
+        echo "  could not disable it (Settings → Security → Code security and analysis)"
+      fi
       ;;
     not-configured) echo "  already off" ;;
-    *) echo "  could not read state (Settings → Security → Code security and analysis)" ;;
+    *) echo "  state unreadable; check Settings → Security → Code security and analysis" ;;
   esac
 fi
 
-echo
-echo "Not scriptable here — do them in the web UI (Settings):"
-cat <<'CHECKLIST'
-  [ ] Security → Code security and analysis
-        - Code scanning alerts ........... must be available for SARIF uploads;
-                                           the CodeQL *default setup* must stay off
-                                           (handled above)
-        - Secret scanning + push protection
-  [ ] Security → Dependabot
-        - Dependabot version updates ..... .github/dependabot.yml is committed;
-                                           enabling alerts above is the gate
-  [ ] General → Pull Requests
-        - Automatically delete head branches
-        - Merge queue (optional; PBK 7)
-        - Keep "Allow merge commits" off, or required_linear_history blocks merges
-  [ ] Security → Private vulnerability reporting (SECURITY.md links to it)
-  [ ] Settings → Environments → create "pypi" with required reviewers, if publishing
-CHECKLIST
-
-if ! GIT_TERMINAL_PROMPT=0 git ls-remote --heads origin main 2>/dev/null |
-  grep -q "$(git rev-parse main 2>/dev/null || echo '')"; then
-  echo "Note: local main is not yet on the remote. Push with: git push -u origin main"
-  echo "      Branch protection and the workflows only take effect after that."
+echo "==> 5/6 Private vulnerability reporting (SECURITY.md links to it)"
+if [[ "$DRY_RUN" == "0" ]]; then
+  case "$(probe "repos/$REPO/private-vulnerability-reporting" --jq .enabled)" in
+    true) echo "  already enabled" ;;
+    false)
+      if gh api -X PUT "repos/$REPO/private-vulnerability-reporting" -f enabled=true \
+        >/dev/null 2>&1; then
+        echo "  enabled"
+      else
+        echo "  not changed (Settings → Security → Code security and analysis)"
+      fi
+      ;;
+    *) echo "  state unreadable; enable it in Settings" ;;
+  esac
 fi
 
-echo
-echo "Verify any time with: scripts/setup-github-repo.sh --verify"
+echo "==> 6/6 Merge and branch options"
+# `required_linear_history` already blocks merge commits on main; matching the
+# repository options keeps the UI honest about what is offered.
+if [[ "$DRY_RUN" == "0" ]]; then
+  gh api -X PATCH "repos/$REPO" \
+    -f allow_merge_commit=false \
+    -f allow_squash_merge=true \
+    -f allow_rebase_merge=true \
+    -f delete_branch_on_merge=true \
+    --jq '"  squash=\(.allow_squash_merge) rebase=\(.allow_rebase_merge) merge_commit=\(.allow_merge_commit) auto_delete=\(.delete_branch_on_merge)"' \
+    || echo "  not changed (needs Settings → General)"
+fi
+
+cat <<CHECKLIST
+
+Setup applied for $REPO. Verify with: scripts/setup-github-repo.sh --verify
+
+Still only in the web UI (Settings) — no endpoint for these on this plan:
+  [ ] Security → Code security and analysis
+        - Secret scanning + push protection. Alerts are already on for public
+          repositories; push protection has to be ticked here.
+  [ ] Settings → Environments → create "pypi" with required reviewers, if and
+      when this project publishes packages (release.yml expects that name).
+  [ ] General → Pull Requests → allow merge queue (optional; PBK 7).
+
+Deliberately NOT enabled while one person maintains this repository:
+  [ ] required_approving_review_count / require_code_owner_reviews /
+      require_last_push_approval — nobody can approve their own pull request, so
+      turning them on now makes every pull request unmergeable. See
+      docs/Developer/Repository-Administration.md for what to flip later.
+CHECKLIST
