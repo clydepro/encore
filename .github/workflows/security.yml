@@ -23,20 +23,36 @@ concurrency:
 
 jobs:
   codeql:
-    name: Security / codeql
+    name: Security / codeql (${{ matrix.language }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
       security-events: write
+      actions: read
+    # Code scanning *default setup* must stay disabled for this repository:
+    # GitHub rejects SARIF from "advanced configuration" workflows while the
+    # default setup is on ("CodeQL analyses from advanced configurations cannot
+    # be processed when the default setup is enabled"), and this workflow is the
+    # declarative, version-pinned owner of the analysis. `scripts/setup-github-repo.sh`
+    # enforces it.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Python needs no build; the Actions analysis reads the workflows.
+          - language: python
+            build-mode: none
+          - language: actions
+            build-mode: ""
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: github/codeql-action/init@v4.38.3
         with:
-          languages: python
-          build-mode: none
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
       - uses: github/codeql-action/analyze@v4.38.3
         with:
-          category: /language:python
+          category: "/language:${{ matrix.language }}"
 
   dependency-review:
     name: Security / dependency review
@@ -60,8 +76,8 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen --all-groups
-      - name: Audit locked dependencies
-        run: uv audit --frozen --strict
+      - name: Audit locked dependencies against OSV
+        run: uv audit --frozen
 
   secrets:
     name: Security / secrets

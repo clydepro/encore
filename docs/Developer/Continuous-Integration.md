@@ -42,7 +42,10 @@ Raspberry Pi 4. Nightly runs the slow suites: performance and the baseline party
 
 ## Security
 
-- CodeQL (python, `build-mode: none`).
+- CodeQL in two languages: python (`build-mode: none`) and actions. GitHub's
+  code-scanning **default setup must stay disabled** — while it is on, SARIF
+  from advanced-configuration workflows is rejected and `Security / codeql` can
+  never go green. `scripts/setup-github-repo.sh` asserts the setting.
 - `uv audit` against OSV for the locked dependency set.
 - `dependency-review-action` on PRs, rejecting high-severity advisories and
   copyleft licenses (SAPRS 15.10).

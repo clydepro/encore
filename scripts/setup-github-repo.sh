@@ -5,9 +5,9 @@
 #   scripts/setup-github-repo.sh --verify
 #
 # Applies everything that can be applied from the API: the label taxonomy, the
-# branch protection rules for `main`, and Dependabot alerts. Settings that have
-# no stable endpoint for this plan are reported as a checklist instead — the
-# script never pretends to have done them.
+# branch protection rules for `main`, Dependabot alerts, and the code-scanning
+# setting our CodeQL workflow depends on. Settings with no endpoint are reported
+# as a checklist instead — the script never pretends to have done them.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -73,8 +73,13 @@ if [[ "$VERIFY_ONLY" == "1" ]]; then
   else
     status "Dependabot alerts" "disabled"
   fi
+  case "$(gh api "repos/$REPO/code-scanning/default-setup" --jq .state 2>/dev/null)" in
+    not-configured) status "CodeQL default setup" "off (security.yml owns CodeQL)" ;;
+    configured) status "CodeQL default setup" "ON - conflicts with security.yml" ;;
+    *) status "CodeQL default setup" "unknown (no read permission?)" ;;
+  esac
   status "workflows visible" \
-    "$(gh api "repos/$REPO/actions/workflows" --jq '.total_count') (5 expected after push)"
+    "$(gh api "repos/$REPO/actions/workflows" --jq '[.workflows[] | select(.path|startswith(".github/workflows/"))] | length') of 5 Encore workflows"
   echo
   echo "UI-only settings cannot be verified reliably via the API; check"
   echo "Settings → Security → Code security and analysis for code scanning,"
@@ -82,14 +87,14 @@ if [[ "$VERIFY_ONLY" == "1" ]]; then
   exit 0
 fi
 
-echo "==> 1/3 Labels (.github/labels.yml)"
+echo "==> 1/4 Labels (.github/labels.yml)"
 if [[ "$DRY_RUN" == "1" ]]; then
   uv run python tools/sync_labels.py "$REPO" --dry-run
 else
   uv run python tools/sync_labels.py "$REPO"
 fi
 
-echo "==> 2/3 Branch protection for main"
+echo "==> 2/4 Branch protection for main"
 if [[ "$DRY_RUN" == "1" ]]; then
   uv run python -c '
 import json, pathlib
@@ -101,21 +106,38 @@ else
   scripts/configure-branch-protection.sh "$REPO"
 fi
 
-echo "==> 3/3 Dependabot alerts (also enables the dependency graph)"
+echo "==> 3/4 Dependabot alerts (also enables the dependency graph)"
 if [[ "$DRY_RUN" == "0" ]]; then
-  if gh api -X POST "repos/$REPO/vulnerability-alerts" >/dev/null 2>&1; then
+  if gh api "repos/$REPO/vulnerability-alerts" >/dev/null 2>&1; then
+    echo "  already enabled"
+  elif gh api -X POST "repos/$REPO/vulnerability-alerts" >/dev/null 2>&1; then
     echo "  enabled"
   else
-    echo "  not changed (already enabled, or needs Settings → Security → Dependabot)"
+    echo "  not changed (needs Settings → Security → Dependabot)"
   fi
+fi
+
+echo "==> 4/4 Code scanning: CodeQL default setup must be off"
+# GitHub rejects SARIF from advanced-configuration workflows while default setup
+# is on, which would leave Security / codeql permanently red.
+if [[ "$DRY_RUN" == "0" ]]; then
+  case "$(gh api "repos/$REPO/code-scanning/default-setup" --jq .state 2>/dev/null)" in
+    configured)
+      gh api -X PATCH "repos/$REPO/code-scanning/default-setup" -f state=not-configured \
+        >/dev/null && echo "  default setup disabled; security.yml now owns CodeQL"
+      ;;
+    not-configured) echo "  already off" ;;
+    *) echo "  could not read state (Settings → Security → Code security and analysis)" ;;
+  esac
 fi
 
 echo
 echo "Not scriptable here — do them in the web UI (Settings):"
 cat <<'CHECKLIST'
   [ ] Security → Code security and analysis
-        - Code scanning (CodeQL) ......... required before Security / codeql can
-                                           upload SARIF; PRs otherwise stall
+        - Code scanning alerts ........... must be available for SARIF uploads;
+                                           the CodeQL *default setup* must stay off
+                                           (handled above)
         - Secret scanning + push protection
   [ ] Security → Dependabot
         - Dependabot version updates ..... .github/dependabot.yml is committed;
