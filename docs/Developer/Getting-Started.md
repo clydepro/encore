@@ -57,6 +57,11 @@ Commit prefixes: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`, `perf`,
 with a scope matching an area label — `feat(queue):`, `fix(playback):`,
 `docs(adr):`, `test(search):`.
 
+`main` rejects direct pushes (`git push origin main` fails with "protected branch
+hook declined"): the fourteen required checks run per pull request, and
+`enforce_admins` means that applies to maintainers too. Merge with squash or
+rebase — `required_linear_history` refuses merge commits.
+
 ## Layout
 
 ```text
@@ -91,4 +96,6 @@ The layout is fixed by PBK Chapter 2; changing it requires an ADR.
 - [Developer handbook](README.md)
 - [Testing](Testing.md)
 - [Continuous integration](Continuous-Integration.md)
+- [Repository administration](Repository-Administration.md) — one-time GitHub
+  settings, and what to flip when a second maintainer arrives
 - [ADRs](../adr/)
