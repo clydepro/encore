@@ -92,15 +92,28 @@ def test_branch_protection_file_has_the_expected_shape() -> None:
     rules = _load_protection()
     assert rules["required_status_checks"]["strict"] is True
     assert rules["enforce_admins"] is True
-    assert rules["required_pull_request_reviews"]["required_approving_review_count"] == 1
-    assert rules["required_pull_request_reviews"]["require_code_owner_reviews"] is True
-    # With one maintainer, requiring approval of the latest push means nobody can
-    # ever merge, because review requirements are not bypassed by admin merge.
-    assert rules["required_pull_request_reviews"]["require_last_push_approval"] is False
+    assert "required_approving_review_count" in rules["required_pull_request_reviews"]
     assert rules["required_linear_history"] is True
     assert rules["allow_force_pushes"] is False
     assert rules["allow_deletions"] is False
     assert rules["required_conversation_resolution"] is True
+
+
+def test_review_rules_do_not_block_a_single_maintainer() -> None:
+    """A pull request nobody can approve is a broken repository, not a strict one.
+
+    GitHub refuses self-approval, and an admin merge skips status checks but never
+    review requirements — so `required_approving_review_count: 1` (or
+    `require_last_push_approval: true`) with one maintainer makes every pull
+    request permanently unmergeable. The review gates stay off until a second
+    person has write access; `enforce_admins` keeps the fourteen status checks
+    binding for everyone meanwhile. Raise these to 1/true/true, and update this
+    test, when that changes: docs/Developer/Repository-Administration.md.
+    """
+    reviews = _load_protection()["required_pull_request_reviews"]
+    assert reviews["required_approving_review_count"] == 0
+    assert reviews["require_code_owner_reviews"] is False
+    assert reviews["require_last_push_approval"] is False
 
 
 def test_required_checks_are_unique() -> None:

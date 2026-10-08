@@ -74,10 +74,13 @@ that section into a dated version heading.
 - CI actions were referenced by moving major tags that some authors never
   publish, which failed jobs at "Set up job"; every action is now pinned to a
   full version tag and a test rejects moving references.
-- Branch protection required approval of the most recent push, which no single
-  maintainer can satisfy: an admin merge does not bypass review requirements, so
-  nothing could ever merge. It is off, with one approving review and
-  `CODEOWNERS` still enforced.
+- Branch protection required approvals that nobody could give. A single
+  maintainer cannot approve their own pull request, so "one approving review",
+  "code owner review" and "approval of the most recent push" made every pull
+  request unmergeable — an admin merge does not bypass review requirements. The
+  review gates are off until a second person with write access joins (see
+  `docs/Developer/Repository-Administration.md`); all fourteen status checks
+  still gate every merge, for admins included.
 
 ### Security
 
