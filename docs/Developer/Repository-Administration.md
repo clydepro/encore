@@ -8,10 +8,13 @@ Requires the GitHub CLI with admin access: `gh auth login`.
 
 ## First-time setup
 
+Push first — protection rules and workflows only take effect against commits
+that exist on GitHub:
+
 ```bash
-scripts/sync-labels.sh                       # PBK 10 taxonomy
-scripts/configure-branch-protection.sh       # PBK 7 rules for main
-gh api -X POST "repos/$OWNER/$REPO/vulnerability_alerts"   # Dependabot alerts
+git push -u origin main
+scripts/setup-github-repo.sh          # labels + branch protection + Dependabot alerts
+scripts/setup-github-repo.sh --verify # read-only status of everything above
 ```
 
 Then, in the web UI (Settings), because there is no stable public endpoint for
@@ -41,6 +44,17 @@ exactly as they appear in the Checks tab. After changing a job name, re-run
 `scripts/configure-branch-protection.sh`, otherwise PRs wait forever on a check
 that will never come.
 
+Two traps worth remembering:
+
+- A context that no workflow ever reports keeps every PR at "Expected" forever.
+  That includes plausible-looking names: the CodeQL job's check is
+  `Security / codeql`, not `CodeQL`, and there is no `Dependabot` check at all.
+  `scripts/setup-github-repo.sh --verify` prints the required list so you can
+  diff it against the Checks tab.
+- A job guarded by `if:` and reported as *skipped* satisfies a required check;
+  one that never runs does not. `Security / dependency review` therefore works
+  as a required check even though it only runs on pull requests.
+
 ## Labels
 
 `.github/labels.yml` is the source of truth for the PBK 10 taxonomy: types
@@ -54,7 +68,8 @@ table. Changing a name means updating this file, `labels.yml` and every issue
 template that references it in one PR.
 
 ```bash
-scripts/sync-labels.sh --prune --dry-run   # review drift first (see tools/sync_labels.py)
+scripts/setup-github-repo.sh                 # applies the taxonomy
+scripts/sync-labels.sh --prune --dry-run     # review drift only (tools/sync_labels.py)
 ```
 
 ## Automation inventory

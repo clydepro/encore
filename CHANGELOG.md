@@ -40,7 +40,7 @@ process moves that section into a dated version heading.
   bundles derived from the AIG.
 - Developer scripts: `bootstrap.sh`, `lint.sh`, `format.sh`, `test.sh`,
   `check.sh`, `run-server.sh`, `run-builder.sh`, `sync-labels.sh`,
-  `configure-branch-protection.sh`.
+  `configure-branch-protection.sh`, `setup-github-repo.sh`.
 
 ### Changed
 

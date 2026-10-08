@@ -25,10 +25,6 @@ gh api -X PUT "repos/${REPO}/branches/${BRANCH}/protection" \
          linear_history: .required_linear_history.enabled}'
 
 echo
-echo "Remaining items are repository settings, not files. See"
-echo "docs/Developer/Repository-Administration.md for the checklist. The one that"
-echo "has a stable endpoint for public repositories:"
-echo "  gh api -X POST \"repos/${REPO}/vulnerability_alerts\"   # Dependabot alerts"
-echo "Everything else (auto-delete merged branches, code scanning, secret"
-echo "scanning, merge queue, signed-commit requirement, label sync schedule) is"
-echo "Settings → Code and automation / General → Branches."
+echo "For the rest of the first-time setup (labels, Dependabot alerts, the"
+echo "settings checklist): scripts/setup-github-repo.sh"
+echo "Settings-only items are listed in docs/Developer/Repository-Administration.md"
