@@ -53,7 +53,9 @@ destination (90% overall, 95% domain/queue/search, 90% playback/builder).
 - Require audio hardware or a real mpv process.
 - Make network calls, including to MusicBrainz.
 - Read a developer's actual music library or `/etc/encore/config.yaml`.
-- Depend on wall-clock timing; use the injected clock once it exists.
+- Depend on wall-clock timing. Pass `occurred_at=` (events) or `enqueued_at=`
+  (queue items) instead: `encore/utilities/clock.py` makes time an argument, and
+  every domain and event timestamp is injectable.
 
 ## Regression tests (SAPRS 14.14, AEP 13)
 

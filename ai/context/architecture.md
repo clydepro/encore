@@ -29,6 +29,20 @@ Presentation → Application → Domain → Repositories → Infrastructure
 Imports point inward only. HTTP concepts stop at `encore/controllers/` and
 `encore/api/`; SQL stops at `encore/repositories/`.
 
+## Where the code is
+
+| Package | State | Notes |
+| ------- | ----- | ----- |
+| `encore/domain/` | implemented | SAPRS Ch. 4 entities, enums, transition table; frozen dataclasses, typed ids |
+| `encore/events/` | implemented | the eight AIG 8 facts + `EventBus`; `EVENT_VOCABULARY` is the set as data |
+| `encore/config/` | implemented | Pydantic models for `examples/config.yaml` + `ConfigurationService` |
+| `encore/services/` | partial | `LoggingService` and `build_core_services()`; the other services arrive with their milestones |
+| `encore/utilities/` | partial | `clock.py` (injectable time), `redaction.py` (log safety) |
+| `encore/repositories/` | placeholder | step 5 |
+| `encore/search/`, `encore/playback/` | placeholder | steps 7-8 |
+| `encore/api/`, `encore/controllers/`, `templates/`, `static/` | placeholder | steps 11-14 |
+| `apps/builder/`, `apps/server/` | placeholder | entry points land with steps 6 and 11 |
+
 ## Runtime services (SAPRS 2.4, AIG 7)
 
 ConfigurationService · LibraryService · SearchService · QueueService ·
@@ -36,11 +50,21 @@ PlaybackService · PlaybackSupervisor · HealthService · StatisticsService ·
 EventBus · SSEPublisher · LoggingService. One capability each, dependencies
 injected by constructor, cooperating through the Event Bus.
 
+`build_core_services()` in `encore/services/container.py` is the composition
+root: the only place that constructs the core, returning a frozen `CoreServices`.
+It reads no environment variable, holds no module-level instance, and configures
+logging as its one process-wide effect — undone by `logging.remove()`.
+
 ## Events (AIG 8, ADR-004)
 
 `SongQueued`, `SongStarted`, `SongFinished`, `QueueAdvanced`,
 `PlaybackRecovered`, `LibraryReloaded`, `BuildCompleted`, `HealthChanged`.
 Immutable, typed, timestamped, independent of HTTP. Handler failure is isolated.
+
+`publish()` never blocks a caller on a handler: synchronous handlers run inline
+in registration order and coroutines are scheduled, so a slow subscriber cannot
+delay playback (SAPRS 11.4). `publish_async()` and `drain()` are for shutdown and
+for tests, where ordering must be observed.
 
 ## Storage (SAPRS 5, ADR-003, ADR-006)
 

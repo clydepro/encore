@@ -9,22 +9,32 @@ improvised.
 
 ```text
 ai/
-├── prompts/         session openers and review prompts
-├── context/         compact, authoritative summaries of the architecture
-├── task_templates/  the standard shape of a coding request
-├── reviews/         review output and conventions
-└── checklists/      gates an AI-assisted change must clear
+├── current-phase.md   what the present phase was, and how far it got
+├── HANDOFF.md         what the next session should read, decide and not repeat
+├── prompts/           session openers and review prompts
+├── context/           compact, authoritative summaries of the architecture
+├── task_templates/    the standard shape of a coding request
+├── reviews/           review output and conventions
+└── checklists/        gates an AI-assisted change must clear
 ```
+
+`current-phase.md` and `HANDOFF.md` are working notes, rewritten at the end of
+each phase rather than maintained continuously. `context/milestones.md` is the
+longer-lived statement of what exists; if the two disagree, milestones.md is the
+one to fix.
 
 ## How to use it
 
-1. Open a session with [`prompts/standard-prompt-header.md`](prompts/standard-prompt-header.md).
+1. Open a session with [`prompts/standard-prompt-header.md`](prompts/standard-prompt-header.md),
+   after reading [`current-phase.md`](current-phase.md) and
+   [`HANDOFF.md`](HANDOFF.md).
 2. Attach the smallest [`context/`](context/) bundle that covers the area.
 3. Write the task with [`task_templates/feature.md`](task_templates/feature.md)
    (or bug fix / refactor / documentation).
 4. Implement, then run [`prompts/code-review.md`](prompts/code-review.md) as a
    *separate* pass before a human looks at it (AEP Appendix C).
-5. Close with [`checklists/definition-of-done.md`](checklists/definition-of-done.md).
+5. Close with [`checklists/definition-of-done.md`](checklists/definition-of-done.md),
+   then rewrite `current-phase.md` and `HANDOFF.md` in the same commit.
 
 ## Rules
 

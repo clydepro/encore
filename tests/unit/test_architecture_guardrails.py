@@ -9,9 +9,20 @@ useful, which is exactly why it can exist during the bootstrap phase.
 from __future__ import annotations
 
 import ast
+import dataclasses
 from pathlib import Path
+from typing import Any
 
 import pytest
+
+import encore.config
+import encore.domain
+import encore.events
+import encore.services
+import encore.utilities
+from encore.config import ConfigurationService
+from encore.events import EVENT_VOCABULARY, EventBus
+from encore.services import LoggingService
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -34,6 +45,26 @@ NO_DIRECT_SQL = ("encore/controllers", "encore/domain", "encore/services", "enco
 #: The Builder must never import runtime playback (ADR-001).
 BUILDER_ROOT = "apps/builder"
 PLAYBACK_MODULE = "encore.playback"
+
+#: `encore.utilities` is the shared leaf by construction (AIG 5), so the domain may
+#: use a clock or a redaction helper without that counting as reaching outward.
+OUTWARD_ALLOWED = ("encore.domain", "encore.utilities")
+
+#: Fields that mention a person-shaped word and are still anonymous. A count of
+#: guests is a number; `guest` would be an identity.
+IDENTITY_EXCUSED = frozenset({"guest_count", "guests_seen", "session_minutes"})
+
+#: Substrings that mean a record has started to track who asked.
+GUEST_IDENTITY_MARKERS = (
+    "guest",
+    "requester",
+    "user_id",
+    "patron",
+    "account",
+    "source_ip",
+    "client_address",
+    "session_id",
+)
 
 
 def _python_files(relative_dir: str) -> list[Path]:
@@ -123,3 +154,121 @@ def test_package_skeleton_matches_the_mandated_layout() -> None:
     }
     missing = {name for name in expected if not (PROJECT_ROOT / name).is_dir()}
     assert not missing, f"mandated directories missing: {sorted(missing)}"
+
+
+# -- rules that became checkable once the core existed -------------------
+
+
+def test_the_domain_is_the_innermost_layer() -> None:
+    """AIG 4 states the well-known half - "domain services never import FastAPI".
+    The other half is that the model imports nothing from the layers above it. An
+    entity that reached for a repository or a service could not be constructed by
+    the Builder, which is ADR-001's whole point."""
+
+    for path in _python_files("encore/domain"):
+        offenders = {
+            name
+            for name in _imports(path)
+            if name.startswith("encore.") and not name.startswith(OUTWARD_ALLOWED)
+        }
+        assert not offenders, (
+            f"{path.relative_to(PROJECT_ROOT)} reaches out of the domain: {sorted(offenders)}"
+        )
+
+
+def test_no_core_service_is_reachable_as_a_module_global() -> None:
+    """AEP 9 forbids singleton service instances.
+
+    Checked on the imported modules rather than by reading source, because the
+    failure it guards is the accidental one: a module-level `BUS = EventBus()` that
+    two tests then silently share, which no amount of skimming catches."""
+
+    service_types = (EventBus, ConfigurationService, LoggingService)
+    modules = (
+        *vars(encore.config).values(),
+        *vars(encore.domain).values(),
+        *vars(encore.events).values(),
+        *vars(encore.services).values(),
+        *vars(encore.utilities).values(),
+    )
+    offenders: list[str] = []
+    for module in modules:
+        if not hasattr(module, "__dict__") or not str(getattr(module, "__name__", "")).startswith(
+            "encore."
+        ):
+            continue
+        offenders += [
+            f"{module.__name__}.{attribute}"
+            for attribute, value in vars(module).items()
+            if not attribute.startswith("_") and isinstance(value, service_types)
+        ]
+
+    assert offenders == [], f"singleton services reachable by import: {offenders}"
+
+
+def test_no_model_or_event_carries_guest_identity() -> None:
+    """AIG 22: "do not implement guest accounts", SAPRS 8.2: guests are anonymous.
+
+    Enforced on the vocabulary rather than in review, because the way to break it
+    is small and reasonable-looking - one `source_ip` on an event to make a
+    dashboard nicer."""
+
+    offenders: list[str] = []
+    for declared in (*vars(encore.domain).values(), *vars(encore.events).values()):
+        if not (isinstance(declared, type) and dataclasses.is_dataclass(declared)):
+            continue
+        owner = str(getattr(declared, "__module__", ""))
+        if not owner.startswith(("encore.domain", "encore.events")):
+            continue
+        for field in dataclasses.fields(declared):
+            name = field.name.lower()
+            if name in IDENTITY_EXCUSED:
+                continue
+            if any(marker in name for marker in GUEST_IDENTITY_MARKERS):
+                offenders.append(f"{declared.__name__}.{field.name}")
+
+    assert offenders == [], f"guest identity entered the model: {sorted(set(offenders))}"
+
+
+def test_events_are_immutable_and_timestamped() -> None:
+    """SAPRS 11.2 says events are immutable; ADR-004 makes them the only channel
+    between services, so a mutable event is one service editing a fact after the
+    bus handed it to someone else."""
+
+    # `list[Any]` because `type[Event]` does not declare `__dataclass_params__`;
+    # the check below is the one that matters, not the annotation.
+    vocabulary: list[Any] = list(EVENT_VOCABULARY)
+    for event_type in vocabulary:
+        assert event_type.__dataclass_params__.frozen, f"{event_type.__name__} is mutable"
+        assert hasattr(event_type, "__slots__"), f"{event_type.__name__} is not slotted"
+        assert "occurred_at" in {field.name for field in dataclasses.fields(event_type)}
+
+
+def test_configuration_cannot_write() -> None:
+    """SAPRS 12.3: Encore must not edit and persist its own YAML.
+
+    The cleanest way to satisfy a rule like this is to have no way to break it, so
+    the Configuration package contains no write at all - and this test is what
+    keeps that true when someone adds a "save settings" button and reaches for the
+    obvious module to put it in."""
+
+    writes = ("write_text", "write_bytes", "touch", "mkdir", "truncate", "chmod", "unlink")
+    offenders: list[str] = []
+    for path in _python_files("encore/config"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            called = ast.unparse(node.func)
+            opened_for_writing = called == "open" and any(
+                isinstance(argument, ast.Constant)
+                and isinstance(argument.value, str)
+                and set(argument.value) & set("wax+")
+                for argument in [*node.args, *(keyword.value for keyword in node.keywords)]
+            )
+            if called.endswith(writes) or called.startswith(("yaml.dump", "yaml.safe_dump")):
+                offenders.append(f"{path.relative_to(PROJECT_ROOT)}:{node.lineno} {called}")
+            elif opened_for_writing:
+                offenders.append(f"{path.relative_to(PROJECT_ROOT)}:{node.lineno} open(..., w)")
+
+    assert offenders == [], f"the Configuration package wrote something: {offenders}"

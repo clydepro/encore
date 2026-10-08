@@ -161,6 +161,9 @@ settings to raise once a second reviewer exists.
 AI tools are first-class contributors here, and that is a responsibility, not an
 exception (SAPRS 15.14):
 
+- Read [`ai/current-phase.md`](ai/current-phase.md) and
+  [`ai/HANDOFF.md`](ai/HANDOFF.md) first: what the last session did, decided and
+  left open.
 - Start the session from [`ai/prompts/standard-prompt-header.md`](ai/prompts/standard-prompt-header.md).
 - Use a task template from [`ai/task_templates/`](ai/task_templates/).
 - A human reviewed and understands every line, and says so in the PR.
@@ -174,11 +177,14 @@ exception (SAPRS 15.14):
 
 - [ ] Code implemented.
 - [ ] Tests pass, and new behaviour is covered.
-- [ ] Type checking and linting pass.
+- [ ] Type checking and linting pass (`scripts/check.sh`).
 - [ ] Documentation updated.
 - [ ] No architectural guardrail violated.
 - [ ] Acceptance criteria in the issue satisfied.
 - [ ] `CHANGELOG.md` entry added.
+- [ ] `ai/current-phase.md` and `ai/HANDOFF.md` rewritten for the next session,
+      in the same commit — a handoff note that describes a phase already merged is
+      worse than none.
 
 ## 10. Community
 
