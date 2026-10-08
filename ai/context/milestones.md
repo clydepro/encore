@@ -8,11 +8,11 @@ or too early.
 
 | # | Deliverable | State |
 | - | ----------- | ----- |
-| 1 | Repository initialization (PBK) | **Done — this is the bootstrap phase** |
-| 2 | Core domain model | Not started |
-| 3 | Event Bus | Not started |
-| 4 | Configuration | Not started |
-| 5 | Repositories | Not started |
+| 1 | Repository initialization (PBK) | **Done** |
+| 2 | Core domain model | **Done — `encore/domain/`** |
+| 3 | Event Bus | **Done — `encore/events/`** |
+| 4 | Configuration | **Done — `encore/config/` + `services/logging_service.py`** |
+| 5 | Repositories | Not started ← **next** |
 | 6 | Library Builder | Not started |
 | 7 | Search | Not started |
 | 8 | Playback | Not started |
@@ -26,12 +26,51 @@ or too early.
 | 16 | Party Simulation | Not started |
 | 17 | Documentation | Ongoing |
 
+The steps are ordered, not independent: 2–4 are the ground that 5 and 6 stand
+on. Step 5 is where `library.db` and `runtime.db` schemas first exist, which is
+why nothing before them touched SQLite.
+
 PBK's ten-milestone view groups the same work; both are listed in the README
-roadmap.
+roadmap. Steps 2, 3 and 4 are PBK milestone 2 ("Core Framework"), and are
+declared complete against its checklist in the section below.
+
+## What steps 2–4 delivered
+
+- `encore/domain/` — SAPRS Chapter 4 as immutable dataclasses, plus the
+  identifiers, enums and the 7.3 transition table. `encore.domain` is the public
+  surface; modules inside it may move.
+- `encore/events/` — the eight AIG 8 types and `EventBus`. `EVENT_VOCABULARY` is
+  that list as data and `tests/unit/test_events.py` asserts it stays exactly
+  eight, so a ninth event is a deliberate ADR-004 change or a failing test.
+- `encore/config/` — Pydantic models matching `examples/config.yaml`, and
+  `ConfigurationService`, which fails startup naming every problem and its
+  location (SAPRS 12.5). It has no write method, and neither does anything else
+  here: configuration is not managed state (12.3, 12.7).
+- `encore/services/` — `LoggingService` (JSON to the journal, AEP 16) and
+  `build_core_services()`, the composition root. There is no `EncoreServer` yet
+  and no module-level service instance anywhere (AEP 9); a guardrail test checks
+  that rather than trusting it.
+
+Decisions taken here that later steps must honour:
+
+- Events are constructed facts. `SongQueued.position` must agree with
+  `queue_length`; `HealthChanged` refuses a status that did not move. A service
+  that needs to report "nothing changed" does not publish.
+- Timestamps are timezone-aware UTC, injected through
+  `encore.utilities.clock`. Anything that subtracts two of them (queue order,
+  history, statistics) depends on it.
+- Normalization of artist/album/song names is **not** in the domain. SAPRS 6.5
+  puts it in the Builder; `normalized_*` fields exist for the Builder to fill and
+  nothing computes them yet.
+- `library.db`/`runtime.db` paths come from `paths:` in configuration only, and
+  the service refuses them if they are the same file.
 
 ## What exists today
 
-- Fixed directory layout with empty, documented packages.
+- Fixed directory layout; `encore/domain`, `encore/events`, `encore/config` and
+  `encore/services` implemented, `encore/api`, `encore/controllers`,
+  `encore/playback`, `encore/repositories`, `encore/search`, `encore/templates`
+  and `encore/static` still documented placeholders.
 - `pyproject.toml` + `uv.lock` + `.python-version`; editable install.
 - Ruff, MyPy (strict), pytest with category markers, coverage, pre-commit.
 - Five GitHub Actions workflows; issue forms; PR template; labels; CODEOWNERS;
@@ -39,25 +78,25 @@ roadmap.
 - Documentation scaffolding and ADR-001…ADR-008.
 - Test infrastructure: fixtures, temp SQLite helpers, mock mpv, Party Simulation
   profiles + loader, performance target registry, synthetic media hooks
-  (placeholders).
+  (placeholders). 342 tests (344 with the slow suites), 99% coverage of `encore/`.
 - Architecture guardrail tests and `tools/check_links.py`.
 
 ## Explicitly not implemented
 
 - Any HTTP endpoint, template, static asset or SSE stream.
-- Any database schema, migration or query.
-- Any mpv integration, queue rule, search implementation or service.
+- Any database schema, migration or query — including the two databases whose
+  paths configuration already validates. Repositories are step 5.
+- Any mpv integration, queue rule, search implementation or running service.
+- `EventBus` persistence: events are in-process only (SAPRS 11.5), and nothing
+  survives a restart yet.
 - The installer and `encore-install`.
-
-Writing any of the above during bootstrap violates PBK 1 ("no application
-functionality is implemented during this phase").
 
 ## Where to put the first feature
 
-Milestone 2 starts in `encore/domain/` (entities) and `encore/events/` (event
-types) with tests in `tests/unit/`. `apps/server/` and `apps/builder/` stay
-empty until their wiring is real; `scripts/run-*.sh` already print the honest
-placeholder message.
+Step 5 (repositories) starts in `encore/repositories/` with the schema in
+`apps/builder/`'s future ownership of `library.db` (ADR-006) and `runtime.db`
+defined in SAPRS Chapter 5. The domain entities already name the columns they
+need; `tests/support/sqlite.py` has the temporary-database helpers.
 
 ## Known open questions to resolve before v1
 

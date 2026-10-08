@@ -140,10 +140,11 @@ SQLAlchemy 2.x, Pydantic, mpv JSON IPC, systemd. Chosen and justified in
 
 ## Installation
 
-> Not installable yet: milestones 1–2 cover configuration, dependency injection,
-> logging and the Event Bus. The commands below are the contract the installer
-> will honour (SAPRS 13.2 — the manual path is authoritative; `encore-install`
-> automates exactly it).
+> Not installable yet. Steps 1–4 (repository, domain model, Event Bus,
+> configuration) are implemented; the server starts at step 11 and the Builder at
+> step 6. The commands below are the contract the installer will honour
+> (SAPRS 13.2 — the manual path is authoritative; `encore-install` automates
+> exactly it).
 
 Target: Raspberry Pi 4, Raspberry Pi OS 64-bit (Debian 12 and Ubuntu 24.04 also
 supported).
@@ -188,8 +189,12 @@ scripts/test.sh unit   # one suite
 
 Quality gates are enforced locally on commit and again in CI
 ([five workflows](docs/Developer/Continuous-Integration.md)): Validate, Test,
-Documentation, Security, Release. An empty project passes them all — that is the
-point of this phase.
+Documentation, Security, Release.
+
+The core is in place — domain model, Event Bus and configuration — so
+`scripts/check.sh` runs 342 tests against real code rather than an empty
+skeleton (344 with the scheduled slow suites). There is still nothing to start:
+no HTTP server, no database and no player until their milestones land.
 
 Layout:
 
@@ -200,7 +205,8 @@ encore/      the package: api, config, controllers, domain, events, playback,
              repositories, search, services, templates, static, utilities
 tests/       unit, integration, regression, performance, party_simulation
 docs/        SAPRS, AIG, AEP, PBK, adr/, Developer/, api/, images/
-ai/          prompts, context bundles, task templates, reviews, checklists
+ai/          current phase, handoff notes, prompts, context bundles,
+             task templates, reviews, checklists
 scripts/     bootstrap, lint, format, test, check, run-server, run-builder
 tools/       developer-only utilities
 ```
@@ -229,11 +235,11 @@ The full map, including precedence between documents, is
 Implementation order is fixed by AIG Chapter 21; the PBK recommendation groups
 the same work into ten milestones.
 
-1. **Repository initialization — this phase. Done.**
-2. Core domain model.
-3. Event Bus.
-4. Configuration.
-5. Repositories.
+1. **Repository initialization. Done.**
+2. **Core domain model. Done** — `encore/domain/`.
+3. **Event Bus. Done** — `encore/events/`.
+4. **Configuration. Done** — `encore/config/`, with structured logging.
+5. Repositories. ← next
 6. Library Builder.
 7. Search.
 8. Playback.
@@ -246,6 +252,11 @@ the same work into ten milestones.
 15. Installer.
 16. Party Simulation.
 17. Documentation → `1.0.0`.
+
+What exists and what is scaffolding is kept current in
+[`ai/context/milestones.md`](ai/context/milestones.md), and what the last session
+did and left is in [`ai/current-phase.md`](ai/current-phase.md) and
+[`ai/HANDOFF.md`](ai/HANDOFF.md). This list is the order, not the status board.
 
 Work in flight is tracked in the
 [issues](https://github.com/clydepro/encore/issues) with the area labels from

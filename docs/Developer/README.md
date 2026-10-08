@@ -15,9 +15,12 @@ yet.
 
 ## Status
 
-Bootstrap phase. The architecture is fully specified but no application code
-exists yet; every "how do I implement X" question is answered by the SAPRS and
-the ADRs until milestones land.
+Steps 1–4 of [AIG Chapter 21](../AIG/AIImplementationGuide_AIG.md) are
+implemented: the domain model, the Event Bus and configuration, with structured
+logging and a composition root. There is still no HTTP interface, no database and
+no player — those arrive at steps 11, 5/10 and 8. "How do I implement X" is
+answered by the SAPRS and the ADRs for what is not built yet, and by the code in
+`encore/` for what is.
 
 ## The shape of a change
 

@@ -5,17 +5,31 @@ quick index.
 
 ## Mandatory guardrails (SAPRS 11.10, AIG 4)
 
-Enforced in CI by `tests/unit/test_architecture_guardrails.py`:
+Enforced in CI by `tests/unit/test_architecture_guardrails.py`. The checked box
+means a failing test, not a convention:
 
-1. Domain services do not import FastAPI.
-2. Domain services do not depend on HTMX or Jinja.
-3. Controllers do not access SQLite directly.
-4. Repositories do not contain business rules.
-5. Event handlers do not invoke other event handlers.
-6. Playback does not know about HTTP.
-7. The Library Builder does not import runtime playback.
-8. The runtime never modifies `library.db`.
-9. Templates contain presentation logic only.
+| # | Rule | Status |
+| - | ---- | ------ |
+| 1 | Domain services do not import FastAPI | ✅ import scan |
+| 2 | Domain services do not depend on HTMX or Jinja | ✅ import scan |
+| 3 | Controllers do not access SQLite directly | ✅ import scan (no controllers yet) |
+| 4 | Repositories do not contain business rules | ⏳ step 5 |
+| 5 | Event handlers do not invoke other event handlers | ✅ cascade guard raises `EventCycleError` rather than recursing |
+| 6 | Playback does not know about HTTP | ✅ import scan (no playback yet) |
+| 7 | The Library Builder does not import runtime playback | ✅ import scan |
+| 8 | The runtime never modifies `library.db` | ⏳ step 10 opens it read-only |
+| 9 | Templates contain presentation logic only | ⏳ step 12 |
+
+Added once the core existed, and checkable from now on:
+
+- The domain is the innermost layer: `encore/domain/*` imports nothing from
+  `encore/` except `encore.utilities` (ADR-001).
+- No core service is reachable as a module global (AEP 9).
+- No domain entity or event carries guest identity (ADR-007, AIG 22) — matched
+  on field name, so `source_ip` on an event fails CI.
+- Every event is frozen, slotted and timestamped (SAPRS 11.2, ADR-004).
+- Configuration is not writable: nothing in `encore/config/` opens a file for
+  writing, and the queue duplicate rule (SAPRS 8.3) cannot be configured off.
 
 ## Never do these (AIG 22)
 

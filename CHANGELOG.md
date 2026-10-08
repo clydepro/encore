@@ -14,6 +14,43 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Added
 
+- `ai/current-phase.md` and `ai/HANDOFF.md`: what a phase was intended to cover,
+  what it delivered, what it deliberately left out, and what the next session
+  must decide before writing code. `ai/README.md` and the CONTRIBUTING definition
+  of done now require them to be rewritten at the end of each phase.
+- Core domain model (AIG 21 step 2) in `encore/domain/`: `Artist`, `Album`,
+  `Song`, `Artwork`, `MusicFile`, `Metadata`, `QueueItem` and `ComponentHealth`
+  as immutable dataclasses; `AudioFormat`, `ArtworkKind`, `QueueItemStatus` and
+  `PlaybackState` enums; the SAPRS 7.3 transition table behind
+  `can_transition()`; and `NewType` identifiers so an `AlbumId` cannot be passed
+  where a `SongId` is wanted. No entity carries guest identity (ADR-007), and no
+  module in the package imports anything above it (ADR-001).
+- The Event Bus (AIG 21 step 3, ADR-004, SAPRS 11.1–11.4) in `encore/events/`:
+  the eight fixed event types, an `Event` base that is frozen, slotted and
+  UTC-stamped, and `EventBus` with typed subscribe/unsubscribe, thread-safe
+  registration, per-handler failure isolation (SAPRS 11.3), non-blocking
+  scheduling of coroutine handlers plus `publish_async()`/`drain()` for shutdown
+  (SAPRS 11.4, 11.8), and a cascade guard that raises `EventCycleError` instead
+  of exhausting the stack.
+- Configuration (AIG 21 step 4, SAPRS Chapter 12) in `encore/config/`: Pydantic
+  models for every section of `examples/config.yaml` with `extra="forbid"` and
+  `frozen=True`, and `ConfigurationService` which validates at startup and
+  reports every problem at once with its location (SAPRS 12.5). The queue
+  duplicate rule (SAPRS 8.3) cannot be configured away, and `library.db` and
+  `runtime.db` are refused if they name the same file (ADR-006).
+- `LoggingService` in `encore/services/`: stdlib structured logging as JSON (one
+  object per line) or console text, with sensitive field names withheld by the
+  formatter rather than by callers (AEP 16), and `build_core_services()` as the
+  one composition root allowed to know how the core is constructed (AEP 9).
+- Clock and redaction helpers in `encore/utilities/`; `occurred_at` and
+  `enqueued_at` are injectable so timestamps are asserted, not slept on.
+- 258 new tests for the above: `tests/unit/test_domain_model.py`, `test_events.py`,
+  `test_event_bus.py`, `test_configuration.py`, `test_logging_service.py`,
+  `test_core_services.py` and `tests/integration/test_core_foundation.py`.
+- Five architecture guardrails that became checkable once the code existed:
+  the domain as the innermost layer, no service reachable as a module global,
+  no guest identity anywhere in the vocabulary, events frozen and timestamped,
+  and the Configuration package holding no write at all (SAPRS 12.3).
 - Repository bootstrap (PBK): the fixed directory layout, `pyproject.toml` as
   the single project configuration, `uv`-managed dependencies with a lockfile,
   and an editable development install.
@@ -46,6 +83,13 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Changed
 
+- Architecture guardrail tests now run against real packages rather than
+  docstrings: `tests/unit/test_architecture_guardrails.py` imports the core and
+  inspects it, so a violation added later fails in CI instead of in review.
+- `examples/config.yaml` is now executed by the test suite on every commit. It
+  is the document an installer copies, so a key the models do not accept, or a
+  default that differs from the model's, is a failing test rather than a
+  surprise on someone's first boot.
 - Dependabot's `pip` ecosystem runs with `versioning-strategy: lockfile-only` in
   one group, so dependency pull requests change `uv.lock` — what CI actually
   installs — instead of only raising the `>=` floors in `pyproject.toml`. See
