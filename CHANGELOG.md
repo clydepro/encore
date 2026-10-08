@@ -82,6 +82,15 @@ that section into a dated version heading.
   `docs/Developer/Repository-Administration.md`); all fourteen status checks
   still gate every merge, for admins included.
 
+- `scripts/setup-github-repo.sh --dry-run` failed immediately: it passed
+  `--repo` to `tools/sync_labels.py`, which takes the repository positionally.
+  `scripts/sync-labels.sh` also dropped its arguments, so `--prune` and
+  `--dry-run` did nothing.
+- Two setup steps were listed as "UI only" when they do have endpoints: private
+  vulnerability reporting (`PUT …/private-vulnerability-reporting`) and the
+  merge/branch options (`PATCH …/`). The script now applies six steps and the
+  remaining checklist is genuinely short.
+
 ### Security
 
 - Secret scanning, dependency vulnerability auditing and CodeQL analysis wired

@@ -13,33 +13,35 @@ that exist on GitHub:
 
 ```bash
 git push -u origin main                      # protection and CI apply to what is on GitHub
-scripts/setup-github-repo.sh                 # labels, branch protection, Dependabot
-                                             # alerts, code-scanning default setup
+scripts/setup-github-repo.sh                 # steps 1-6 below, idempotent
 scripts/setup-github-repo.sh --verify        # read-only status of all of it
 ```
 
-Then, in the web UI (Settings), because there is no stable public endpoint for
-them on all plans:
+What the script applies:
 
-1. **Settings → General → Pull Requests**
-   - Allow merge queue (optional, recommended once contributors overlap).
-   - Automatically delete head branches ✅.
-   - Squash merge optional; `main` requires linear history either way.
-2. **Settings → Security → Code security and analysis**
-   - Secret scanning ✅ and push protection ✅.
-   - Code scanning **alerts** available, but the **CodeQL default setup must be
-     off** — `scripts/setup-github-repo.sh` switches it, because GitHub rejects
-     SARIF from our `security.yml` while the default setup is enabled.
-   - Dependabot alerts are API-toggleable; version updates come from the
-     committed `.github/dependabot.yml`.
-3. **Settings → Branches → Branch protection rules**
-   - Verify `main` matches [`.github/branch_protection.json`](../../.github/branch_protection.json);
-     re-run the script rather than editing by hand.
-4. **Settings → Environments**
-   - Create `pypi` with required reviewers if/when packages are published.
-5. **Signed commits** (optional but recommended)
-   - Add a second, "require signed commits" rule for release branches, and ask
-     maintainers to configure SSH or GPG signing.
+1. **Labels** — the `.github/labels.yml` taxonomy via `tools/sync_labels.py`.
+   GitHub's own default labels are reported as undeclared and never deleted.
+2. **Branch protection for `main`** — from
+   [`.github/branch_protection.json`](../../.github/branch_protection.json);
+   see [Required checks](#required-checks) and [Reviews](#reviews).
+3. **Dependabot alerts** — which also switches on the dependency graph; version
+   updates come from the committed `.github/dependabot.yml`.
+4. **Code scanning** — the CodeQL *default setup* is switched off, because
+   GitHub refuses SARIF from our `security.yml` while it is enabled.
+5. **Private vulnerability reporting** — `SECURITY.md` points at it.
+6. **Merge and branch options** — rebase and squash only (matching
+   `required_linear_history`), and delete head branches after merging.
+
+What genuinely remains in the web UI, for this plan:
+
+- **Settings → Security → Code security and analysis → Secret scanning and push
+  protection**. Alerts are already collected for public repositories, but the
+  push-protection toggle has no endpoint here.
+- **Settings → Environments → `pypi`** with required reviewers, if and when this
+  project publishes packages (`release.yml` expects that name).
+- **Settings → General → Pull Requests → merge queue** — optional; see PBK 7.
+- Signed commits — an optional extra rule for release branches; ask maintainers
+  to configure SSH or GPG signing.
 
 ## Required checks
 
