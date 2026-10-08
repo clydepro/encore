@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run tests (PBK 15).
 #
-#   scripts/test.sh              unit + integration with coverage
+#   scripts/test.sh              unit + integration + regression with coverage
 #   scripts/test.sh unit         one category
 #   scripts/test.sh --all        everything including slow suites
 #   scripts/test.sh -k pattern   any extra args go straight to pytest
@@ -20,4 +20,4 @@ if [[ $# -gt 0 && -d "tests/$1" ]]; then
   exec uv run pytest "$target" "$@"
 fi
 
-exec uv run pytest tests/unit tests/integration "$@"
+exec uv run pytest tests/unit tests/integration tests/regression "$@"

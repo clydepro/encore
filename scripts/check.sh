@@ -32,8 +32,9 @@ if [[ "$SLOW" == "1" ]]; then
   exec uv run pytest --run-slow --cov=encore --cov-report=term-missing
 fi
 
-echo "==> Tests (unit + integration) with coverage"
-uv run pytest tests/unit tests/integration --cov=encore --cov-report=term-missing
+echo "==> Tests (unit + integration + regression) with coverage"
+uv run pytest tests/unit tests/integration tests/regression \
+  --cov=encore --cov-report=term-missing
 
 echo
 echo "All local gates passed."

@@ -8,7 +8,7 @@ SAPRS Chapter 14 is the policy; this file is the mechanics.
 | --------- | ------ | ------- | -------- |
 | `tests/unit/` | `unit` | Validate workflow, every commit | nothing |
 | `tests/integration/` | `integration` | Test workflow, PR gate | nothing |
-| `tests/regression/` | `regression` | Both | nothing |
+| `tests/regression/` | `regression` | Test workflow + `scripts/check.sh`, every commit | nothing |
 | `tests/performance/` | `performance`, `slow` | Scheduled + release | `--run-slow` |
 | `tests/party_simulation/` | `party_simulation`, `slow` | Scheduled + release | `--run-slow`, a profile |
 
@@ -61,6 +61,12 @@ Every fixed defect gets a permanent test in `tests/regression/`, named
 `test_issue_<number>_<slug>.py`, with `Regression: #<number>` in the docstring.
 Write the test that fails on the old behaviour *first*; if it cannot fail, you
 have not reproduced the bug.
+
+Two things make that stick: the suite runs on every commit rather than only at
+release, and `tests/unit/test_test_harness.py` fails the build if a module in
+`tests/regression/` lacks the citation. The first example is
+`test_issue_11_dependabot_lockfile_only.py`, which pins the Dependabot settings
+that previously produced eight unmergeable pull requests.
 
 ## Party Simulation (SAPRS 14.11)
 

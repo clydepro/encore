@@ -94,6 +94,12 @@ that section into a dated version heading.
   merge/branch options (`PATCH …/`). The script now applies six steps and the
   remaining checklist is genuinely short.
 
+- `tests/regression/` was collected by nothing. Neither `scripts/check.sh` nor
+  any workflow named the directory, so the suite SAPRS 14.14 mandates only ran at
+  release time, where `--run-slow` happens to gather everything. It runs on every
+  commit now, and its README's promise that CI checks the `Regression: #<issue>`
+  citation is finally true.
+
 ### Security
 
 - Secret scanning, dependency vulnerability auditing and CodeQL analysis wired
