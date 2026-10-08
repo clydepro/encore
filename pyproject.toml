@@ -50,7 +50,7 @@ Changelog = "https://github.com/clydepro/encore/blob/main/CHANGELOG.md"
 # Development-only tooling (PBK Chapter 4). Never installed on an appliance.
 dev = [
     "detect-secrets>=1.5",
-    "mypy>=1.11",
+    "mypy>=2.4.0",
     "pre-commit>=3.7",
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
