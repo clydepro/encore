@@ -25,11 +25,14 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 TAXONOMY = ROOT / ".github" / "labels.yml"
 
-#: Labels GitHub creates automatically. They are reported as undeclared but never
-#: deleted by default: closed issues keep their labels, and a stale default costs
-#: nothing, while an accidental deletion is invisible history.
+#: Labels GitHub creates itself. `--check` would otherwise report them as drift,
+# and `--prune` must never delete them: closed issues keep their labels, so an
+# unused default is harmless while an accidental deletion is invisible history.
+# `bug`, `enhancement` and `documentation` are deliberately absent — the taxonomy
+# restyles those, so they count as declared.
 GITHUB_DEFAULTS = frozenset(
     {
+        "accessibility",
         "dependencies",
         "duplicate",
         "good first issue",
