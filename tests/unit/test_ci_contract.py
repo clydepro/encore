@@ -94,6 +94,9 @@ def test_branch_protection_file_has_the_expected_shape() -> None:
     assert rules["enforce_admins"] is True
     assert rules["required_pull_request_reviews"]["required_approving_review_count"] == 1
     assert rules["required_pull_request_reviews"]["require_code_owner_reviews"] is True
+    # With one maintainer, requiring approval of the latest push means nobody can
+    # ever merge, because review requirements are not bypassed by admin merge.
+    assert rules["required_pull_request_reviews"]["require_last_push_approval"] is False
     assert rules["required_linear_history"] is True
     assert rules["allow_force_pushes"] is False
     assert rules["allow_deletions"] is False

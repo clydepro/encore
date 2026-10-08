@@ -51,13 +51,25 @@ that will never come.
 Two traps worth remembering:
 
 - A context that no workflow ever reports keeps every PR at "Expected" forever.
-  That includes plausible-looking names: the CodeQL job's check is
-  `Security / codeql`, not `CodeQL`, and there is no `Dependabot` check at all.
-  `scripts/setup-github-repo.sh --verify` prints the required list so you can
-  diff it against the Checks tab.
+  That includes plausible-looking names: the CodeQL checks are
+  `Security / codeql (python)` and `Security / codeql (actions)` — not `CodeQL` —
+  and there is no `Dependabot` check at all. A matrix job's check name is its
+  `name:` with the matrix values substituted, so renaming or re-matrixing a job
+  changes what branch protection must list.
+  `tests/unit/test_ci_contract.py` expands the names itself and fails if the two
+  files disagree; `scripts/setup-github-repo.sh --verify` prints the live list.
 - A job guarded by `if:` and reported as *skipped* satisfies a required check;
   one that never runs does not. `Security / dependency review` therefore works
   as a required check even though it only runs on pull requests.
+
+## Reviews
+
+`.github/branch_protection.json` requires one approving review, dismisses stale
+reviews, and enforces `CODEOWNERS`. `require_last_push_approval` is **off** on
+purpose: with a single maintainer it means an admin cannot merge their own work at
+all, since nobody else can approve the last push. Turn it on when there are two
+or more people who can review — review requirements, unlike status checks, are not
+bypassed by `gh pr merge --admin`.
 
 ## Labels
 
