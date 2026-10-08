@@ -30,9 +30,9 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen --all-groups
-      - name: Unit + integration
+      - name: Unit, integration and regression
         run: >
-          uv run pytest tests/unit tests/integration
+          uv run pytest tests/unit tests/integration tests/regression
           --cov=encore --cov-report=xml --cov-report=term-missing
           --junitxml=report.xml
       - name: Coverage summary

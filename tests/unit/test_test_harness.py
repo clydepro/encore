@@ -7,6 +7,7 @@ renamed or never finished.
 
 from __future__ import annotations
 
+import ast
 import re
 import tomllib
 from importlib import metadata
@@ -164,3 +165,44 @@ def test_workflow_actions_are_pinned_to_resolvable_versions() -> None:
                 continue
             offenders.append(f"{workflow.name}: {action}@{revision}")
     assert not offenders, "pin every action to a full version tag:\n" + "\n".join(offenders)
+
+
+def test_regression_tests_cite_their_defect() -> None:
+    """`tests/regression/README.md` promises "CI checks the link"; here it does.
+
+    An uncited regression test cannot be read against the defect it is supposed to
+    block, and the suite turns into folklore (SAPRS 14.14, AEP 13). `test_index.py`
+    is the suite's placeholder for the bootstrap, not a test of a defect.
+    """
+    offenders: list[str] = []
+    for path in sorted((PROJECT_ROOT / "tests" / "regression").glob("test_*.py")):
+        if path.name == "test_index.py":
+            continue
+        docstring = ast.get_docstring(ast.parse(path.read_text(encoding="utf-8"))) or ""
+        if not re.match(r"^Regression:\s+#\d+", docstring.strip()):
+            offenders.append(path.name)
+    assert not offenders, "start the module docstring with 'Regression: #<issue>': " + ", ".join(
+        offenders
+    )
+
+
+#: Categories that must be collected on every commit, not only at release.
+FAST_TEST_CATEGORIES = ("unit", "integration", "regression")
+
+
+def test_every_fast_test_category_is_invoked_somewhere() -> None:
+    """A directory nothing collects is a directory nobody tests.
+
+    `tests/regression` was exactly this gap: the marker existed, its README demands
+    a test for every fixed defect (SAPRS 14.14), and no local gate or workflow
+    collected the folder — so a regression would surface at release time only,
+    where `pytest --run-slow` happens to gather everything.
+    """
+    local = (PROJECT_ROOT / "scripts" / "check.sh").read_text(encoding="utf-8")
+    ci = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (PROJECT_ROOT / ".github" / "workflows").glob("*.yml")
+    )
+    for category in FAST_TEST_CATEGORIES:
+        assert f"tests/{category}" in local, f"scripts/check.sh never runs tests/{category}"
+        assert f"tests/{category}" in ci, f"no workflow runs tests/{category}"
