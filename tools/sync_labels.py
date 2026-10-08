@@ -7,6 +7,7 @@ and only removed with `--prune`; GitHub's own defaults are never removed.
 Usage:
 
     uv run python tools/sync_labels.py [owner/repo] [--prune] [--dry-run]
+    uv run python tools/sync_labels.py [owner/repo] --check
 """
 
 from __future__ import annotations
@@ -111,6 +112,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("repo", nargs="?", default="", help="owner/repo (default: from origin)")
     parser.add_argument("--prune", action="store_true", help="delete undeclared labels")
     parser.add_argument("--dry-run", action="store_true", help="print actions only")
+    parser.add_argument(
+        "--check", action="store_true", help="report declared vs present, write nothing"
+    )
     args = parser.parse_args(argv)
 
     if shutil.which("gh") is None:
@@ -119,6 +123,17 @@ def main(argv: list[str] | None = None) -> int:
     repo = args.repo or repository_from_origin()
     desired = load_taxonomy()
     present = existing_labels(repo)
+
+    if args.check:
+        declared = {str(label["name"]) for label in desired}
+        missing = sorted(declared - set(present))
+        undeclared = sorted(set(present) - declared - GITHUB_DEFAULTS)
+        print(
+            f"{len(present)} present, {len(declared) - len(missing)} of {len(declared)} declared"
+            + (f", missing: {', '.join(missing)}" if missing else "")
+            + (f", undeclared: {', '.join(undeclared)}" if undeclared else "")
+        )
+        return 1 if missing else 0
 
     for label in desired:
         name, colour, description = (

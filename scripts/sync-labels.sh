@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Create/update GitHub labels from .github/labels.yml (PBK Chapter 10).
+# Thin wrapper around tools/sync_labels.py (PBK Chapter 10).
 #
-#   scripts/sync-labels.sh [owner/repo]
-#
-# Requires an authenticated GitHub CLI (`gh auth login`).
+#   scripts/sync-labels.sh                 # apply .github/labels.yml
+#   scripts/sync-labels.sh --check         # report drift, write nothing
+#   scripts/sync-labels.sh --prune         # also delete undeclared labels
+#   scripts/sync-labels.sh --dry-run       # preview
 set -euo pipefail
-
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-
-exec uv run python tools/sync_labels.py "${1:-}"
+exec uv run python tools/sync_labels.py "$@"
