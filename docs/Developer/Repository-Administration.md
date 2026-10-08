@@ -64,12 +64,28 @@ Two traps worth remembering:
 
 ## Reviews
 
-`.github/branch_protection.json` requires one approving review, dismisses stale
-reviews, and enforces `CODEOWNERS`. `require_last_push_approval` is **off** on
-purpose: with a single maintainer it means an admin cannot merge their own work at
-all, since nobody else can approve the last push. Turn it on when there are two
-or more people who can review — review requirements, unlike status checks, are not
-bypassed by `gh pr merge --admin`.
+`main` is protected for everyone, including admins (`enforce_admins`), so a merge
+is only possible when the fourteen required checks are green — a bypass is not an
+option here, and `gh pr merge --admin` will not help.
+
+Review requirements are deliberately **off** while the project has one maintainer.
+GitHub will not let an author approve their own pull request, so
+`required_approving_review_count: 1` (or `require_last_push_approval: true`) makes
+every pull request unmergeable: the merge fails with "At least 1 approving review
+is required by reviewers with write access" and there is nobody to satisfy it.
+
+When a second person with write access joins, turn the gates back on in
+`.github/branch_protection.json` and re-run
+`scripts/configure-branch-protection.sh`:
+
+```json
+"required_approving_review_count": 1,
+"require_code_owner_reviews": true,
+"require_last_push_approval": true
+```
+
+`CODEOWNERS` is already maintained so that change is a one-line flip, and
+`tests/unit/test_ci_contract.py` documents the current settings inline.
 
 ## Labels
 
