@@ -12,9 +12,10 @@ Push first — protection rules and workflows only take effect against commits
 that exist on GitHub:
 
 ```bash
-git push -u origin main
-scripts/setup-github-repo.sh          # labels + branch protection + Dependabot alerts
-scripts/setup-github-repo.sh --verify # read-only status of everything above
+git push -u origin main                      # protection and CI apply to what is on GitHub
+scripts/setup-github-repo.sh                 # labels, branch protection, Dependabot
+                                             # alerts, code-scanning default setup
+scripts/setup-github-repo.sh --verify        # read-only status of all of it
 ```
 
 Then, in the web UI (Settings), because there is no stable public endpoint for
@@ -24,10 +25,13 @@ them on all plans:
    - Allow merge queue (optional, recommended once contributors overlap).
    - Automatically delete head branches ✅.
    - Squash merge optional; `main` requires linear history either way.
-2. **Settings → Code and automation → Code security and analysis**
+2. **Settings → Security → Code security and analysis**
    - Secret scanning ✅ and push protection ✅.
-   - CodeQL (code scanning) ✅ — required before `security.yml` can upload SARIF.
-   - Dependabot version updates ✅ (configuration is already committed).
+   - Code scanning **alerts** available, but the **CodeQL default setup must be
+     off** — `scripts/setup-github-repo.sh` switches it, because GitHub rejects
+     SARIF from our `security.yml` while the default setup is enabled.
+   - Dependabot alerts are API-toggleable; version updates come from the
+     committed `.github/dependabot.yml`.
 3. **Settings → Branches → Branch protection rules**
    - Verify `main` matches [`.github/branch_protection.json`](../../.github/branch_protection.json);
      re-run the script rather than editing by hand.

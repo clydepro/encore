@@ -11,10 +11,11 @@
       "Docs / markdown",
       "Docs / links",
       "Docs / structure",
+      "Security / codeql (python)",
+      "Security / codeql (actions)",
+      "Security / dependency review",
       "Security / vulnerabilities",
-      "Security / secrets",
-      "Security / codeql",
-      "Security / dependency review"
+      "Security / secrets"
     ]
   },
   "enforce_admins": true,
