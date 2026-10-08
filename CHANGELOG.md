@@ -5,8 +5,9 @@ All notable changes to Encore are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and versions are
 tagged `vX.Y.Z` (PBK Chapter 17).
 
-This file is updated by every pull request, under **Unreleased**. The release
-process moves that section into a dated version heading.
+This file is updated by every pull request that changes behaviour, interfaces or
+the build and operations tooling, under **Unreleased**. The release process moves
+that section into a dated version heading.
 
 ## Unreleased
 
@@ -56,7 +57,23 @@ process moves that section into a dated version heading.
 
 ### Fixed
 
-- None.
+- `scripts/sync-labels.sh` and `scripts/setup-github-repo.sh` failed with
+  "unknown flag: --repo" on the GitHub CLI shipped by Debian (2.23), where
+  `gh api` has no such flag; repository selection now travels in the API path
+  and `gh label`'s own `--repo` is used where it is supported.
+- Branch protection required `CodeQL` and `Dependabot`, checks that no workflow
+  produces, so every pull request would have waited on them forever. The
+  required contexts are the real `Workflow / job` names, and
+  `tests/unit/test_ci_contract.py` keeps them in sync with the workflows.
+- `Security / vulnerabilities` failed on every run because of an unsupported
+  `uv audit --strict` flag.
+- `Security / codeql` failed because GitHub rejects SARIF from this workflow
+  while the code-scanning **default setup** is enabled. The setup script now
+  turns the default setup off, and the workflow analyses `python` and `actions`
+  so nothing is lost by doing so.
+- CI actions were referenced by moving major tags that some authors never
+  publish, which failed jobs at "Set up job"; every action is now pinned to a
+  full version tag and a test rejects moving references.
 
 ### Security
 
