@@ -5,11 +5,18 @@ to do when it disagrees with you.
 
 | Workflow | File | Triggers | Required checks |
 | -------- | ---- | -------- | --------------- |
-| Validate | [`validate.yml`](../../.github/workflows/validate.yml) | PR, push to `main` | `Validate / dependencies`, `Validate / lint`, `Validate / types`, `Validate / unit (3.12)`, `Validate / unit (3.13)` |
-| Test | [`test.yml`](../../.github/workflows/test.yml) | PR, push to `main`, nightly | `Test / integration`, `Test / arm64 smoke` |
-| Documentation | [`docs.yml`](../../.github/workflows/docs.yml) | PR, push to `main` | `Docs / markdown`, `Docs / links`, `Docs / structure` |
-| Security | [`security.yml`](../../.github/workflows/security.yml) | PR, push, weekly | `Security / vulnerabilities`, `Security / secrets`, CodeQL |
+| Validate | [`validate.yml`](../../.github/workflows/validate.yml) | PR, push to `main`, manual | `Validate / dependencies`, `Validate / lint`, `Validate / types`, `Validate / unit (3.12)`, `Validate / unit (3.13)` |
+| Test | [`test.yml`](../../.github/workflows/test.yml) | PR, push to `main`, nightly, manual | `Test / integration` |
+| Documentation | [`docs.yml`](../../.github/workflows/docs.yml) | PR, push to `main`, manual | `Docs / markdown`, `Docs / links`, `Docs / structure` |
+| Security | [`security.yml`](../../.github/workflows/security.yml) | PR, push to `main`, weekly (Monday) | `Security / codeql (python)`, `Security / codeql (actions)`, `Security / dependency review`, `Security / vulnerabilities`, `Security / secrets` |
 | Release | [`release.yml`](../../.github/workflows/release.yml) | `v*` tags | not required for merge |
+
+Three checks run without being required: `Test / arm64 smoke` (informative — the
+real target is a Raspberry Pi, this is emulation), `Test / long-running` (nightly
+and manual only, so it can never gate a PR), and the `CodeQL` analysis check the
+tool itself creates. Adding one to the required list is a tax on every future
+contribution, so it needs a stated reason; see
+[Repository administration](Repository-Administration.md#required-checks).
 
 ## Validate — the fast gate
 
@@ -26,8 +33,8 @@ and pre-commit/CI cannot disagree. If that is ever revisited it needs an ADR.
 
 ## Test
 
-Integration tests plus a coverage report uploaded as an artifact
-(`coverage.xml`), and an arm64 smoke job because the target device is a
+Unit, integration and regression tests plus a coverage report uploaded as an
+artifact (`coverage.xml`), and an arm64 smoke job because the target device is a
 Raspberry Pi 4. Nightly runs the slow suites: performance and the baseline party.
 
 ## Documentation

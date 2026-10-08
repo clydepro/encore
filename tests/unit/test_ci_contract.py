@@ -14,6 +14,7 @@ refuse to pass when the two disagree.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_DIRECTORY = PROJECT_ROOT / ".github" / "workflows"
 BRANCH_PROTECTION_FILE = PROJECT_ROOT / ".github" / "branch_protection.json"
+CI_DOCUMENTATION_FILE = PROJECT_ROOT / "docs" / "Developer" / "Continuous-Integration.md"
 
 #: Workflows that gate a change. `release.yml` only publishes artefacts, so it
 #: contributes no required checks.
@@ -159,3 +161,32 @@ def test_jobs_use_explicit_github_facing_names() -> None:
             assert " / " in name, f"{workflow}:{job_id} name '{name}' is not 'Workflow / job'"
             prefixes.setdefault(name.split(" / ", maxsplit=1)[0], set()).add(job_id)
         assert len(prefixes) == 1, f"{workflow} mixes job-name prefixes: {sorted(prefixes)}"
+
+
+def _documented_required_checks() -> set[str]:
+    """Check names asserted in the CI documentation's workflow table."""
+    documented: set[str] = set()
+    for line in CI_DOCUMENTATION_FILE.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("| ") or line.startswith("| -"):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) != 4:
+            continue
+        documented.update(re.findall(r"`([^`]+)`", cells[3]))
+    return documented
+
+
+def test_ci_documentation_matches_branch_protection() -> None:
+    """The table and `.github/branch_protection.json` state one fact, not two.
+
+    It went stale the day the CodeQL job became a matrix: the table still offered
+    `Test / arm64 smoke` as a required check and listed CodeQL as one check called
+    "CodeQL". A contributor who trusts the table investigates a gate that is not
+    there, and misses one that is.
+    """
+    documented = _documented_required_checks()
+    required = set(_required_contexts())
+    assert documented == required, (
+        f"documented but not required: {sorted(documented - required)}; "
+        f"required but undocumented: {sorted(required - documented)}"
+    )

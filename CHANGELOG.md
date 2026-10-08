@@ -108,6 +108,12 @@ that section into a dated version heading.
   `tests/regression/test_issue_15_changelog_heading_gate.py` holds both halves to
   that shape.
 
+- `docs/Developer/Continuous-Integration.md` still described the pre-matrix world:
+  `Test / arm64 smoke` as a required check and CodeQL as one check named `CodeQL`.
+  The table now states the fourteen real contexts, and a test keeps it equal to
+  `.github/branch_protection.json` so documentation and settings cannot drift
+  apart again.
+
 ### Security
 
 - Secret scanning, dependency vulnerability auditing and CodeQL analysis wired
