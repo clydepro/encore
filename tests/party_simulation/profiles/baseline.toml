@@ -1,0 +1,26 @@
+# Encore Party Simulation load profile (SAPRS 14.11, 14.12).
+# Test data only: no Encore runtime code reads this file.
+
+[profile]
+name = "baseline"
+description = "Reference party from SAPRS 14.11 (40 guests, one hour)."
+guests = 40
+duration_minutes = 60
+
+[library]
+songs = 15000
+artists = 900
+albums = 1200
+
+[activity]
+searches_per_guest_per_minute = 3
+browsing_per_guest_per_minute = 5
+queue_adds_per_guest_per_minute = 2
+duplicates_allowed = true
+sse_clients = "all"
+admin_activity = true
+
+[chaos]
+mpv_terminations = 0
+client_disconnects = true
+sse_reconnects = true

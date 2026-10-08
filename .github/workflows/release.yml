@@ -1,0 +1,96 @@
+name: Release
+
+# PBK 6 "Release": triggered only from tagged releases.
+# Tag format is semantic versioning (PBK 17): vMAJOR.MINOR.PATCH with a
+# leading `v`. Pre-releases (0.x development) use v0.1.0-rc.1 style tags.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Release / verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --all-groups
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - name: Full test run (slow suites included)
+        run: uv run pytest --run-slow --cov=encore --cov-report=xml
+      - name: Version must match the tag
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION="$(uv run python -c 'import encore; print(encore.__version__)')"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "tag v$TAG != package version $VERSION" >&2
+            exit 1
+          fi
+      - name: CHANGELOG must mention the version
+        run: grep -q "^## \[${GITHUB_REF_NAME#v}\]" CHANGELOG.md
+
+  build:
+    name: Release / build
+    runs-on: ubuntu-latest
+    needs: verify
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --all-groups
+      - run: uv build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/*
+
+  github-release:
+    name: Release / github
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --generate-notes \
+            --title "Encore $GITHUB_REF_NAME" \
+            dist/* || gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+
+  pypi:
+    name: Release / pypi
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, 'rc')
+    runs-on: ubuntu-latest
+    environment: pypi  # configure the environment + trusted publishing first
+    needs: github-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -1,0 +1,86 @@
+# Encore pre-commit configuration (PBK Chapter 5).
+#
+# Every commit runs formatting, linting, import ordering, whitespace/EOF
+# hygiene, YAML/TOML validation, Markdown linting and secret detection.
+# The heavier gates (mypy, the full test matrix) run in CI; see
+# .github/workflows/validate.yml.
+
+minimum_pre_commit_version: "3.7.0"
+fail_fast: false
+
+default_language_version:
+  python: python3
+
+ci:
+  autofix_commit_msg: "chore(pre-commit): auto fixes [skip ci]"
+  autoupdate_commit_msg: "chore(pre-commit): bump hook revisions"
+  autoupdate_schedule: quarterly
+
+repos:
+  # Hygiene: whitespace, EOF, encodings, conflict markers, oversized files.
+  # Vendored planning documents keep their exact bytes; a formatter must not
+  # rewrite an upstream specification (see docs/README.md).
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+        exclude: &vendored '^(AGENTS\.md|docs/(SAPRS|AIG|AEP)/.*|docs/ProjectBootstrapKit_PBK\.md)$'
+      - id: end-of-file-fixer
+        exclude: *vendored
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        exclude: *vendored
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-added-large-files
+        args: [--maxkb=512]
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+
+  # Formatting, linting and import organization (single tool, single config).
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10
+    hooks:
+      - id: ruff-check
+        args: [--fix, --exit-non-zero-on-fix]
+        types_or: [python, pyi]
+      - id: ruff-format
+        types_or: [python, pyi]
+
+  # YAML structural + style validation.
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        args: [--strict, -c, .yamllint.yml]
+
+  # Markdown linting (PBK 5, "where applicable").
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.23.3
+    hooks:
+      - id: markdownlint-cli2
+        files: \.md$
+
+  # Secret scanning (PBK 6 "Secret scanning where supported").
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: [--baseline, .secrets.baseline]
+        exclude: (uv\.lock$|\.secrets\.baseline$)
+
+  # Type checking runs against the whole package, not changed files.
+  - repo: local
+    hooks:
+      - id: encore-mypy
+        name: mypy (strict)
+        entry: uv run --no-sync mypy
+        language: system
+        pass_filenames: false
+        always_run: true
+        files: \.py$

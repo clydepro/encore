@@ -1,0 +1,56 @@
+name: Security concern
+description: A vulnerability report or a worry about Encore's security model.
+title: "[security] "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not report an actively exploitable vulnerability in a public
+        issue.** Use the private channel described in `SECURITY.md` in the
+        repository root so nobody's party is a proof of concept.
+        Use this form for hardening proposals, defence-in-depth questions and
+        anything already public.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is this?
+      options:
+        - Public-safe hardening proposal
+        - Question about the security model
+        - Dependency/CVE triage (already public)
+        - Misconfiguration guidance
+    validations:
+      required: true
+  - type: textarea
+    id: trust-model
+    attributes:
+      label: Threat or assumption
+      description: >
+        Encore's boundary is the local network: guests are anonymous and
+        trusted to queue, administrators are authenticated (ADR-007, ADR-008).
+        Name the attacker or assumption you are questioning.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: >
+        Include the cost to the appliance philosophy (ADR-008) — an extra daemon,
+        a login prompt for guests or a cloud dependency needs justifying.
+    validations:
+      required: true
+  - type: checkboxes
+    id: guarantees
+    attributes:
+      label: Impact check (AEP 17)
+      options:
+        - label: Guest anonymity is preserved.
+          required: true
+        - label: Administrators remain authenticated with least privilege.
+          required: true
+        - label: Secure defaults are unchanged or stricter.
+          required: true
+        - label: No secret is stored in source, logs or library metadata.
+          required: true

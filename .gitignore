@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+site/
+
+# Encore runtime artifacts (never commit appliance state)
+library.db
+runtime.db
+*.db-wal
+*.db-shm
+artwork/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp

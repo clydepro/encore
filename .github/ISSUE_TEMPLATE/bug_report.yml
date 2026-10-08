@@ -1,0 +1,111 @@
+name: Bug report
+description: Something Encore does not do what the specification says it should.
+title: "[bug] "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Bugs are what make a party end early, so details
+        matter more than speed here. If you are unsure whether it is a bug, use
+        *Question* instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the observed behaviour, then the expected behaviour.
+      placeholder: |
+        Observed: queuing a second copy of the playing song replaced the queue.
+        Expected: it appends to the queue (SAPRS 8.2, duplicates allowed).
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: A recipe someone else can follow. Small library excerpts help.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and diagnostics
+      description: >
+        Admin → Logs output, `journalctl -u encore` excerpts, health output, or
+        the mpv error. Paste text, not screenshots; redact hostnames if you
+        care about them.
+      render: text
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - playback
+        - queue
+        - search
+        - builder
+        - UI
+        - API
+        - database
+        - installer
+        - testing
+        - documentation
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Encore version
+      description: Admin → Dashboard footer, or `encore --version`.
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Host platform
+      options:
+        - Raspberry Pi 4 / Raspberry Pi OS 64-bit
+        - Debian 12
+        - Ubuntu 24.04 LTS
+        - Other Linux
+        - macOS (development only)
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: Client device and browser
+      placeholder: iPhone 15 / Safari 26, or "curl"
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: Relevant configuration
+      description: >
+        Non-default values from /etc/encore/config.yaml (read-only summary in
+        Admin → Configuration). Never paste secrets or session cookies.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues, including closed ones.
+          required: true
+        - label: >
+            I confirmed this is not a metadata problem in my own library
+            (rebuild with the Builder first).
+          required: false
+        - label: >
+            I understand a fix will not merge without a regression test in
+            tests/regression/ (SAPRS 14.14).
+          required: true

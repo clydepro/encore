@@ -1,0 +1,73 @@
+name: Refactoring proposal
+description: Restructure code or boundaries without changing observable behaviour.
+title: "[refactor] "
+labels: [refactor, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Refactor only when it improves clarity, reduces duplication or
+        simplifies maintenance — never cosmetically (AEP 24). Small PRs win
+        reviews (AEP 7).
+  - type: textarea
+    id: today
+    attributes:
+      label: What is hard today?
+      description: >
+        Name the file(s) and the specific pain: a rule that lives in two places,
+        a service with two responsibilities, a test that cannot be written
+        because of hidden coupling.
+    validations:
+      required: true
+  - type: textarea
+    id: tomorrow
+    attributes:
+      label: Proposed shape
+      description: Ownership, interfaces and dependency direction after the change.
+    validations:
+      required: true
+  - type: dropdown
+    id: touches
+    attributes:
+      label: Architectural boundary touched
+      options:
+        - None (internal to one module)
+        - Service boundaries within encore/
+        - Event Bus / event vocabulary (ADR-004)
+        - Persistence / schema (library.db or runtime.db)
+        - Builder ↔ Server contract (ADR-001)
+        - Public API or UI contract
+    validations:
+      required: true
+  - type: textarea
+    id: equivalence
+    attributes:
+      label: How do we prove behaviour is unchanged?
+      description: >
+        Existing suites that cover it, tests to add first, and whether a feature
+        flag or staged migration is needed. A schema change always needs
+        migration + tests + docs (AEP 18).
+    validations:
+      required: true
+  - type: textarea
+    id: cost
+    attributes:
+      label: Cost and risk
+      description: >
+        Rough size, branches that will conflict, churn on regression tests, and
+        what happens to work in flight.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: No observable behaviour or API change is intended.
+          required: true
+        - label: No new dependency is introduced.
+          required: true
+        - label: An ADR is attached, or this changes no accepted decision.
+          required: true
+        - label: I understand "it would read nicer" is not grounds for a refactor.
+          required: false

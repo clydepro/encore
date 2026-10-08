@@ -1,0 +1,97 @@
+# Encore label taxonomy (PBK Chapter 10).
+#
+# Apply with:  scripts/sync-labels.sh          (requires `gh auth login`)
+# Inspect with: gh label list
+#
+# Area labels carry an `area:` prefix because the PBK taxonomy uses
+# "documentation" for both a type and an area; everything else keeps the
+# documented name verbatim. Colours are hex without the leading '#'.
+
+types:
+  - name: bug
+    color: d73a4a
+    description: A deviation from the SAPRS requirements.
+  - name: feature
+    color: a2eeef
+    description: A new capability for Encore.
+  - name: enhancement
+    color: c2e0c6
+    description: Improves existing behaviour without new capability.
+  - name: documentation
+    color: 0075ca
+    description: Guides, references, comments or ADRs.
+  - name: refactor
+    color: fef2c0
+    description: Structure or clarity change with no behaviour change.
+  - name: test
+    color: b79ff9
+    description: Test coverage, harness or Party Simulation work.
+  - name: chore
+    color: eeeeee
+    description: Tooling, CI, packaging and housekeeping.
+
+priorities:
+  - name: P0
+    color: b60205
+    description: Drop everything; appliance unusable or data at risk.
+  - name: P1
+    color: d93f0b
+    description: Fix in the current milestone.
+  - name: P2
+    color: fbca04
+    description: Scheduled work; noticeable but survivable.
+  - name: P3
+    color: c2e0c6
+    description: Nice to have; no timeline.
+
+areas:
+  - name: "area:playback"
+    color: 5ebef5
+    description: mpv, IPC, the Playback Supervisor, recovery.
+  - name: "area:queue"
+    color: 5ebef5
+    description: FIFO queue rules, duplicates, advancement.
+  - name: "area:search"
+    color: 5ebef5
+    description: FTS5, artist/album/song discovery, latency.
+  - name: "area:builder"
+    color: 5ebef5
+    description: Offline library construction and publication.
+  - name: "area:UI"
+    color: c5def5
+    description: HTMX pages, Jinja templates, Tailwind, accessibility.
+  - name: "area:API"
+    color: c5def5
+    description: Versioned JSON API and SSE contract.
+  - name: "area:database"
+    color: c5def5
+    description: library.db, runtime.db, schemas and migrations.
+  - name: "area:installer"
+    color: c5def5
+    description: Packaging, systemd units, encore-install.
+  - name: "area:testing"
+    color: c5def5
+    description: Harness, fixtures, simulation, coverage.
+  - name: "area:documentation"
+    color: c5def5
+    description: Content of the docs tree and ADRs.
+
+statuses:
+  - name: needs-triage
+    color: fef2c0
+    description: Maintainers have not yet scoped this.
+  - name: in-progress
+    color: 1d76db
+    description: Someone is actively working it.
+  - name: blocked
+    color: e11d48
+    description: Waiting on a decision, dependency or external input.
+  - name: ready-for-review
+    color: 0e8a16
+    description: Implementation complete; review requested.
+  - name: good-first-issue
+    color: 7057ff
+    description: Scoped and mentored for a first contribution.
+  - name: help-wanted
+    color: 008672
+    description: Maintainers need a contributor to land this.

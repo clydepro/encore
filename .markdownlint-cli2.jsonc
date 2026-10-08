@@ -1,0 +1,56 @@
+{
+  // markdownlint-cli2 configuration (PBK Chapter 5, Chapter 6 "Verify Markdown").
+  //
+  // Scope note: the planning documents (SAPRS/AIG/AEP/PBK) and AGENTS.md, which
+  // is the AIG excerpt handed to coding agents, are vendored input from the
+  // planning phase. They are excluded so a formatter never silently rewrites an
+  // upstream specification. Everything the project authors from bootstrap onward
+  // is linted.
+  "globs": ["**/*.md"],
+  "ignores": [
+    "AGENTS.md",
+    "docs/SAPRS/**",
+    "docs/AIG/**",
+    "docs/AEP/**",
+    "docs/ProjectBootstrapKit_PBK.md",
+    ".venv/**",
+    ".pytest_cache/**",
+    ".mypy_cache/**",
+    ".ruff_cache/**",
+    "build/**",
+    "site/**"
+  ],
+  "config": {
+    "default": true,
+    "line-length": false,
+    "blanks-around-lists": false,
+    "heading-style": { "style": "atx" },
+    "ul-style": { "style": "dash" },
+    "commands-output": false,
+    "no-emphasis-as-heading": false,
+    "MD024": { "siblings_only": true },
+    "no-inline-html": { "allowed_elements": ["details", "summary", "kbd", "br", "img", "p", "strong"] },
+    "code-block-style": { "style": "fenced" },
+    "code-block-language-order": false,
+    "fenced-code-language": {
+      "allowed_languages": [
+        "bash",
+        "console",
+        "json",
+        "markdown",
+        "python",
+        "toml",
+        "text",
+        "yaml",
+        "mermaid",
+        "dockerfile"
+      ],
+      "language_only": true
+    },
+    "html-comment-regex": false,
+    "single-title": { "search_limit": -1 },
+    "first-heading-h1": false,
+    "heading-content-after-hash": true
+  },
+  "markdownlint": { "fix": true }
+}

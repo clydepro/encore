@@ -1,0 +1,26 @@
+# Encore Party Simulation load profile (SAPRS 14.11, 14.12).
+# Test data only: no Encore runtime code reads this file.
+
+[profile]
+name = "large_party"
+description = "Fifty guests, dense concurrency and SSE churn."
+guests = 50
+duration_minutes = 30
+
+[library]
+songs = 15000
+artists = 900
+albums = 1200
+
+[activity]
+searches_per_guest_per_minute = 3
+browsing_per_guest_per_minute = 6
+queue_adds_per_guest_per_minute = 3
+duplicates_allowed = true
+sse_clients = "all"
+admin_activity = true
+
+[chaos]
+mpv_terminations = 1
+client_disconnects = true
+sse_reconnects = true

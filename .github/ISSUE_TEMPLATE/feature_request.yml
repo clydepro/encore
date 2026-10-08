@@ -1,0 +1,81 @@
+name: Feature request
+description: A capability Encore should have that it does not have today.
+title: "[feature] "
+labels: [feature, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Encore's v1 scope is deliberately narrow (SAPRS 1.7 lists the
+        non-goals). Saying what problem you have is more useful than proposing
+        an implementation.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What cannot be done today, and who is stuck because of it?
+      placeholder: |
+        As a host, I cannot see how long the queue will run, so I do not know
+        when to stop taking requests.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Desired behaviour
+      description: From the outside — guest-visible and administrator-visible.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds in use, and why they fall short.
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - playback
+        - queue
+        - search
+        - builder
+        - UI
+        - API
+        - database
+        - installer
+        - testing
+        - documentation
+    validations:
+      required: true
+  - type: dropdown
+    id: roadmap
+    attributes:
+      label: Does SAPRS Chapter 16 mention this?
+      options:
+        - "Yes — it is a listed v1.0 capability"
+        - "Yes — it is listed for 1.1 / 1.2 / 2.x"
+        - "No — it is new"
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: "Specification impact"
+      description: >
+        Which SAPRS chapters/requirements would change? Does it touch the
+        anonymous guest model (ADR-007), configuration model (ADR-008) or the
+        Event Bus (ADR-004)? Does it need an ADR?
+    validations:
+      required: false
+  - type: checkboxes
+    id: commitments
+    attributes:
+      label: Contributing
+      options:
+        - label: I would like to implement this and need mentoring on the design.
+          required: false
+        - label: I am fine with this being deferred if it conflicts with v1 scope.
+          required: false

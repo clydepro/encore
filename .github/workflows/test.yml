@@ -1,0 +1,87 @@
+name: Test
+
+# PBK 6 "Test": integration tests and coverage reporting.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Nightly: the suites that are too slow for a per-commit gate (SAPRS 14.15).
+    - cron: "30 03 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    name: Test / integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --all-groups
+      - name: Unit + integration
+        run: >
+          uv run pytest tests/unit tests/integration
+          --cov=encore --cov-report=xml --cov-report=term-missing
+          --junitxml=report.xml
+      - name: Coverage summary
+        if: always()
+        run: |
+          echo "## Coverage" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          uv run coverage report || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: warn
+      - name: Upload test results artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-xml
+          path: report.xml
+          if-no-files-found: warn
+
+  long-running:
+    name: Test / long-running
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --all-groups
+      - name: Baseline party (SAPRS 14.11)
+        run: >
+          uv run pytest tests/performance tests/party_simulation --run-slow
+          --party-profile tests/party_simulation/profiles/baseline.toml
+
+  arm:
+    name: Test / arm64 smoke
+    # The deployment target is a Raspberry Pi 4 (SAPRS 13.1); arm64 CI catches
+    # packaging and wheel problems that x86 runners cannot see.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --all-groups
+      - run: uv run pytest tests/unit -q

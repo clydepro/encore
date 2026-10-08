@@ -1,0 +1,57 @@
+name: Documentation
+
+# PBK 6 "Documentation": verify Markdown, check internal links (excluding
+# generated docs), build documentation "if applicable".
+#
+# Encore has no static-site builder yet: the OpenAPI reference is generated from
+# the FastAPI app in milestone 11, at which point a `docs-build` job is added
+# here. Everything the repository can be checked for today is checked below.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  markdown:
+    name: Docs / markdown
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: markdownlint-cli2
+        uses: DavidAnson/markdownlint-cli2-action@v24
+        with:
+          config: .markdownlint-cli2.jsonc
+          globs: "**/*.md"
+
+  links:
+    name: Docs / links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --all-groups
+      - name: Check relative links, ADR index and document map
+        run: uv run python tools/check_links.py
+
+  structure:
+    name: Docs / structure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --all-groups
+      - name: PBK 11 / PBK 13 / PBK 14 scaffolding is present
+        run: uv run pytest tests/unit/test_test_harness.py -q

@@ -1,0 +1,26 @@
+# yamllint rules for Encore.
+# GitHub Actions files are validated here as well; `truthy` and `line-length`
+# relaxations exist because Actions keys such as `on:` and long `run:` commands
+# are idiomatic rather than defects.
+extends: default
+
+rules:
+  line-length:
+    max: 120
+    level: warning
+    allow-non-breakable-words: true
+  truthy:
+    # GitHub Actions uses `on:` as a key; YAML 1.1 would read it as `true`.
+    allowed-values: ['true', 'false', 'on']
+    check-keys: true
+  document-start:
+    present: false
+  comments-indentation:
+    level: warning
+  indentation:
+    spaces: consistent
+
+ignore: |
+  .venv/
+  build/
+  dist/

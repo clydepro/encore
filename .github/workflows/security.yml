@@ -1,0 +1,82 @@
+name: Security
+
+# PBK 6 "Security": CodeQL, dependency vulnerability scan, secret scanning.
+# Code scanning must be enabled on the repository before the SARIF upload can
+# succeed — see docs/Developer/Repository-Administration.md for the one-command
+# setup.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 04 * * 1"  # Mondays, vulnerability data refreshes
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codeql:
+    name: Security / codeql
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: python
+          build-mode: none
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:python
+
+  dependency-review:
+    name: Security / dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: high
+          license-check: true
+          deny-licenses: GPL-3.0, AGPL-3.0
+          comment-title: "Dependency changes (SAPRS 15.10)"
+
+  vulnerabilities:
+    name: Security / vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --all-groups
+      - name: Audit locked dependencies
+        run: uv audit --frozen --strict
+
+  secrets:
+    name: Security / secrets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --all-groups
+      - name: detect-secrets against the committed baseline
+        run: >
+          uv run pre-commit run detect-secrets --all-files
+          --show-diff-on-failure

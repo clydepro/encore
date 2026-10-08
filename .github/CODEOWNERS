@@ -1,0 +1,26 @@
+# CODEOWNERS — required review per PBK 7.
+#
+# Every change needs a review from the listed owners. The directory rules below
+# mirror the service ownership model in SAPRS 11.6 / AIG 7: one capability, one
+# owner set. Replace `@clydepro` with team handles as maintainers join; the
+# architecture does not change when ownership does.
+
+*                       @clydepro
+
+# Architecture-sensitive surfaces need explicit sign-off (ADR required).
+/docs/SAPRS/            @clydepro
+/docs/adr/              @clydepro
+/pyproject.toml         @clydepro
+/uv.lock                @clydepro
+/.github/               @clydepro
+
+# Runtime subsystems.
+/encore/playback/       @clydepro
+/encore/services/       @clydepro
+/encore/repositories/   @clydepro
+/encore/events/         @clydepro
+/encore/search/         @clydepro
+/encore/domain/         @clydepro
+
+# Offline builder (must stay decoupled from the server, ADR-001).
+/apps/builder/          @clydepro

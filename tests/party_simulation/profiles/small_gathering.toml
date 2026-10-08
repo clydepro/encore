@@ -1,0 +1,26 @@
+# Encore Party Simulation load profile (SAPRS 14.11, 14.12).
+# Test data only: no Encore runtime code reads this file.
+
+[profile]
+name = "small_gathering"
+description = "Five guests, quiet evening (SAPRS 14.12)."
+guests = 5
+duration_minutes = 10
+
+[library]
+songs = 15000
+artists = 900
+albums = 1200
+
+[activity]
+searches_per_guest_per_minute = 1
+browsing_per_guest_per_minute = 2
+queue_adds_per_guest_per_minute = 1
+duplicates_allowed = true
+sse_clients = "all"
+admin_activity = false
+
+[chaos]
+mpv_terminations = 0
+client_disconnects = true
+sse_reconnects = true

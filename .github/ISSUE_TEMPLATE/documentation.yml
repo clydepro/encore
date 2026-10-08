@@ -1,0 +1,59 @@
+name: Documentation
+description: Something is missing, wrong, stale or hard to find.
+title: "[docs] "
+labels: [documentation, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Documentation is part of the definition of done (AIG 20). A confused
+        reader is a defect, even when the code is correct.
+  - type: input
+    id: location
+    attributes:
+      label: Where is the problem?
+      description: File path or URL. Name the missing document if there is none.
+      placeholder: docs/Developer/Getting-Started.md
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of documentation problem is it?
+      options:
+        - Wrong or out of date
+        - Missing content (never written)
+        - Unclear or ambiguous
+        - Broken link or formatting
+        - Example does not work
+        - Typo or grammar
+    validations:
+      required: true
+  - type: textarea
+    id: detail
+    attributes:
+      label: What is wrong, and what should it say?
+      description: Proposed wording is welcome; partial wording is still useful.
+    validations:
+      required: true
+  - type: dropdown
+    id: audience
+    attributes:
+      label: Who was harmed?
+      options:
+        - "Guest (browsing/queueing)"
+        - "Host/administrator"
+        - "Developer setting up the repo"
+        - "Packager / installer"
+        - "AI assistant working from the docs"
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked the documentation map in README.md.
+          required: true
+        - label: I searched existing documentation issues.
+          required: true

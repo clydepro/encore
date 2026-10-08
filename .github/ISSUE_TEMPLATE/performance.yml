@@ -1,0 +1,85 @@
+name: Performance issue
+description: Something is slower, heavier or noisier than the SAPRS 1.8 targets.
+title: "[perf] "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Encore's budgets: search < 100 ms, queue < 50 ms, HTMX navigation
+        < 200 ms, playback start ~250 ms, SSE propagation < 1 s (SAPRS 1.8,
+        AIG 19). We measure before optimizing (AEP 14) — so numbers beat adjectives.
+  - type: dropdown
+    id: operation
+    attributes:
+      label: Operation
+      options:
+        - Search
+        - Queue operation
+        - HTMX navigation
+        - Playback start / gapless transition
+        - SSE propagation
+        - Library build throughput
+        - Startup / shutdown
+        - Memory or CPU footprint
+        - Audio artefacts (dropouts, clicks)
+    validations:
+      required: true
+  - type: textarea
+    id: measured
+    attributes:
+      label: Measurement
+      description: >
+        What you measured, how, and the distribution (p50/p95/p99 beats a
+        single lucky run). Include the library size.
+      placeholder: |
+        14,900 songs, Raspberry Pi 4 (4 GB).
+        FTS5 artist search via /api/v1/search: p50 41 ms, p95 210 ms, p99 690 ms.
+        Command: pytest tests/performance --run-slow -k search
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      description: Which target or document sentence is being missed?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: >
+        Board and RAM, OS, Python version, mpv version, storage medium
+        (SD card vs SSD), concurrent guests, load profile used.
+      value: |
+        Board:
+        OS:
+        Python:
+        mpv:
+        Storage:
+        Concurrent guests:
+        Load profile (tests/party_simulation/profiles):
+    validations:
+      required: true
+  - type: textarea
+    id: regression-window
+    attributes:
+      label: "Good run / bad run"
+      description: >
+        Version or commit where this was last acceptable, if known. "Never
+        measured" is a fine answer.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: >
+            I ran the measurement at least twice and the effect is reproducible.
+          required: true
+        - label: I attached a trace, flamegraph, log or timings file.
+          required: false
+        - label: I understand speculative micro-optimizations will not merge.
+          required: false

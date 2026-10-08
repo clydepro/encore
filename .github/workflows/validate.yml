@@ -1,0 +1,86 @@
+name: Validate
+
+# PBK 6 "Validate": install, lint, format verification, type checking, unit tests.
+# This is the per-commit gate: it must stay fast, and it must stay honest.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependencies:
+    name: Validate / dependencies
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.pin.outputs.python }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - id: pin
+        run: echo "python=$(cat .python-version)" >> "$GITHUB_OUTPUT"
+      - name: Lockfile must match pyproject.toml
+        run: uv lock --check
+      - name: Install
+        run: uv sync --frozen --all-groups
+      - name: Project importable (editable install, PBK 3)
+        run: uv run python -c "import encore; print(encore.__version__)"
+
+  lint:
+    name: Validate / lint
+    runs-on: ubuntu-latest
+    needs: dependencies
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --all-groups
+      - name: Ruff lint
+        run: uv run ruff check --output-format=github .
+      - name: Ruff format verification
+        run: uv run ruff format --check .
+      - name: YAML validation
+        run: uv run yamllint --strict -c .yamllint.yml .
+
+  types:
+    name: Validate / types
+    runs-on: ubuntu-latest
+    needs: dependencies
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --all-groups
+      - run: uv run mypy
+
+  unit:
+    name: Validate / unit (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    needs: dependencies
+    strategy:
+      fail-fast: false
+      matrix:
+        # requires-python is ">=3.12" (SAPRS 3.1); 3.12 is the deployment floor.
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --all-groups --python ${{ matrix.python-version }}
+      - name: pytest
+        run: uv run pytest tests/unit
+      - name: Architecture guardrails (SAPRS 11.10)
+        run: uv run pytest tests/unit/test_architecture_guardrails.py -q

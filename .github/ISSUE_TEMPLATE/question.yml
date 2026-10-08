@@ -1,0 +1,64 @@
+name: Question
+description: How something works, or whether your idea fits the architecture.
+title: "[question] "
+labels: [needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Questions are how documentation gets better. If the answer is useful to
+        anyone else, it will end up in the FAQ or a guide, so write the question
+        the way you would have liked to find it.
+  - type: input
+    id: context
+    attributes:
+      label: What are you trying to do?
+      placeholder: Build a library from a FLAC collection on a desktop Linux box
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: One question per issue, if you can.
+    validations:
+      required: true
+  - type: textarea
+    id: searched
+    attributes:
+      label: What have you already read or tried?
+      description: >
+        Point at the document or command, including the section that did not
+        answer it. That gap is the real deliverable.
+      value: |
+        Read:
+        Tried:
+        Still unclear:
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Closest area
+      options:
+        - playback
+        - queue
+        - search
+        - builder
+        - UI
+        - API
+        - database
+        - installer
+        - testing
+        - documentation
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: This is not a bug, a feature request or a performance report.
+          required: true
+        - label: I read the documentation map in README.md first.
+          required: true
