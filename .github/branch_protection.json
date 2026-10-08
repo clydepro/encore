@@ -13,8 +13,8 @@
       "Docs / structure",
       "Security / vulnerabilities",
       "Security / secrets",
-      "CodeQL",
-      "Dependabot"
+      "Security / codeql",
+      "Security / dependency review"
     ]
   },
   "enforce_admins": true,
