@@ -2,8 +2,7 @@
 
 Labels are repository metadata rather than files, so the taxonomy lives in the
 repository and this tool pushes it. Existing-but-undeclared labels are reported
-and only removed with `--prune`, because closed issues keep their labels and a
-typo is cheaper to fix than to explain.
+and only removed with `--prune`; GitHub's own defaults are never removed.
 
 Usage:
 
@@ -25,6 +24,21 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 TAXONOMY = ROOT / ".github" / "labels.yml"
 
+#: Labels GitHub creates automatically. They are reported as undeclared but never
+#: deleted by default: closed issues keep their labels, and a stale default costs
+#: nothing, while an accidental deletion is invisible history.
+GITHUB_DEFAULTS = frozenset(
+    {
+        "dependencies",
+        "duplicate",
+        "good first issue",
+        "help wanted",
+        "invalid",
+        "question",
+        "wontfix",
+    }
+)
+
 
 def load_taxonomy() -> list[dict[str, str]]:
     """Flatten the grouped taxonomy file into GitHub label records."""
@@ -43,12 +57,27 @@ def load_taxonomy() -> list[dict[str, str]]:
 
 
 def gh(*args: str, repo: str | None = None) -> subprocess.CompletedProcess[str]:
-    """Run the GitHub CLI, tolerating 'already exists' style failures."""
+    """Run a `gh` subcommand that understands `-R/--repo` (gh label, gh run...)."""
 
     command = ["gh", *args]
     if repo:
         command += ["--repo", repo]
     return subprocess.run(command, capture_output=True, text=True, check=False)
+
+
+def gh_api(path: str, *args: str) -> subprocess.CompletedProcess[str]:
+    """Call the REST API with an explicit path.
+
+    `gh api` has no `--repo` flag on every supported version (it was added after
+    2.23), so paths are always spelled out as `repos/OWNER/REPO/...`.
+    """
+
+    return subprocess.run(
+        ["gh", "api", *args, path],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
 
 def repository_from_origin() -> str:
@@ -70,7 +99,7 @@ def repository_from_origin() -> str:
 
 
 def existing_labels(repo: str) -> dict[str, dict[str, Any]]:
-    result = gh("api", "labels", "--paginate", "--jq", ".", repo=repo)
+    result = gh_api(f"repos/{repo}/labels", "--paginate", "--jq", ".")
     if result.returncode != 0:
         raise SystemExit(f"could not read labels: {result.stderr.strip()}")
     listed: list[dict[str, Any]] = json.loads(result.stdout or "[]")
@@ -97,50 +126,41 @@ def main(argv: list[str] | None = None) -> int:
             label["color"],
             label["description"],
         )
-        if name not in present:
-            print(f"  create {name}")
-            if not args.dry_run:
-                result = gh(
-                    "label",
-                    "create",
-                    "--force",
-                    "--name",
-                    name,
-                    "--color",
-                    colour,
-                    "--description",
-                    description,
-                    repo=repo,
-                )
-                if result.returncode != 0:
-                    print(f"  failed {name}: {result.stderr.strip()}", file=sys.stderr)
-                    return 1
-            continue
-        if (
+        drift = name in present and (
             present[name].get("description") != description
             or str(present[name].get("color", "")).lower() != colour.lower()
-        ):
+        )
+        if name not in present:
+            print(f"  create {name}")
+        elif drift:
             print(f"  update {name}")
-            if not args.dry_run:
-                gh(
-                    "label",
-                    "edit",
-                    "--name",
-                    name,
-                    "--color",
-                    colour,
-                    "--description",
-                    description,
-                    repo=repo,
-                )
+        else:
+            continue
+        if args.dry_run:
+            continue
+        # `--force` upserts, so create and drift-fix are the same call.
+        result = gh(
+            "label",
+            "create",
+            name,
+            "--color",
+            colour,
+            "--description",
+            description,
+            "--force",
+            repo=repo,
+        )
+        if result.returncode != 0:
+            print(f"  failed {name}: {result.stderr.strip()}", file=sys.stderr)
+            return 1
 
     managed = {label["name"] for label in desired}
     for name in sorted(set(present) - managed):
-        if name.startswith(("dependencies", "documentation", "good first issue", "help wanted")):
+        if name in GITHUB_DEFAULTS:
             continue  # GitHub defaults; harmless to leave in place
         print(f"  undeclared: {name}" + (" (would delete)" if args.prune else ""))
         if args.prune and not args.dry_run:
-            gh("label", "delete", name, repo=repo)
+            gh("label", "delete", name, "--yes", repo=repo)
 
     print(f"Labels synchronised for {repo}. Verify: gh label list --repo {repo}")
     return 0

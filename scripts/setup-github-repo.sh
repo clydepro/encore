@@ -54,27 +54,27 @@ status() { printf '  %-34s %s\n' "$1" "$2"; }
 if [[ "$VERIFY_ONLY" == "1" ]]; then
   echo "==> Current state"
   status "labels present in repository" \
-    "$(gh api labels --paginate --jq '.[].name' --repo "$REPO" | wc -l | tr -d ' ')"
+    "$(gh api "repos/$REPO/labels" --paginate --jq '.[].name' | wc -l | tr -d ' ')"
   for required in bug P0 "area:playback" ready-for-review; do
-    if gh api "labels/$required" --repo "$REPO" >/dev/null 2>&1; then
+    if gh api "repos/$REPO/labels/$required" >/dev/null 2>&1; then
       status "label ${required}" "present"
     else
       status "label ${required}" "MISSING"
     fi
   done
-  if gh api "branches/main/protection" --repo "$REPO" >/dev/null 2>&1; then
+  if gh api "repos/$REPO/branches/main/protection" >/dev/null 2>&1; then
     status "branch protection on main" \
-      "$(gh api "branches/main/protection" --jq '[.required_status_checks.contexts[]] | length' --repo "$REPO") required checks"
+      "$(gh api "repos/$REPO/branches/main/protection" --jq '[.required_status_checks.contexts[]] | length') required checks"
   else
     status "branch protection on main" "MISSING (run: scripts/configure-branch-protection.sh)"
   fi
-  if gh api "vulnerability-alerts" --repo "$REPO" >/dev/null 2>&1; then
+  if gh api "repos/$REPO/vulnerability-alerts" >/dev/null 2>&1; then
     status "Dependabot alerts" "enabled"
   else
     status "Dependabot alerts" "disabled"
   fi
   status "workflows visible" \
-    "$(gh api "actions/workflows" --jq '.total_count' --repo "$REPO") (5 expected after push)"
+    "$(gh api "repos/$REPO/actions/workflows" --jq '.total_count') (5 expected after push)"
   echo
   echo "UI-only settings cannot be verified reliably via the API; check"
   echo "Settings → Security → Code security and analysis for code scanning,"
@@ -103,7 +103,7 @@ fi
 
 echo "==> 3/3 Dependabot alerts (also enables the dependency graph)"
 if [[ "$DRY_RUN" == "0" ]]; then
-  if gh api -X POST "vulnerability-alerts" --repo "$REPO" >/dev/null 2>&1; then
+  if gh api -X POST "repos/$REPO/vulnerability-alerts" >/dev/null 2>&1; then
     echo "  enabled"
   else
     echo "  not changed (already enabled, or needs Settings → Security → Dependabot)"
