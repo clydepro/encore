@@ -6,8 +6,9 @@ All notable changes to Encore are documented here. The format follows
 tagged `vX.Y.Z` (PBK Chapter 17).
 
 This file is updated by every pull request that changes behaviour, interfaces or
-the build and operations tooling, under **Unreleased**. The release process moves
-that section into a dated version heading.
+the build and operations tooling, under **Unreleased**. Dependabot's dependency
+bumps are the exception — the release notes and the `uv.lock` diff describe them.
+The release process moves the section into a dated, bracketed version heading.
 
 ## Unreleased
 
@@ -113,6 +114,9 @@ that section into a dated version heading.
   The table now states the fourteen real contexts, and a test keeps it equal to
   `.github/branch_protection.json` so documentation and settings cannot drift
   apart again.
+- Release process wording aligned with what CI actually enforces: `## Unreleased`
+  (no brackets) becomes `## [X.Y.Z] - YYYY-MM-DD`, and Dependabot bumps are
+  recorded by the release notes rather than a line each.
 
 ### Security
 

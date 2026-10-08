@@ -33,7 +33,10 @@ human knows what "done" means.
 ### 1. Scope
 
 - [ ] Milestone closed in GitHub; no `P0`/`P1` issues open.
-- [ ] Every merged PR since the last release has a `CHANGELOG.md` entry.
+- [ ] Every merged PR since the last release has a `CHANGELOG.md` entry. The one
+      exception is Dependabot's dependency bumps: those are summarised by the
+      generated release notes and by the `uv.lock` diff, and adding a line per
+      lockfile PR is how changelogs become noise.
 - [ ] `docs/adr/README.md` index matches `docs/adr/`.
 
 ### 2. Validation
@@ -58,7 +61,8 @@ human knows what "done" means.
 
 ### 4. Documentation
 
-- [ ] `CHANGELOG.md`: `## [Unreleased]` becomes `## [X.Y.Z] - YYYY-MM-DD`.
+- [ ] `CHANGELOG.md`: `## Unreleased` becomes `## [X.Y.Z] - YYYY-MM-DD` (the
+      brackets are what `Release / verify` greps for).
 - [ ] User guide and administrator guide updated for visible changes.
 - [ ] API reference updated; a MAJOR release includes migration guidance and a
       MINOR release documents new fields (SAPRS Chapter 10).
