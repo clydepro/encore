@@ -62,6 +62,16 @@ the `pypi` environment) the distributions. See
 on PRs. Nothing in the per-commit path runs a long suite — that is deliberate
 (AIG 22: do not optimize before measuring, and do not make CI slow on purpose).
 
+## Action pins
+
+Every `uses:` reference is pinned to a full version tag, not a moving major.
+Moving majors are not published by every author — `setup-uv@v10` does not exist
+because that repository stopped publishing `vN` refs after v7 — and a pin that
+cannot be resolved fails the whole workflow at "Set up job". Dependabot's
+`github-actions` ecosystem bumps the pins weekly, and
+`tests/unit/test_test_harness.py` fails the build if a moving reference creeps
+back in.
+
 ## Adding a workflow
 
 Open an issue first. PBK 6 fixes the set at five; more workflows need a stated

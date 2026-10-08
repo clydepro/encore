@@ -7,6 +7,7 @@ renamed or never finished.
 
 from __future__ import annotations
 
+import re
 import tomllib
 from importlib import metadata
 from pathlib import Path
@@ -141,3 +142,25 @@ def test_ai_support_materials_are_organised() -> None:
     for directory in ("prompts", "context", "task_templates", "reviews", "checklists"):
         assert (ai / directory).is_dir(), f"ai/{directory} missing (PBK 18)"
     assert any((ai / "prompts").glob("*.md")), "ai/prompts must contain at least one prompt"
+
+
+#: Full semver tags or commit SHAs. Moving major tags (`@v3`) are not published by
+#: every action author — `astral-sh/setup-uv@v10` failed CI with "unable to find
+#: version v10" because that repository tags only full versions from v8 onward.
+#: Pinning also satisfies SAPRS 15.10's "reproducible" requirement, and the
+#: github-actions Dependabot ecosystem keeps the pins current weekly.
+FULLY_PINNED = re.compile(r"^(?:v\d+\.\d+\.\d+|[0-9a-f]{40})$")
+
+
+def test_workflow_actions_are_pinned_to_resolvable_versions() -> None:
+    offenders: list[str] = []
+    for workflow in sorted((PROJECT_ROOT / ".github" / "workflows").glob("*.yml")):
+        for line in workflow.read_text(encoding="utf-8").splitlines():
+            found = re.search(r"uses:\s*(\S+)", line)
+            if found is None or "@" not in found.group(1):
+                continue
+            action, _, revision = found.group(1).partition("@")
+            if action.startswith("./") or FULLY_PINNED.match(revision):
+                continue
+            offenders.append(f"{workflow.name}: {action}@{revision}")
+    assert not offenders, "pin every action to a full version tag:\n" + "\n".join(offenders)
