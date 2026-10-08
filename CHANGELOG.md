@@ -45,7 +45,10 @@ that section into a dated version heading.
 
 ### Changed
 
-- Not yet applicable: no application behaviour exists to change.
+- Dependabot's `pip` ecosystem runs with `versioning-strategy: lockfile-only` in
+  one group, so dependency pull requests change `uv.lock` — what CI actually
+  installs — instead of only raising the `>=` floors in `pyproject.toml`. See
+  `docs/Developer/Repository-Administration.md` and #11.
 
 ### Deprecated
 

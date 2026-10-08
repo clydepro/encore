@@ -63,6 +63,10 @@ Two traps worth remembering:
 - A job guarded by `if:` and reported as *skipped* satisfies a required check;
   one that never runs does not. `Security / dependency review` therefore works
   as a required check even though it only runs on pull requests.
+- A *skipped matrix job* reports under its unexpanded name — GitHub has no matrix
+  value to substitute. That is why a pull request whose `dependencies` job fails
+  shows `Validate / unit (${{ matrix.python-version }})` instead of the two
+  required contexts: the PR is already red, but the Checks tab looks odd.
 
 ## Reviews
 
@@ -106,6 +110,31 @@ scripts/setup-github-repo.sh                 # applies the taxonomy
 scripts/sync-labels.sh --prune --dry-run     # review drift only (tools/sync_labels.py)
 ```
 
+## Dependencies
+
+Two mechanisms, deliberately separated:
+
+- **Vulnerabilities** are handled by Dependabot *security* updates (on as soon as
+  Dependabot alerts are enabled) plus `uv audit` against OSV in
+  `Security / vulnerabilities`. Those PRs touch `uv.lock`, so they resolve and
+  they pass.
+- **Freshness** is handled by Dependabot *version* updates with
+  `versioning-strategy: lockfile-only`: one grouped PR per Tuesday run, changing
+  `uv.lock` and nothing else. `pyproject.toml` stays the declaration of minimum
+  compatible versions (SAPRS 15.10) rather than a record of what was latest.
+
+The default strategy was tried first and did not work here: Dependabot raised the
+`>=` floors in `pyproject.toml`, never re-ran `uv lock`, and produced eight PRs on
+which every job failed with "the lockfile is out of date". If you see one of those
+again, the ecosystem has drifted back from `lockfile-only`.
+
+Manual refresh, when a dependency is needed for real (quarterly at most):
+
+```bash
+uv lock --upgrade && scripts/check.sh        # resolve, then prove it
+uv lock --upgrade-package pillow             # one package at a time, preferred
+```
+
 ## Automation inventory
 
 | Automation | Where | Cadence |
@@ -126,7 +155,8 @@ scripts/sync-labels.sh --prune --dry-run     # review drift only (tools/sync_lab
 
 ## Periodic maintenance
 
-- Quarterly: review `uv.lock` majors, drop unused dev dependencies (AEP 10).
+- Quarterly: review `uv.lock` majors (see [Dependencies](#dependencies)), drop
+  unused dev dependencies (AEP 10).
 - Per release: run [the release checklist](Release-Process.md).
 - On every ADR: confirm `docs/adr/README.md` index and any guide it invalidates.
 - Annually: verify a Raspberry Pi 4 / Raspberry Pi OS 64-bit install still works

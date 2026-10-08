@@ -30,18 +30,21 @@ updates:
       day: tuesday
       time: "05:15"
       timezone: America/New_York
-    open-pull-requests-limit: 8
-    allow:
-      - dependency-type: direct
-    # Major jumps are reviewed individually; minors and patches are grouped.
+    open-pull-requests-limit: 5
+    # uv.lock is what CI installs, so freshness has to land in the lockfile.
+    # With Dependabot's default strategy it widened the `>=` floors in
+    # pyproject.toml and never touched uv.lock: eight pull requests opened, and
+    # every job on them died at "the lockfile is out of date" — unmergeable
+    # unless a human re-ran `uv lock`, which is the automation we are trying to
+    # avoid needing. `lockfile-only` keeps pyproject as the statement of minimum
+    # compatible versions (SAPRS 15.10) and puts updates where they resolve.
+    versioning-strategy: lockfile-only
     labels:
       - chore
     commit-message:
       prefix: "chore(deps)"
+    # One pull request per run, direct and transitive together.
     groups:
-      python-minor-and-patch:
+      python:
         patterns:
           - "*"
-        update-types:
-          - minor
-          - patch
