@@ -99,6 +99,9 @@ that section into a dated version heading.
   release time, where `--run-slow` happens to gather everything. It runs on every
   commit now, and its README's promise that CI checks the `Regression: #<issue>`
   citation is finally true.
+- `scripts/setup-github-repo.sh --verify` reported GitHub's own `accessibility`
+  label as taxonomy drift on every run; it joins the defaults that are never
+  pruned and never complained about.
 
 ### Security
 

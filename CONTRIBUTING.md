@@ -146,6 +146,16 @@ focused; a PR that touches three areas is three PRs.
 CI must be green before review. Reviews check the
 [code review checklist](ai/checklists/code-review.md) and the guardrails.
 
+What is actually enforced, for maintainers included (`enforce_admins`): the
+fourteen required checks named in `.github/branch_protection.json`, linear
+history, and `main` rejecting direct pushes — so work in a branch and open a PR.
+Human review is a norm rather than a gate while the project has one maintainer,
+because GitHub does not let an author approve their own pull request. Ask for
+review explicitly on anything that changes behaviour, and run the AI review pass
+below before a human looks. See
+[repository administration](docs/Developer/Repository-Administration.md) for the
+settings to raise once a second reviewer exists.
+
 ## 8. AI-assisted contributions
 
 AI tools are first-class contributors here, and that is a responsibility, not an
