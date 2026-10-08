@@ -13,7 +13,14 @@ Semantic Versioning, `MAJOR.MINOR.PATCH`, tagged `vX.Y.Z`:
 - Pre-releases use `v1.0.0-rc.1`; the `release.yml` workflow skips PyPI
   publishing for any tag containing `rc`.
 
-`pyproject.toml`, `encore/__version__` and the tag must agree — CI enforces it.
+`pyproject.toml`, `encore.__version__` and the tag must agree — CI enforces it, in
+`Release / verify`.
+
+A release heading in `CHANGELOG.md` must read `## [X.Y.Z] - YYYY-MM-DD`, brackets
+and ISO date included. `release.yml` greps for exactly that shape, so a heading
+written as `## 1.0.0 - 2026-01-01` fails the release *before* anything is built or
+published; `tests/unit/test_test_harness.py` checks existing headings against the
+same rule so the surprise happens in a PR instead.
 
 ## Where releases happen
 

@@ -102,13 +102,18 @@ that section into a dated version heading.
 - `scripts/setup-github-repo.sh --verify` reported GitHub's own `accessibility`
   label as taxonomy drift on every run; it joins the defaults that are never
   pruned and never complained about.
+- The first tagged release would have died in `Release / verify`: the workflow
+  greps `CHANGELOG.md` for `## [X.Y.Z]`, and the file's only release heading was
+  written without brackets (#15). Headings are now Keep a Changelog format, and
+  `tests/regression/test_issue_15_changelog_heading_gate.py` holds both halves to
+  that shape.
 
 ### Security
 
 - Secret scanning, dependency vulnerability auditing and CodeQL analysis wired
   into CI; reporting process documented in `SECURITY.md`.
 
-## 0.0.0 - 2026-10-07
+## [0.0.0] - 2026-10-07
 
 ### Added
 
