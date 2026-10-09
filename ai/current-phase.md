@@ -61,7 +61,9 @@ written, and `apps/server/` and `apps/builder/` are still placeholders.
 ## Next
 
 **AIG steps 5 and 6 together**: the two database schemas and their repositories
-([issue #19](https://github.com/clydepro/encore/issues/19)), and the Library
+([issue #19](https://github.com/clydepro/encore/issues/19), which
+[`PR 20`](https://github.com/clydepro/encore/pull/20) closed in error — run
+`gh issue reopen 19` before starting, per [`HANDOFF.md`](HANDOFF.md)), and the Library
 Builder that fills one of them. They are inseparable in practice — the schema is
 the Builder's output contract (ADR-010) — and both are now unblocked because the
 two open design questions have been decided in writing:

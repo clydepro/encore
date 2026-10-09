@@ -169,9 +169,14 @@ phase's acceptance criteria, not a gap in Phase 1.
 ## Known loose ends
 
 - No tracking issue existed for steps 2–4, so the commit, PR #20 and the CHANGELOG
-  entry are the record of what was done. #19 is the first issue in the sequence
-  `CONTRIBUTING.md` describes, and it now needs a note that ADR-009/010 changed two
-  of its premises (SQLAlchemy's role; migration mechanism).
+  entry are the record of what was done. #19 was the first issue in the sequence
+  `CONTRIBUTING.md` describes — and it is **currently closed in error**, so a session
+  looking for step 5 by browsing open issues will not find it. PR #20's description
+  opened its "Related issue" line with a closing keyword pointing at #19 and then
+  negated it in prose; GitHub read the keyword. Reopen it before starting step 5:
+  `gh issue reopen 19`. Both of its open questions were answered on 2026-10-09 in
+  ADR-009 and ADR-010, and the comment on the issue records that plus two corrections
+  to its own text (an ADR *was* required, and the shape-check requirement is new).
 - The `slots`/`super()` trap deserves a file in `tests/regression/` per AEP 13,
   but that suite is one file per issue number and this was found while writing
   code, not reported. The guard is in `tests/unit/test_events.py` and labelled as
