@@ -39,8 +39,21 @@ DOMAIN_PACKAGES = (
 
 FORBIDDEN_WEB_IMPORTS = ("fastapi", "starlette", "jinja2", "uvicorn", "htmx")
 
-#: Modules that must not talk to SQLite directly; persistence is repository-only.
+#: Modules that must not talk to a database directly; persistence is repository-only.
+#:
+#: Both drivers, not just `sqlite3`. ADR-009 gives the runtime side SQLAlchemy, so a
+#: service that opened an `engine` would bypass the repositories just as surely as one
+#: that opened a file — and it would look less suspicious doing it, because a session
+#: does not read like raw SQL. Issue #19's acceptance criterion asks for both.
 NO_DIRECT_SQL = ("encore/controllers", "encore/domain", "encore/services", "encore/search")
+
+#: The one module of the persistence layer the Builder may import: names, not access.
+REPOSITORY_CONTRACT = "encore.repositories.contract"
+
+#: Driver modules that only the Server's persistence layer may import. `apps/builder/`
+#: is a separate application and owns its own writes (ADR-010), so it is not covered by
+#: the rule and is checked by its own instead.
+STORAGE_IMPORTS = ("sqlite3", "sqlalchemy")
 
 #: The Builder must never import runtime playback (ADR-001).
 BUILDER_ROOT = "apps/builder"
@@ -98,8 +111,68 @@ def test_domain_packages_never_import_web_frameworks(package: str) -> None:
 @pytest.mark.parametrize("package", NO_DIRECT_SQL)
 def test_only_repositories_touch_sqlite(package: str) -> None:
     for path in _python_files(package):
-        offenders = {name for name in _imports(path) if name.split(".")[0] == "sqlite3"}
+        offenders = {name for name in _imports(path) if name.split(".")[0] in STORAGE_IMPORTS}
         assert not offenders, f"{path.relative_to(PROJECT_ROOT)} bypasses repositories"
+
+
+def test_storage_drivers_are_imported_by_the_persistence_layer_alone() -> None:
+    """Within the Server, only `encore/repositories/` opens a database.
+
+    Enumerating the forbidden packages is how a rule stops applying the moment code
+    lands somewhere new — `encore/api/`, `encore/events/` and `encore/utilities/` are
+    outside `NO_DIRECT_SQL` for unrelated reasons, and a store opened in any of them
+    would be a real violation with no test attached. Scanning the tree and whitelisting
+    the one owner of persistence inverts the default: new Server code is covered the day
+    it appears.
+
+    `apps/builder/` is excluded because it is a different application, not a layer of
+    this one. ADR-010 gives it sole ownership of `library.db`'s schema, so it must open
+    the file — the rule that keeps Builder and Server decoupled is the one above this,
+    and the Builder is checked there for importing nothing from `encore/`'s persistence.
+    """
+
+    offenders: list[str] = []
+    for path in _python_files("encore"):
+        if "repositories" in path.parts:
+            continue
+        found = {n for n in _imports(path) if n.split(".")[0] in STORAGE_IMPORTS}
+        if found:
+            offenders.append(f"{path.relative_to(PROJECT_ROOT)}: {sorted(found)}")
+
+    assert not offenders, "only the repository layer opens a database: " + "; ".join(offenders)
+
+
+def test_the_builder_does_not_reuse_the_servers_persistence() -> None:
+    """ADR-010's separation, checked instead of assumed.
+
+    The Builder owning its own DDL is the same decision that keeps it out of
+    `encore/repositories/`: if either side could reach through to the other, the
+    immutable-library boundary would be a convention between two writers. `schema.py`
+    is the Builder's DDL and `construction.py` writes the rows — both are allowed
+    `sqlite3` and neither is allowed the Server's repositories.
+
+    `encore/repositories/contract.py` is the deliberate exception, and the narrower rule
+    above is what makes it safe: the Builder may import the *names* of tables, columns
+    and enums, because sharing them is the whole mitigation for two applications
+    describing one schema, but it may not import a connection, a store or a repository,
+    so a `Session` or a raw row cannot reach it. That distinction is ADR-009's,
+    expressed as an import rule.
+    """
+
+    offenders: list[str] = []
+    for path in _python_files(BUILDER_ROOT):
+        # `_imports` yields both `encore.repositories.contract` and the qualified names
+        # it was asked for, so the exclusion is by module, not by string equality.
+        found = {
+            name
+            for name in _imports(path)
+            if name.startswith("encore.repositories")
+            and name.rstrip(".").split(".")[:3] != ["encore", "repositories", "contract"]
+        }
+        if found:
+            offenders.append(f"{path.relative_to(PROJECT_ROOT)}: {sorted(found)}")
+
+    assert not offenders, "the Builder must own its own writes: " + "; ".join(offenders)
 
 
 def test_playback_knows_nothing_about_http() -> None:

@@ -37,6 +37,11 @@ The release process moves the section into a dated, bracketed version heading.
   and checkpoints, so a rebuild after adding an album re-reads only what
   changed and re-encodes no artwork; `encore-builder` as a `console_script`;
   and `BuildCompleted` published on the bus with one number per ledger row.
+- Two architecture guardrails #19's acceptance criteria asked for: within the Server,
+  only `encore/repositories/` may import `sqlite3` **or** `sqlalchemy` (previously the
+  rule checked `sqlite3` in four named packages, which stopped applying anywhere new),
+  and `apps/builder/` may import the repository layer's `contract` module for shared
+  names but no connection, store or repository. Both were mutation-checked.
 - `paths.music_dir` in configuration — the one filesystem path the Builder
   needed that SAPRS 13.3 did not already define, documented as such.
 - Synthetic media generation in `tests/support/media.py`: real silent MP3 and
@@ -46,7 +51,7 @@ The release process moves the section into a dated, bracketed version heading.
 - Shared fixtures `music_tree`, `built_library`, `library_store` and
   `runtime_store`; `tests/performance/test_builder_scale.py` builds a real
   1,500-song library and holds search to the 100 ms budget, measuring ~8 ms p95
-  and ~3.7 s of build time on the reference machine.
+  and ~3.7 s of build time on the reference machine (#19).
 - `ai/current-phase.md` and `ai/HANDOFF.md`: what a phase was intended to cover,
   what it delivered, what it deliberately left out, and what the next session
   must decide before writing code. `ai/README.md` and the CONTRIBUTING definition

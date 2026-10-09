@@ -8,16 +8,15 @@ not an authority, and it will be wrong faster than the SAPRS is.
 
 State as of this writing: **Phase 1 is merged; Phase 2 is on
 `feat/19-persistence-and-library-builder`, unmerged.** Both databases exist, the
-Builder builds them, 703 tests pass and `scripts/check.sh` is green (712 with the
-slow suites). Nothing opens
-either store from a running application yet — that is the next phase's job, and it
-is the reason `encore/repositories/` is finished but has no production caller.
+Builder builds them, 705 tests pass and `scripts/check.sh` is green (714 with the
+slow suites). Nothing opens either store from a running application yet — that is
+the next phase's job, and it is the reason `encore/repositories/` is finished but
+has no production caller. Where that composition goes is decided: `apps/server/`.
 
-**[Issue #19](https://github.com/clydepro/encore/issues/19) is open, and this is the
-branch that closes it.** It was closed in error once already (PR #20 put a closing
-keyword in a "Related issue" line and GitHub obeyed it). Do not repeat that: decide
-whether this PR closes #19, say so in one unambiguous sentence, and if it does not,
-comment on #19 with what remains.
+**[Issue #19](https://github.com/clydepro/encore/issues/19) is closed by this
+branch's PR**, deliberately: the phase implements everything the issue asks for. It
+was closed in error once before, when PR #20 put a closing keyword in a "Related
+issue" line and GitHub obeyed it — the difference now is that this one is meant.
 
 ## Start here
 
@@ -125,20 +124,21 @@ built on.
 
 - **No issues exist for AIG steps 7–9.** #19 is one of only three issues ever
   opened. Open yours before branching (CONTRIBUTING §2).
-- **Where the stores get composed is undecided.** The honest answer is `apps/server/`
-  builds them and hands them to services; `build_core_services` deliberately does not,
-  because opening a database requires files that pure config/domain tests have no
-  business needing. Make it a decision in the server milestone, not by accident in a
-  fixture.
+- **Where the stores get composed is decided**: `apps/server/`, not
+  `build_core_services`, so config and domain tests never touch a database. The
+  reasoning and the intended shape are in `apps/server/README.md`; do not
+  rediscover it in a fixture.
 - **`aac`/`m4a` synthetic media still raises** `SyntheticMediaUnavailableError`. It is
   asserted rather than skipped (`test_media_generator.py`), so nothing silently stops
   covering it, but the M4A path in `extraction.py` is therefore only tested against
   real files. The corpus is ~96% MP3 and the rest FLAC/M4A, so the gap is real but
   narrow. Closing it needs an encoder dependency or hand-written ADTS frames.
-- **Playback tests will hit the synthetic-media limit soon.** Silent-but-valid
-  containers are not decodable audio. Decide early whether to commit small licensed
-  fixtures, generate them with `ffmpeg` in CI, or skip; if the answer is "commit
-  files", that changes what a clone contains and wants an ADR.
+- **Playback tests skip rather than fake decodable audio.** Silent-but-valid
+  containers are not audio mpv can play, so anything depending on sound coming out
+  skips with a reason; the IPC contract, the Supervisor's state machine and recovery
+  are tested against `MockMpv`, which is honest because it speaks the same JSON.
+  If the skips start hiding real regressions, revisit — that is the point where
+  skipping becomes wrong rather than disciplined.
 - **`tests/regression/` is one file per issue**, so this phase's eight fixed defects
   all live in `test_issue_19_persistence_and_library_builder.py`. Their value is the
   docstrings saying what each symptom was; a future session that fixes three bugs on

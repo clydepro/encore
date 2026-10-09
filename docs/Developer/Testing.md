@@ -71,6 +71,37 @@ destination (90% overall, 95% domain/queue/search, 90% playback/builder).
   (queue items) instead: `encore/utilities/clock.py` makes time an argument, and
   every domain and event timestamp is injectable.
 
+## Synthetic media, and what it cannot prove
+
+`tests/support/media.py` writes valid MP3 and FLAC containers — correct frames,
+real durations, tags, embedded JPEG covers — containing silence. That is enough
+for everything that reads a file's *structure*: metadata extraction, discovery,
+deduplication, search, artwork. It is not enough for anything that needs to hear
+something.
+
+So playback tests divide in two, and the division is deliberate rather than an
+accident of what was convenient:
+
+- **Tested.** mpv's JSON IPC contract, the Supervisor's state machine, gapless and
+crossfade *commands*, recovery from a crash. These run against `MockMpv`, and the
+mock is not cheating because it accepts the same command objects the real client
+serialises — a mismatch in the command vocabulary still fails.
+- **Skipped, with a reason.** Anything whose assertion is about sound arriving:
+gapless *audibility*, crossfade curve shape, decoder behaviour on odd samples,
+true gapless frame boundaries. A test asserting those against silent containers
+would be testing the fixture, and a green suite that quietly means nothing is worse
+than an honest skip.
+
+If the skips ever start hiding real regressions — a playback bug shipped past a
+test that skipped rather than caught it — the policy is wrong and should be
+replaced with committed fixtures, which is a decision about what a clone contains
+and therefore wants an ADR. Until then, `pytest -rs` lists what is not being
+proven.
+
+`aac`/`m4a` generation is not faked: it raises `SyntheticMediaUnavailableError`,
+and `test_media_generator.py` asserts that it does, so the gap cannot become
+invisible.
+
 ## Regression tests (SAPRS 14.14, AEP 13)
 
 Every fixed defect gets a permanent test in `tests/regression/`, named
