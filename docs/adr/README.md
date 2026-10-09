@@ -8,18 +8,19 @@ what was rejected.
 
 ## Index
 
-| ID      | Title                                                | Status                |
-| ------- | ---------------------------------------------------- | --------------------- |
-| ADR-001 | Separate Library Builder from Server                 | Accepted              |
-| ADR-002 | HTMX Instead of SPA                                  | Accepted              |
-| ADR-003 | SQLite as the Storage Engine                         | Superseded by ADR-009 |
-| ADR-004 | Internal Event Bus                                   | Accepted              |
-| ADR-005 | mpv Playback Engine                                  | Accepted              |
-| ADR-006 | Immutable Library Database                           | Accepted              |
-| ADR-007 | Anonymous Guest Model                                | Accepted              |
-| ADR-008 | Appliance-First Philosophy                           | Accepted              |
-| ADR-009 | Split the Storage Access Layer by Mutability         | Accepted              |
-| ADR-010 | Library Builder Pipeline Shape and Library Ownership | Accepted              |
+| ID       | Title                                                     | Status                 |
+| -------- | --------------------------------------------------------- | ---------------------- |
+| ADR-001  | Separate Library Builder from Server                      | Accepted               |
+| ADR-002  | HTMX Instead of SPA                                       | Accepted               |
+| ADR-003  | SQLite as the Storage Engine                              | Superseded by ADR-009  |
+| ADR-004  | Internal Event Bus                                        | Accepted               |
+| ADR-005  | mpv Playback Engine                                       | Accepted               |
+| ADR-006  | Immutable Library Database                                | Accepted               |
+| ADR-007  | Anonymous Guest Model                                     | Accepted               |
+| ADR-008  | Appliance-First Philosophy                                | Accepted               |
+| ADR-009  | Split the Storage Access Layer by Mutability              | Accepted               |
+| ADR-010  | Library Builder Pipeline Shape and Library Ownership      | Accepted               |
+| ADR-011  | The Queue Commands Playback; Playback Notifies the Queue  | Accepted               |
 
 ## Format
 

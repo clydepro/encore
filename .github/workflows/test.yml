@@ -70,7 +70,7 @@ jobs:
       - run: uv sync --frozen --all-groups
       - name: Baseline party (SAPRS 14.11)
         run: >
-          uv run pytest tests/performance tests/party_simulation --run-slow
+          uv run pytest tests/performance tests/party_simulation --run-slow --no-cov
           --party-profile tests/party_simulation/profiles/baseline.toml
 
   arm:

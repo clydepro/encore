@@ -20,8 +20,16 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Final
 
-#: Properties Encore reads for progress reporting (SAPRS 7.5).
+from encore.playback.errors import MpvCommandError, MpvGoneError
+
+#: Properties Encore reads for progress reporting (SAPRS 7.5). Kept aligned with
+#: `encore/playback/player.py`'s `_PROPERTIES`: an unknown name raises `KeyError` here
+#: rather than "property unavailable", which is what makes a renamed property a failing
+#: test instead of a silent difference between the double and the real player.
 DEFAULT_PROPERTIES: Final[dict[str, Any]] = {
+    # mpv's *property* is `idle-active`; `idle` is the option and the command. Both are
+    # kept because a double that answers either is a double that cannot hide the mix-up.
+    "idle-active": True,
     "idle": True,
     "pause": False,
     "time-pos": 0.0,
@@ -32,13 +40,11 @@ DEFAULT_PROPERTIES: Final[dict[str, Any]] = {
     "filename": "",
 }
 
-
-class MpvError(RuntimeError):
-    """Raised when mpv answers a command with a non-``success`` error string."""
-
-
-class MpvCrashedError(RuntimeError):
-    """Raised when a command is issued against a terminated mpv process."""
+#: Kept importable from here for the tests written before the playback milestone existed:
+#: the double raises the errors the real client raises, so a handler written against the
+#: mock cannot be wrong about the real thing.
+MpvError = MpvCommandError
+MpvCrashedError = MpvGoneError
 
 
 @dataclass(frozen=True)
@@ -120,7 +126,9 @@ class MockMpv:
             case "loadfile":
                 self._loadfile(args)
             case "stop":
-                self.properties.update({"idle": True, "time-pos": 0.0})
+                self.properties.update(
+                    {"idle": True, "idle-active": True, "time-pos": 0.0, "eof-reached": False}
+                )
             case "set_property":
                 self._set_property(str(args[0]), args[1])
             case "get_property":
@@ -136,7 +144,20 @@ class MockMpv:
 
     def _loadfile(self, args: tuple[Any, ...]) -> None:
         mode = str(args[1]) if len(args) > 1 else "replace"
-        self.properties.update({"filename": str(args[0]), "idle": False, "time-pos": 0.0})
+        self.properties.update(
+            {
+                "filename": str(args[0]),
+                "idle": False,
+                "idle-active": False,
+                "time-pos": 0.0,
+                # Both are cleared by loading a file, and a double that left them set is the
+                # kind of convenient lie that makes an end-of-track loop look normal: mpv
+                # reports `eof-reached` for the file it loaded, not for the one before it, and
+                # a queue advance that trusted the stale flag would drain the queue in one tick.
+                "eof-reached": False,
+                "pause": False,
+            }
+        )
         self.emit("file-loaded", {"path": str(args[0])})
         if mode != "replace":
             self.emit("queue-loaded", {"mode": mode})

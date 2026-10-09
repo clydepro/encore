@@ -14,6 +14,55 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Added
 
+- Search (AIG 21 step 7) in `encore/search/`: a query parser that turns a guest's
+  typing into a safe FTS5 `MATCH` expression (word runs, prefix only for tokens of two
+  characters or more, eight tokens maximum, SQLite's own operators and quotes stripped
+  rather than escaped by hand), typed results that name the field that matched, and
+  `SearchService` with `search`/`songs`/`albums`/`artists` over the repository's
+  `SearchRead`. The package contains no SQL — every statement stays in
+  `repositories/library/queries.py`, which ADR-009 is about — and an index that cannot
+  answer raises `SearchUnavailable` rather than reporting an empty library (#23).
+- Playback (AIG 21 step 8, ADR-005) in `encore/playback/`: JSON IPC over the mpv socket
+  (array-form commands with `request_id` replies, events retained beside them, partial
+  lines buffered, garbage replies turned into `MpvGoneError` instead of a traceback),
+  process management with a socket-length guard and `quit`-before-`kill` shutdown,
+  `MpvPlayer` reading state from mpv's properties rather than assuming it, the SAPRS 7.3
+  state machine in `PlaybackService` publishing one `SongFinished` per track whatever
+  races with it, and `PlaybackSupervisor` watching the process and bringing it back with
+  a bounded ladder of retries (#23).
+- The queue service (AIG 21 step 9) in `encore/services/queue_service.py`: strict FIFO
+  over `runtime.db` with duplicates allowed (SAPRS 8.3), the ceiling enforced inside the
+  transaction that would otherwise exceed it, settlement by outcome (`COMPLETED`,
+  `SKIPPED`, `FAILED`, `STOPPED`) with one history row per ended track, immediate start
+  when idle and appending when not, wait times the guest can see, and advancement as a
+  loop rather than a recursion so a shelf of unreadable files skips past instead of
+  nesting event handlers until the bus reports a cycle (#23).
+- ADR-011 (The Queue Commands Playback; Playback Notifies the Queue): the one
+  justified direct service-to-service call, in one direction, with every backward
+  notification on the bus, and the two rules that keep the exception from becoming a
+  mesh.
+- `PlaybackSupervisor.bind()`, so that wiring a player and its monitor does not mean
+  assigning a private attribute from a test.
+- Search, queue and playback latency benchmarks in
+  `tests/performance/test_runtime_latency.py`, measured over the two real databases
+  rather than fakes: enqueue ~11 ms p95 against 50 ms, queue advance ~43 ms p95 (thin
+  margin, documented), playback start ~18 ms p95 for Encore's own share of the 250 ms
+  budget, which is the part a software change can slow down. `queue_operation` and
+  `playback_start` left the registry of unmeasured budgets; only HTMX navigation and
+  SSE propagation remain, until milestones 12 and 13 (#23).
+- A bounded Party Simulation in
+  `tests/party_simulation/test_queue_and_playback.py`: six minutes of the baseline
+  profile's rates over the real queue, the real state machine and both databases, with a
+  ledger asserting that every request is accounted for. FIFO order under an
+  administrator pressing skip, duplicates played twice, two mpv deaths recovered inside
+  one night, the ceiling refusing exactly the requests it should, and nothing left
+  `Playing` at the end. The 15,000-song, HTTP-fronted driver still lands with
+  milestone 16; what is here is the accounting, which does not depend on library size.
+- Four architecture guardrails beyond the ones that existed: `encore/playback/` may reach
+  neither a database nor another service, `encore/services/` may not import
+  `encore.playback` (the coupling is a protocol, ADR-011), and `encore/search/` may
+  contain no SQL in any string literal — checked by parsing the literals rather than by
+  grepping the file, so prose about `MATCH` does not trip it (#23).
 - Repositories (AIG 21 step 5, ADR-009) in `encore/repositories/`, split by
   mutability rather than by table. The library side is raw `sqlite3` over a
   `mode=ro` URI with `PRAGMA query_only=ON`, one module of SQL
@@ -135,6 +184,22 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Changed
 
+- `PlaybackOutcome.counts_as_played` means what SAPRS 11.9 needs it to mean: only
+  `COMPLETED` counts as a play. It used to be "not `FAILED`", which made a skipped
+  track a listen and a stopped one a listen, and would have had the statistics service
+  report a party that heard three songs as having heard thirty. The domain type landed
+  in phase 1 with the wrong rule and nothing could notice until there was a caller
+  (#23).
+- `MockMpv` now clears `eof-reached` and `pause` when a file is loaded, as mpv does. The
+  double had been carrying the previous track's end-of-file onto the next one, which
+  made a queue advance appear to walk the entire list in a single tick — and let a
+  recovery test pass against a behaviour the appliance cannot have (#23).
+- `JsonIpc` and `MpvProcess` take injection seams (`connect=` and `spawn=`) so the byte
+  framing and the shutdown ladder are tested directly instead of being reasoned about.
+  Production behaviour is unchanged; no seam is a branch.
+- The four unmeasured performance budgets are now two, and `scripts/check.sh --slow` runs
+  the slow suites untraced so a wall-clock budget is measured rather than distorted; it
+  reports coverage from the ordinary gate run instead.
 - The core-foundation guardrail in `tests/integration/test_core_foundation.py`
   forbids web frameworks rather than `sqlalchemy`. It had been written in
   milestone 2, when nothing stored anything yet, and ADR-009 makes SQLAlchemy
@@ -182,6 +247,19 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Fixed
 
+- Eight defects found while building AIG steps 7–9, each now guarded by
+  `tests/regression/test_issue_23_search_playback_queue.py`, which carries the table of
+  symptoms. Four of them were only findable by running the new code: an item was marked
+  `PLAYING` only *after* a successful load, so one unreadable file stopped the party
+  forever; `STOPPED` auto-advanced, which replayed the song an administrator had just
+  stopped; the queue handed a track to an engine sitting in `ERROR`, because the only
+  check was "not playing"; and a death detected by the monitor restarted mpv without
+  telling the service, so the queue saw a `PlaybackRecovered` over a track still marked
+  `Playing` and started nothing — a jukebox that survives its own crash and then plays
+  silence. The others are a `health()` that trusted a stale channel object over the
+  process, an unguarded second wait in `MpvProcess.stop()` that turned a slow shutdown
+  into a traceback, a malformed IPC reply leaking `JSONDecodeError` through a playback
+  call, and the `counts_as_played` rule described above (#23).
 - Ten silent failures in the persistence and Library Builder work were found and
   fixed while building it, each now guarded by
   `tests/regression/test_issue_19_persistence_and_library_builder.py`. They are

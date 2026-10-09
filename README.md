@@ -192,10 +192,13 @@ Quality gates are enforced locally on commit and again in CI
 ([five workflows](docs/Developer/Continuous-Integration.md)): Validate, Test,
 Documentation, Security, Release.
 
-The core is in place — domain model, Event Bus and configuration — so
-`scripts/check.sh` runs 342 tests against real code rather than an empty
-skeleton (344 with the scheduled slow suites). There is still nothing to start:
-no HTTP server, no database and no player until their milestones land.
+The core is in place — domain model, Event Bus, configuration, both databases,
+the Library Builder, and now search, playback and the queue — so `scripts/check.sh`
+runs 912 tests against real code rather than an empty skeleton (933 with the
+scheduled performance and Party Simulation suites). There is still nothing to
+start: `apps/server/` is a placeholder, because the HTTP interface arrives with
+milestone 11. The player and the stores exist and are exercised by tests, but no
+running application composes them yet.
 
 Layout:
 
@@ -240,13 +243,13 @@ the same work into ten milestones.
 2. **Core domain model. Done** — `encore/domain/`.
 3. **Event Bus. Done** — `encore/events/`.
 4. **Configuration. Done** — `encore/config/`, with structured logging.
-5. Repositories. ← next
-6. Library Builder.
-7. Search.
-8. Playback.
-9. Queue.
-10. Runtime database.
-11. FastAPI.
+5. **Repositories. Done** — `encore/repositories/`.
+6. **Library Builder. Done** — `apps/builder/`.
+7. **Search. Done** — `encore/search/`, over FTS5, benchmarked.
+8. **Playback. Done** — `encore/playback/`, mpv IPC, supervisor, recovery.
+9. **Queue. Done** — `encore/services/queue_service.py`, strict FIFO on `runtime.db`.
+10. **Runtime database. Done** — migrations and repositories in step 5.
+11. FastAPI. ← next
 12. HTMX.
 13. SSE.
 14. Administrative interface.

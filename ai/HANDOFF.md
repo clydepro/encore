@@ -1,152 +1,163 @@
-# Handoff — after AIG steps 5 and 6 (persistence and the Library Builder)
+# Handoff — after AIG steps 7, 8 and 9 (search, playback, queue)
 
 For whoever picks this up next. Read with
 [`current-phase.md`](current-phase.md) (what was done) and
-[`context/milestones.md`](context/milestones.md) (what exists). Precedence is
-unchanged: task request → SAPRS → AIG → ADRs → AEP (AEP 2). This page is a pointer,
-not an authority, and it will be wrong faster than the SAPRS is.
+[`context/milestones.md`](context/milestones.md) (what exists). Precedence is unchanged:
+task request → SAPRS → AIG → ADRs → AEP (AEP 2). This page is a pointer, not an authority,
+and it will be wrong faster than the SAPRS is.
 
-State as of this writing: **Phase 1 is merged; Phase 2 is on
-`feat/19-persistence-and-library-builder`, unmerged.** Both databases exist, the
-Builder builds them, 706 tests pass and `scripts/check.sh` is green (715 with the
-slow suites). Nothing opens either store from a running application yet — that is
-the next phase's job, and it is the reason `encore/repositories/` is finished but
-has no production caller. Where that composition goes is decided: `apps/server/`.
+State as of this writing: **Phases 1 and 2 are merged (#20, #22); this branch is the third**
+and sits on `main`, rebased onto it at `3e70794`. Both
+databases exist, the Builder builds them, and something now *reads* them: search answers, the
+queue orders, playback makes sound — all in tests, none inside a running server. 912 tests
+pass in the standard gate (933 with the slow suites), 93.1% coverage, `scripts/check.sh`
+green. The next phase is `apps/server/`, which is where the wiring stops being a test fixture.
 
-**[Issue #19](https://github.com/clydepro/encore/issues/19) is closed by this
-branch's PR**, deliberately: the phase implements everything the issue asks for. It
-was closed in error once before, when PR #20 put a closing keyword in a "Related
-issue" line and GitHub obeyed it — the difference now is that this one is meant.
+**[Issue #23](https://github.com/clydepro/encore/issues/23) is closed by this branch's PR**,
+in the sense phase 2 meant it: everything the issue asks for is implemented. Steps 10–17
+have no issues; open yours before branching (CONTRIBUTING §2).
 
 ## Start here
 
-The four packages this phase added, in the order that makes sense to read them:
+The five files worth reading in order, before any of the modules around them:
 
-1. **`encore/repositories/contract.py`** — five minutes, and it is the hinge of the
-   whole phase. Every table and column name, once, for both databases. Read it
-   before `library/queries.py` and the SQL stops being mysterious.
-2. **`encore/repositories/library/`** — the read side. `connection.py` (the only
-   place a library connection is made: `mode=ro`, `query_only`, the shape check),
-   then `queries.py` (all the SQL, nothing else), then `mappers.py`, then the
-   repositories. `store.py` is what a caller uses.
-3. **`encore/repositories/runtime/`** — the write side, and deliberately the
-   opposite shape: `models.py` (ORM), `migrations.py` (numbered, forward-only,
-   applied on open), `session.py` (WAL, transactional), then the repositories.
-4. **`apps/builder/pipeline.py`** — the only file worth reading start-to-finish in
-   the Builder. Every stage is one module behind it; the pipeline's job is ordering,
-   accounting and the event.
+1. **`docs/adr/ADR-011-*.md`** — ten minutes, and it is the hinge of the phase. Why the queue
+   commands the player directly, why everything backward goes through the bus, and why
+   "publish a `PlayThisSong` event" is not decoupling but a command in a fact's clothes.
+2. **`encore/services/queue_service.py`** — SAPRS Chapter 8 as code. The `SETTLEMENT` table at
+   the top is the whole design in four lines; `_settle` and `_advance` are the two handlers
+   every other behaviour falls out of.
+3. **`encore/playback/service.py`** — SAPRS 7.3's machine, with the ordering rule in its
+   docstring: the engine is silenced and the state is idle *before* `SongFinished` is
+   published, which is what makes re-entry from the queue work.
+4. **`encore/playback/ipc.py`** — the only file in Encore that talks to another process. Long,
+   and correct in the ways that matter: array-form commands, `request_id` matching, partial
+   lines buffered, garbage replies converted to `MpvGoneError`.
+5. **`encore/search/query.py`** — 90 lines, and the only place untrusted text becomes an FTS5
+   expression.
 
-Then `tests/integration/test_library_contract.py`, which is what keeps 2 and 4 from
-drifting apart.
+Then `tests/integration/test_queue_playback_and_search.py`, which wires all of it the way
+`apps/server/` should.
 
 ## Things that will surprise you
 
-- **`sqlite3.connect()` and `create_engine()` both create a missing file.** A typo
-  in `paths.library_db` boots an appliance with zero songs and no error. ADR-009
-  named this as the one silent failure mode in the area, so both stores check shape
-  on open and raise `StoreNotFoundError`/`LibraryContractError`. If you add a third
-  way to open either database, it needs the same check; `open_library()` and
-  `open_runtime_store()` exist so that nobody writes a fourth `connect()`.
-- **Contentless FTS5 has two traps, both silent.** `x MATCH ?` is read by SQLite as
-  *a column named `x`* — the table name must appear on the left, not an alias. And
-  you cannot `SELECT title FROM song_search`: a contentless index stores no
-  columns, so a hit must be resolved by `rowid` through the view. Both were shipped
-  bugs here, caught only when a real database was queried; `MATCH` against an empty
-  index returns nothing and does not complain.
-- **`UNIQUE` treats `NULL` as distinct.** `runtime_statistics` needed both per-day
-  and all-time rows in one table with a `UNIQUE(metric, day)`; an all-time row keyed
-  on `day = NULL` duplicated once per reset. All-time totals use the empty string.
-- **`mutagen` returns objects that are not `str`.** An ID3 `TDRC` frame gives you an
-  `ID3TimeStamp`. A reader that only understands `str` drops every ID3 date and
-  nothing fails. See `extraction.py._rendered` — it rejects anything that stringifies
-  to `<...>` on purpose, because `<mutagen.id3.ID3TimeStamp object at 0x…>` in an
-  artist field is worse than absent.
-- **SQLite `mtime` is second-granular and `shutil.copy2` preserves it**, so "size +
-  mtime" is not an identity. The cache key includes a tag hash and the
-  normalization-rule version for exactly this reason (ADR-010).
-- **The Builder ignores hidden trees and non-audio files rather than reporting them
-  as unsupported.** `scanned == songs + skipped` is an invariant the report prints,
-  and a `.DS_Store` counted as "music Encore cannot play" makes one line of the
-  report describe the filesystem instead of the decision.
-- **`enrich=False` by default is a measured decision, not a placeholder.** At
-  MusicBrainz's 1 request/second, filling gaps on 3,000 files is a 50-minute build.
-  Enrichment also does not query for a missing *date* alone — too common to be worth
-  a request each; the date comes along when another gap triggers the lookup.
-- **Domain types now include `PlaybackOutcome` and `QueueItem.played_at`.** The
-  first is SAPRS 4.5's vocabulary for how a track ended, which the playback service
-  had been spelling in strings at each call site. Playback (step 8) should record
-  history through it, not invent a parallel enum.
+- **Events are facts, so there is no "play this" event.** The one direct service-to-service
+  call in Encore is `QueueService` → `Player.play()`. It is deliberate, it is ADR-011, and it
+  is enforced in both directions by import scans.
+- **Advancement is a loop, not a recursion.** A file mpv cannot open fails *inside* `play()`,
+  which publishes `SongFinished` synchronously, which re-enters the queue's handler. The
+  handler settles and returns; the outer loop picks the next head. Written as recursion, a
+  shelf of 1,000 corrupted files nested handlers until `EventBus` raised `EventCycleError`,
+  and the party ended with a traceback instead of a skipped track. `_MAX_WALK = 1_000` is the
+  belt to that braces.
+- **Stop is not advance, and a stopped song is the next thing to play.** `STOPPED` settles the
+  item back to `PENDING` at position 1 and starts nothing. The first version of the handler
+  advanced on every finish reason, which replayed the song an administrator had just stopped
+  — the loop a real jukebox operator notices in four seconds.
+- **`_play_head()` marks the item `PLAYING` *before* calling the engine.** The opposite order
+  meant a file that could not be opened stayed `PENDING` at the head forever, so every
+  subsequent advance re-selected it and the queue silently refused to move. It also checks
+  `_is_idle()` at entry: an engine in `ERROR` is neither idle nor playing, and handing it a
+  track raised mid-event. Recovery, not the queue, decides when to try again.
+- **When the monitor notices mpv died, it tells the service first.** `SongFinished(FAILED)`
+  then `PlaybackRecovered`, in that order, always. Publish `PlaybackRecovered` first and the
+  queue's recovery handler finds a track still marked `Playing`, starts nothing, and you have
+  a jukebox that survives its own crash and then plays silence forever.
+- **`PlaybackOutcome.counts_as_played` was wrong before there was a caller.** It said "not
+  `FAILED`", so a skip counted as a listen. Now it says `COMPLETED`, which is what SAPRS 11.9
+  needs ("the appliance promised a track and could not deliver one"). The domain type landed
+  in phase 1 and nothing noticed, because nothing read it: worth remembering when a phase
+  adds a rule with no caller.
+- **`MockMpv` was lying about `eof-reached`.** Loading a file did not clear it, so a queue
+  advance appeared to walk the entire list in one tick and a recovery test passed against an
+  impossible machine. Fixed, with `test_mpv_mock.py` pinning it. If a playback test starts
+  behaving oddly, check the double's state model before the service's.
+- **Coverage tracing costs 3× on queue timings.** The latency benchmarks skip under a tracer,
+  and `scripts/check.sh --slow` passes `--no-cov` so the budgets are enforced somewhere real.
+  A run that does both (release) skips them. That is a decision, not an oversight.
+- **Crossfade is a fade.** One engine, volume ramped down at the end of a track and up at the
+  start of the next. `audio.crossfade_seconds` promises a mix; `transition.py` says what v1
+  does. SAPRS 16.4 books the real thing for 1.2.
+- **Playback polls at ~1 Hz instead of subscribing to mpv events.** `tick()` is the clock the
+  whole subsystem runs on: eof detection, progress, the death check. It is why `SongStarted`
+  can be up to a second late in a running server, which is inside SAPRS 1.9's promise and will
+  need re-reading if milestone 13's SSE budget ever gets tight.
 
 ## Guardrails that exist now
 
-- `tests/integration/test_library_contract.py` — every library statement executes
-  against a real built database. Fails on drift in either direction.
-- `tests/unit/test_architecture_guardrails.py` — imports the real packages and
-  asserts AIG 4. `encore/repositories/**` may not import FastAPI; services and
-  domain may not import either store's driver.
-- `tests/integration/test_core_foundation.py` — importing the core pulls in no web
-  framework. **This was narrowed this phase**: it previously banned `sqlalchemy`
-  outright, written in milestone 2 when nothing stored anything, and it would have
-  failed the milestone it was protecting. ADR-009 makes SQLAlchemy the runtime
-  write store by decision. Do not re-widen it without amending the ADR.
-- Builder stages may not open a socket: `TID251`-style review is manual here, and
-  `musicbrainz.py` is the only module with a URL in it. The tests inject an opener
-  and never hit the network (SAPRS 14.4).
+- `tests/unit/test_architecture_guardrails.py` — 25 checks. New this phase: playback may
+  import neither a repository nor a storage driver; playback may import no other service;
+  `encore/services/` may not import `encore.playback`; `encore/search/` may contain no SQL in
+  any string literal (AST-parsed, so prose about `MATCH` does not trip it).
+- `tests/integration/test_library_contract.py` (phase 2) still guards the read side; the
+  search service now depends on it, because `encore/search/` has no SQL of its own to be
+  wrong in.
+- `tests/regression/test_issue_23_search_playback_queue.py` — eight defects, one file, and a
+  table of symptoms in the docstring. Its value is the prose; a future session that finds
+  three more bugs on one PR adds them *to this file*, not three files (AEP 13 is per issue).
+- The one-way queue→playback rule is enforced twice: as an import scan, and behaviourally by
+  "one `SongFinished` per track" in `tests/unit/test_playback_service.py`.
 
 ## What is deliberately not here
 
-No HTTP, no player, no templates, no installer, no `encore/search/` service, and
-**no caller of either store**. If a task looks like it needs one of those, it is a
-later step; this phase made storage real and correct, which is what steps 7–13 are
-built on.
+- **No server, no routes, no templates, no SSE, no admin UI, no installer.**
+- **No composition root.** `build_core_services()` still builds config and logging only. The
+  graph exists in `tests/integration/test_queue_playback_and_search.py`'s `Rig` and nowhere
+  else; that file is the specification for `apps/server/`.
+- **No `HealthService`, no `StatisticsService`, no `LibraryService`** (AIG 7). `health()`
+  exists on the supervisor and returns a `ComponentHealth`; nothing publishes `HealthChanged`
+  from a running process. The queue reads `LibraryStore` directly through `SongLookup` —
+  revisit if a second reader appears rather than pre-emptively adding a service.
+- **No `queue_operation`-style statistics.** `encore/services/errors.py` names the failures;
+  counting them is milestone 14's job.
 
 ## Claims made that later code must keep true
 
-- **`library.db` is never written by the Server.** Checked by construction: the only
-  function that opens it uses `mode=ro` + `PRAGMA query_only=ON`, and the Builder is
-  the only writer of DDL. A new code path that opens `library.db` some other way is
-  a bug, and nothing will catch it but review — the guardrail is one function, not a
-  test per call site.
-- **Repositories contain no business rules.** Now that both sides are real, the
-  check that catches a rule landing in a repository is `test_architecture_guardrails`
-  plus the absence of any import of `encore.domain` services in `repositories/**`.
-- **Runtime timestamps are aware UTC.** `runtime/types.py.UTCDateTime` is the only
-  datetime column type; if you add a timestamp to a model, use it. A naive value
-  read back at 03:00 during a DST change is the failure mode ADR-009 warns about.
-- **Migrations are forward-only and numbered.** `open_runtime_store()` applies them;
-  a model change without a migration fails `test_runtime_migrations`, and a
-  migration that changes an existing revision fails too.
-- **The Builder never modifies user music.** Nothing in `apps/builder/` opens a media
-  file for writing; that is SAPRS 6.8 and it is worth keeping as a review question
-  because no test can check it without a real filesystem watch.
+- **One fact, one publisher.** Only `PlaybackService` publishes `SongFinished`, and only
+  `PlaybackSupervisor` publishes `PlaybackRecovered`. A server that publishes either "for the
+  UI" will double-settle the queue. Nothing catches this but review, so it is written here.
+- **`queue_item_id` is a correlation id and nothing more.** It travels
+  queue → player → event so the queue knows which item ended. The moment playback *reads* it,
+  playback knows about the queue and ADR-011's asymmetry is gone. No test can check the
+  intent; `test_playback_reaches_no_other_service` checks the imports that would follow.
+- **The queue never writes `library.db` and never resolves a path itself.** SAPRS 7.9: the
+  file to play arrives as an argument.
+- **Guests stay anonymous through this layer.** A `SongQueued` event carries no identity —
+  asserted by `test_a_queued_event_carries_no_guest_identity`, which is the ADR-007 check that
+  matters most here because the queue is where a "per-guest history" feature would try to
+  start.
+- **`runtime.db` timestamps stay aware UTC** (`repositories/runtime/types.py`), including the
+  `played_at` the queue writes when an item moves to `PLAYING` — and only then, which is what
+  makes a settlement's `finished_at >= started_at` assertion in the party suite meaningful.
+- **Search latency is a budget on the repository, not the service.** `SearchService` adds one
+  batch read of song rows per page; the 100 ms budget is held by FTS5 and
+  `test_builder_scale.py`.
 
 ## Known loose ends
 
-- **No issues exist for AIG steps 7–9.** #19 is one of only three issues ever
-  opened. Open yours before branching (CONTRIBUTING §2).
-- **Where the stores get composed is decided**: `apps/server/`, not
-  `build_core_services`, so config and domain tests never touch a database. The
-  reasoning and the intended shape are in `apps/server/README.md`; do not
-  rediscover it in a fixture.
-- **`aac`/`m4a` synthetic media still raises** `SyntheticMediaUnavailableError`. It is
-  asserted rather than skipped (`test_media_generator.py`), so nothing silently stops
-  covering it, but the M4A path in `extraction.py` is therefore only tested against
-  real files. The corpus is ~96% MP3 and the rest FLAC/M4A, so the gap is real but
-  narrow. Closing it needs an encoder dependency or hand-written ADTS frames.
-- **Playback tests skip rather than fake decodable audio.** Silent-but-valid
-  containers are not audio mpv can play, so anything depending on sound coming out
-  skips with a reason; the IPC contract, the Supervisor's state machine and recovery
-  are tested against `MockMpv`, which is honest because it speaks the same JSON.
-  If the skips start hiding real regressions, revisit — that is the point where
-  skipping becomes wrong rather than disciplined.
-- **`tests/regression/` is one file per issue**, so this phase's ten fixed defects
-  all live in `test_issue_19_persistence_and_library_builder.py`. Their value is the
-  docstrings saying what each symptom was; a future session that fixes three bugs on
-  one PR will be tempted to make three files. Resist that — the convention is per
-  *issue*.
-- **Coverage of `apps/builder/` plus `encore/repositories/` is 91.9%**, with
-  `musicbrainz.py` at 95% after the HTTP client got a fake opener. SAPRS 14.16 wants
-  90% for the builder, which is met; the misses are mostly `extraction.py` container
-  edge cases and the M4A note above.
-- **Human review is still a norm, not a gate**: `required_approving_review_count` is
-  0 because GitHub will not let a sole maintainer approve their own PR.
+- **Nothing here has met a real mpv.** This machine has no mpv installed. The IPC vocabulary
+  was written against the documentation and exercised against `MockMpv` and fake sockets, so
+  the first `apps/server` run on hardware will be the first end-to-end proof. Two specific
+  things to re-check there: whether `--input-ipc-run=0600` and the socket path length guard
+  behave on a real `/run/encore`, and whether property polling at 1 Hz is what a real engine
+  answers or whether `observe_property` becomes necessary.
+- **`_MAX_WALK`'s error path is untested by design** (a thousand consecutive failed starts is
+  a fixture that fakes the situation the guard exists for). The same is true of `ipc.py`'s
+  socket-wait and kill-escalation branches — 88.5% is what "no mpv process here" costs.
+- **`aac`/`m4a` synthetic media still raises** `SyntheticMediaUnavailableError`, asserted in
+  `test_media_generator.py`. It mattered less this phase (nothing decoded audio) and will
+  matter more the day a playback test wants a real file.
+- **The queue's `up_next()` batch-reads songs but does no pagination.** The service takes
+  `page_size` at construction; the UI's "Up Next" list is unbounded today. Fix it when the
+  fragment exists, so the shape is chosen with the screen in view.
+- **Two skipped budgets, two named milestones**: HTMX navigation (12) and SSE propagation (13)
+  have targets with no code to measure. The registry in
+  `tests/performance/test_performance_targets.py` says so and fails if a third one lingers.
+- **The party simulation is bounded on purpose**: 7 songs, 6 minutes, no HTTP. Its
+  conservation ledger is the part to keep and extend; the milestone-16 driver replaces the
+  scale, not the assertions.
+- **`scripts/check.sh --slow` now runs pytest twice** — once traced for coverage, once untraced
+  for the budgets. It costs a minute and buys the only configuration in which both numbers
+  mean anything.
+- **Human review is still a norm, not a gate**: `required_approving_review_count` is 0 because
+  GitHub will not let a sole maintainer approve their own PR.

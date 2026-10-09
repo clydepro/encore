@@ -36,10 +36,11 @@ Imports point inward only. HTTP concepts stop at `encore/controllers/` and
 | `encore/domain/` | implemented | SAPRS Ch. 4 entities, enums, transition table; frozen dataclasses, typed ids |
 | `encore/events/` | implemented | the eight AIG 8 facts + `EventBus`; `EVENT_VOCABULARY` is the set as data |
 | `encore/config/` | implemented | Pydantic models for `examples/config.yaml` + `ConfigurationService` |
-| `encore/services/` | partial | `LoggingService` and `build_core_services()`; the other services arrive with their milestones |
+| `encore/services/` | partial | `LoggingService`, `QueueService` and `build_core_services()`; the rest arrive with their milestones |
 | `encore/utilities/` | partial | `clock.py` (injectable time), `redaction.py` (log safety) |
 | `encore/repositories/` | implemented | ADR-009 split: read-only `sqlite3` for `library.db`, SQLAlchemy 2.x + migrations for `runtime.db`, `contract.py` naming both schemas |
-| `encore/search/`, `encore/playback/` | placeholder | steps 7-8 (search's SQL already exists in the library repository) |
+| `encore/search/` | implemented | FTS5 query parsing and typed results; **no SQL here** — it stays in `repositories/library/queries.py` |
+| `encore/playback/` | implemented | mpv IPC, `MpvPlayer`, the 7.3 state machine, the supervisor and recovery; never touches HTTP or storage |
 | `encore/api/`, `encore/controllers/`, `templates/`, `static/` | placeholder | steps 11-14 |
 | `apps/builder/` | implemented | the `encore-builder` command, sole writer of `library.db` (ADR-010) |
 | `apps/server/` | placeholder | lands with step 11; it is also where the two stores get composed |
@@ -88,14 +89,36 @@ for tests, where ordering must be observed.
 
 mpv over JSON IPC, owned solely by `encore/playback/`. State machine
 `Idle → Loading → Playing (→ Paused) → Finished → Idle`, with
-`Error → Recovering → Idle/Playing`. Supervisor launches, monitors, detects
-crashes, restarts, reconnects and reports health. Gapless where media permits;
-crossfade configurable; progress ~1 Hz.
+`Error → Recovering → Idle/Playing`; the transition table is
+`encore/domain/playback.py`'s, not a re-statement in the service.
+
+Four modules, one responsibility each: `ipc.py` (the socket, framing and the process),
+`player.py` (mpv's properties → an `EngineObservation`), `service.py` (the state machine
+and the events), `supervisor.py` (the process monitor). The engine is observed at ~1 Hz by
+`tick()`, which is also how eof and a dead mpv are noticed; progress is read from the last
+observation, so polling mpv is not on the request path.
+
+**What v1's crossfade is.** One mpv per appliance means one stream, so `audio.crossfade_seconds`
+selects a *fade*, not a mix: down to silence across the last N seconds of a track and up
+from silence across the first N of the next, at the end of file so nothing is cut short.
+Two decks overlapping needs a second process, a second socket and a second crash surface,
+which is its own ADR; SAPRS 16.4 books "crossfade improvements" for 1.2. Read
+`encore/playback/transition.py`'s docstring before describing it any other way — the
+configuration key promises more than the code claims, deliberately and in writing.
 
 ## Queue (SAPRS 8, AIG 12)
 
 Strict FIFO. Duplicates allowed. Guests anonymous. Idle ⇒ play immediately;
 otherwise append. No priority, no reordering.
+
+`QueueService` in `encore/services/queue_service.py` is the rule; `runtime/queue.py` is
+the table. It commands the player directly through a `Player` protocol and learns what
+happened through `SongFinished` and `PlaybackRecovered` — ADR-011, the one justified
+direct service-to-service call in Encore, and one-directional. Settlement is by outcome:
+`COMPLETED`→`FINISHED`, `SKIPPED`→`SKIPPED`, `FAILED`→`REMOVED`, `STOPPED`→ back to the
+head as `PENDING` (a stopped song is not a played song, and it is the next thing to play).
+Advancement is a bounded loop, because a file the engine cannot open finishes inside the
+call that started it.
 
 ## Interface (SAPRS 9, ADR-002)
 
@@ -108,11 +131,10 @@ Installation-time YAML, validated at startup, never rewritten by the app, never
 used as a database. Admin UI shows it read-only. Secrets from the environment or
 system store.
 
-`paths.music_dir` (default `/opt/music`, Builder-only) is specified by SAPRS 12.2's
-"Library location" and **not yet implemented**: `PathsConfig` has no such field.
-It must be added to the model, `examples/config.yaml` and the Administrator guide in
-one change, because `extra="forbid"` plus the test that executes the example makes
-any subset of the three fail CI.
+`paths.music_dir` (default `/opt/music`, Builder-only) is implemented: the model,
+`examples/config.yaml` and the Administrator guide name it in one change, because
+`extra="forbid"` plus the test that executes the example makes any subset of the three
+fail CI.
 
 ## Deployment (SAPRS 13)
 

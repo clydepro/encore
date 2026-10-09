@@ -12,10 +12,10 @@ means a failing test, not a convention:
 | - | ---- | ------ |
 | 1 | Domain services do not import FastAPI | ✅ import scan |
 | 2 | Domain services do not depend on HTMX or Jinja | ✅ import scan |
-| 3 | Controllers do not access SQLite directly | ✅ import scan (no controllers yet) |
+| 3 | Controllers do not access SQLite directly | ✅ import scan (no controllers until step 11) |
 | 4 | Repositories do not contain business rules | ✅ import scan; both sides are real now, so the scan has something to check |
 | 5 | Event handlers do not invoke other event handlers | ✅ cascade guard raises `EventCycleError` rather than recursing |
-| 6 | Playback does not know about HTTP | ✅ import scan (no playback yet) |
+| 6 | Playback does not know about HTTP | ✅ import scan, and playback now exists for it to mean something |
 | 7 | The Library Builder does not import runtime playback | ✅ import scan |
 | 8 | The runtime never modifies `library.db` | ✅ by construction — `open_library()` is the only opener, on a `mode=ro` URI with `PRAGMA query_only=ON` |
 | 9 | Templates contain presentation logic only | ⏳ step 12 |
@@ -42,6 +42,26 @@ cannot write: one `sqlite3.connect` exists in `encore/`, in `library/connection.
 A second connect on that path is the bug the guardrail exists for.
 - The Builder's stages do not reach the network. `apps/builder/musicbrainz.py` is
   the only module with a URL in it, and every test injects an opener (SAPRS 14.4).
+
+Newly checkable since steps 7–9:
+
+- **`encore/playback/` reaches no database and no other service.** It takes a `Song` and
+  plays it; the alternative is mpv deciding which file the queue wanted, which is ADR-011
+  inverted. Two tests, one for repositories/storage drivers, one for `encore.services` and
+  `encore.search`.
+- **`encore/services/` does not import `encore.playback`.** The queue→player call is the
+  one justified direct coupling in Encore, and ADR-011 argues it is a *protocol* coupling,
+  not a package coupling. `Player` is declared in `queue_service.py`; a test of queue rules
+  therefore needs a recorder, not an engine. If this test starts failing because someone
+  found it convenient, read ADR-011 before importing the package.
+- **`encore/search/` contains no SQL.** Checked by parsing string literals out of the AST,
+  not by grepping the file — prose about `MATCH` is legitimate in that package and a
+  `SELECT` is not. All SQL stays in `repositories/library/queries.py`.
+- **One fact has one publisher.** `QueueService` settles a queue item only in reaction to
+  `SongFinished`, and `PlaybackService` publishes it exactly once per track whatever races
+  with the command that ended it. The guard is behavioural
+  (`tests/unit/test_playback_service.py`) rather than textual, because the failure it
+  prevents is a double-settled row, not an import.
 
 ## Never do these (AIG 22)
 
@@ -90,8 +110,15 @@ fragments over custom JavaScript.
 ## Performance budgets (SAPRS 1.8, AIG 19)
 
 Search < 100 ms · queue op < 50 ms · navigation < 200 ms · playback start
-~250 ms · SSE propagation < 1 s. Encoded in
+< 250 ms · SSE propagation < 1 s. Encoded in
 `tests/performance/test_performance_targets.py`.
+
+Measured: search (~8 ms p95, 1,500 songs, `test_builder_scale.py`), enqueue (~11 ms p95),
+queue advance (~43 ms p95 — thin, and said so in the test), removal (~23 ms p95) and
+playback start (~18 ms p95, Encore's share only: mpv's decode time cannot be measured by a
+suite that SAPRS 14.4 forbids tying to a real process), all in `test_runtime_latency.py`.
+Not measured: navigation and SSE, which need milestones 12 and 13. Three of the five budgets
+are numbers now; the registry skips the other two with the milestone named.
 
 ## If a task requires breaking one of these
 

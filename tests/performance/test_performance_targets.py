@@ -31,14 +31,19 @@ TARGETS_MS: dict[str, float] = {
 #: Which milestone makes each measurement real.
 OWNING_MILESTONE: dict[str, str] = {
     "search": "5/6 — measured in test_builder_scale.py",
-    "queue_operation": "9 (Queue)",
+    "queue_operation": "9 (Queue) — measured in test_runtime_latency.py",
     "htmx_navigation": "12 (HTMX)",
-    "playback_start": "8 (Playback)",
+    "playback_start": "8 (Playback) — measured in test_runtime_latency.py",
     "sse_propagation": "13 (SSE)",
 }
 
 #: Operations with no code to measure yet. Everything else must have a benchmark.
-UNIMPLEMENTED = ("queue_operation", "htmx_navigation", "playback_start", "sse_propagation")
+#:
+#: `queue_operation` and `playback_start` left this list with milestone 3 (AIG 21 steps 8-9)
+#: and are measured in `test_runtime_latency.py`. Only the two that need a request and a
+#: browser remain: HTMX navigation and SSE propagation, which cannot be measured before
+#: milestones 11 and 13 put an HTTP server in front of them.
+UNIMPLEMENTED = ("htmx_navigation", "sse_propagation")
 
 
 @pytest.mark.parametrize("operation", sorted(UNIMPLEMENTED))
@@ -69,4 +74,6 @@ def test_registry_accounts_for_every_target() -> None:
     assert set(TARGETS_MS) == set(OWNING_MILESTONE)
     assert set(UNIMPLEMENTED) <= set(TARGETS_MS)
     measured = set(TARGETS_MS) - set(UNIMPLEMENTED)
-    assert measured == {"search"}, "a subsystem that landed needs its benchmark written"
+    assert measured == {"search", "queue_operation", "playback_start"}, (
+        "a subsystem that landed needs its benchmark written"
+    )

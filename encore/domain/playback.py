@@ -56,13 +56,22 @@ class PlaybackOutcome(StrEnum):
     def counts_as_played(self) -> bool:
         """Whether this ending belongs in "songs played" (SAPRS 10.3).
 
-        A skip is not a play. The rule lives on the enum rather than in the statistics
-        service so that every counter in the application answers the same question the
-        same way, and so a new outcome has to be classified here before it can be
-        counted anywhere.
+        A skip is not a play, and neither is a stop: both say the listener heard part of
+        it, which is a different question from the one a host reads off the dashboard.
+        `FAILED` is not a play either — the appliance promised a track and could not
+        deliver one (SAPRS 11.9).
+
+        The rule lives on the enum rather than in the statistics service so that every
+        counter in the application answers the same question the same way, and so a new
+        outcome has to be classified here before it can be counted anywhere.
+
+        This property read `is not FAILED` until issue #23, which counted every skipped
+        track as a play while its own docstring said the opposite. `SongFinished` had it
+        right, and `tests/regression/test_issue_23_search_playback_queue.py` now pins the
+        two together so they cannot drift again.
         """
 
-        return self is not PlaybackOutcome.FAILED
+        return self is PlaybackOutcome.COMPLETED
 
 
 #: The SAPRS 7.3 diagram, including its `Error -> Recovering -> Idle/Playing`
