@@ -75,7 +75,11 @@ Decisions taken here that later steps must honour:
 - Ruff, MyPy (strict), pytest with category markers, coverage, pre-commit.
 - Five GitHub Actions workflows; issue forms; PR template; labels; CODEOWNERS;
   Dependabot; branch protection definition.
-- Documentation scaffolding and ADR-001…ADR-008.
+- Documentation scaffolding and ADR-001…ADR-010. ADR-009 supersedes ADR-003's
+  access-layer clause (raw `sqlite3` read-only for `library.db`, SQLAlchemy 2.x
+  transactions for `runtime.db`); ADR-010 fixes the Builder pipeline, gives the
+  Builder sole ownership of the `library.db` schema and sets `paths.music_dir` to
+  `/opt/music`. Both are Accepted and neither is implemented.
 - Test infrastructure: fixtures, temp SQLite helpers, mock mpv, Party Simulation
   profiles + loader, performance target registry, synthetic media hooks
   (placeholders). 342 tests (344 with the slow suites), 99% coverage of `encore/`.
@@ -85,7 +89,8 @@ Decisions taken here that later steps must honour:
 
 - Any HTTP endpoint, template, static asset or SSE stream.
 - Any database schema, migration or query — including the two databases whose
-  paths configuration already validates. Repositories are step 5.
+  paths configuration already validates. Repositories are step 5, and
+  `paths.music_dir` (ADR-010) is not in the model yet.
 - Any mpv integration, queue rule, search implementation or running service.
 - `EventBus` persistence: events are in-process only (SAPRS 11.5), and nothing
   survives a restart yet.
@@ -93,10 +98,13 @@ Decisions taken here that later steps must honour:
 
 ## Where to put the first feature
 
-Step 5 (repositories) starts in `encore/repositories/` with the schema in
-`apps/builder/`'s future ownership of `library.db` (ADR-006) and `runtime.db`
-defined in SAPRS Chapter 5. The domain entities already name the columns they
-need; `tests/support/sqlite.py` has the temporary-database helpers.
+Step 5 (repositories) starts in `encore/repositories/`, split by ADR-009: a
+read-only `sqlite3` side for `library.db` and a SQLAlchemy side for `runtime.db`.
+The `library.db` DDL belongs to the Builder and nowhere else (ADR-010), and
+`runtime.db` gains numbered forward-only migrations under the repository package.
+The domain entities already name the columns they need; `tests/support/sqlite.py`
+has the temporary-database helpers, and `ai/HANDOFF.md` carries the measurements
+from the real corpus at `/opt/music` that ADR-010's rules were written against.
 
 ## Known open questions to resolve before v1
 
