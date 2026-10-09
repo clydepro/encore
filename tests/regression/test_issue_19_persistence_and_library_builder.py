@@ -1,8 +1,10 @@
 """Regression: #19 — persistence and the Library Builder.
 
-Six defects found while building milestone 5, each with the failure it produced. They
+Ten defects found across milestones 5 and 6, each with the failure it produced. They
 live together because they share one cause: a stage whose contract was written from the
-SAPRS text and never pressed against a real file, a real database or the corpus.
+SAPRS text and never pressed against a real file, a real database or the corpus. Some
+of them are still silent when fixed incorrectly, which is the whole reason this file is
+the one to read first.
 
 | Defect | Symptom |
 | ------ | ------- |
@@ -12,8 +14,15 @@ SAPRS text and never pressed against a real file, a real database or the corpus.
 | A tag value that is neither `str` nor `bytes` | every ID3 date vanished from the library |
 | Hidden directories were entered, then filtered | `.git/objects` indexed as music |
 | Non-audio files counted as "unsupported" | the skip report described the filesystem |
+| DAW package internals counted as "unsupported" | the same line, describing GarageBand |
 | A publish whose destination parent was wrong | a traceback instead of `PublicationError` |
 | `SkipLedger.total` read the entries | `scanned = songs + skipped` was false |
+| A relative `--music-dir` | a build that validated and then refused to publish |
+
+Every one of the last three was found by running the documented command against a
+real directory rather than by reading the code: `encore-builder` did not exist as a
+console script, `--music-dir ./music` was the shape of every example in the guide,
+and `scripts/run-builder.sh` called two flags the CLI never had.
 
 The last two are the ones worth keeping: both were *arithmetically* invisible — the
 report printed, the build published, and only the sum was wrong.

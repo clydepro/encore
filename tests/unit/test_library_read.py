@@ -299,6 +299,46 @@ def test_the_connection_holds_one_file_handle(built_library: BuiltLibrary) -> No
     connection.close()  # idempotent, so a failed startup cannot leak it
 
 
+def test_a_write_through_the_servers_own_connection_is_refused_by_sqlite(
+    built_library: BuiltLibrary,
+) -> None:
+    """#19 criterion 2, proven rather than asserted.
+
+    The separation test in `test_database_separation.py` proves a *test helper's*
+    read-only connection refuses a write. That is not the claim ADR-009 makes. Its
+    argument is that the driver choice is irrelevant and the URI does the work, so the
+    only test that matters is one that reaches for `INSERT` through the same connection
+    the Server uses — the one built by `open_library()`, from the same URI builder,
+    through the same `_execute` path a real bug would take.
+
+    It expects SQLite itself to refuse, not a repository guard: a check in
+    `LibraryConnection` would pass this test while leaving the file writable to anyone
+    who constructed the connection differently, which is precisely how this fails in
+    practice.
+    """
+
+    store = open_library(built_library.options.library_db)
+    # `.raw` is the package's own escape hatch and exists for this check: the point of
+    # the test is that nothing above it is what stops a write.
+    raw = store._connection.raw
+    with pytest.raises(sqlite3.OperationalError):
+        raw.execute(f"INSERT INTO {Table.ARTISTS} (name, sort_name) VALUES (?, ?)", ("x", "x"))
+    with pytest.raises(sqlite3.OperationalError):
+        raw.execute("CREATE TABLE a_backdoor (id INTEGER)")
+    with pytest.raises(sqlite3.OperationalError):
+        raw.execute(f"DELETE FROM {Table.SONGS}")
+    store.close()
+
+    # And the file is genuinely untouched, not merely the handle polite.
+    probe = sqlite3.connect(built_library.options.library_db)
+    assert probe.execute(f"SELECT COUNT(*) FROM {Table.ARTISTS}").fetchone()[0] >= 1
+    assert (
+        probe.execute("SELECT COUNT(*) FROM sqlite_master WHERE name = 'a_backdoor'").fetchone()[0]
+        == 0
+    )
+    probe.close()
+
+
 def test_one_refuses_a_statement_that_returned_two_rows(built_library: BuiltLibrary) -> None:
     connection = LibraryConnection(built_library.options.library_db)
     with connection, pytest.raises(ContractViolationError, match="row count"):
