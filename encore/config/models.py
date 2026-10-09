@@ -88,6 +88,10 @@ class PathsConfig(_Section):
     runtime_db: Path = Path("/var/lib/encore/runtime.db")
     artwork_dir: Path = Path("/var/lib/encore/artwork")
     temp_dir: Path = Path("/var/cache/encore/temp")
+    # Read by the Library Builder only (ADR-010): the Server never scans the
+    # filesystem, so this is 12.2's "Library location" and nothing more. User
+    # music belongs under /opt, not /var/lib, which is for Encore's own artefacts.
+    music_dir: Path = Path("/opt/music")
 
     @model_validator(mode="after")
     def _databases_are_distinct(self) -> PathsConfig:
@@ -98,7 +102,7 @@ class PathsConfig(_Section):
             )
         return self
 
-    @field_validator("library_db", "runtime_db", "artwork_dir", "temp_dir")
+    @field_validator("library_db", "runtime_db", "artwork_dir", "temp_dir", "music_dir")
     @classmethod
     def _absolute(cls, value: Path) -> Path:
         if not value.is_absolute():

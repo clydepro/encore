@@ -13,11 +13,11 @@ means a failing test, not a convention:
 | 1 | Domain services do not import FastAPI | ✅ import scan |
 | 2 | Domain services do not depend on HTMX or Jinja | ✅ import scan |
 | 3 | Controllers do not access SQLite directly | ✅ import scan (no controllers yet) |
-| 4 | Repositories do not contain business rules | ⏳ step 5 |
+| 4 | Repositories do not contain business rules | ✅ import scan; both sides are real now, so the scan has something to check |
 | 5 | Event handlers do not invoke other event handlers | ✅ cascade guard raises `EventCycleError` rather than recursing |
 | 6 | Playback does not know about HTTP | ✅ import scan (no playback yet) |
 | 7 | The Library Builder does not import runtime playback | ✅ import scan |
-| 8 | The runtime never modifies `library.db` | ⏳ step 10 opens it read-only |
+| 8 | The runtime never modifies `library.db` | ✅ by construction — `open_library()` is the only opener, on a `mode=ro` URI with `PRAGMA query_only=ON` |
 | 9 | Templates contain presentation logic only | ⏳ step 12 |
 
 Added once the core existed, and checkable from now on:
@@ -30,6 +30,18 @@ Added once the core existed, and checkable from now on:
 - Every event is frozen, slotted and timestamped (SAPRS 11.2, ADR-004).
 - Configuration is not writable: nothing in `encore/config/` opens a file for
   writing, and the queue duplicate rule (SAPRS 8.3) cannot be configured off.
+
+Newly checkable since steps 5–6:
+
+- The two schemas have one description. `encore/repositories/contract.py` names
+  every table and column; `tests/integration/test_library_contract.py` runs every
+  library statement against a database the real Builder produced. This is ADR-009's
+  answer to the one risk it named, so it is a test rather than a convention.
+- `open_library()` is the only production path that opens the library, and it
+cannot write: one `sqlite3.connect` exists in `encore/`, in `library/connection.py`.
+A second connect on that path is the bug the guardrail exists for.
+- The Builder's stages do not reach the network. `apps/builder/musicbrainz.py` is
+  the only module with a URL in it, and every test injects an opener (SAPRS 14.4).
 
 ## Never do these (AIG 22)
 

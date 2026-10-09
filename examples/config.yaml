@@ -24,6 +24,9 @@ paths:
   artwork_dir: /var/lib/encore/artwork
   # Scratch space for atomic publication.
   temp_dir: /var/cache/encore/temp
+  # Library location (SAPRS 12.2). Read by the Library Builder only; the server
+  # never scans the filesystem (ADR-010). User music lives under /opt.
+  music_dir: /opt/music
 
 audio:
   # mpv output selection; hardware specifics never live in code (SAPRS 7.7).

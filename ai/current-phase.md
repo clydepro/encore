@@ -1,115 +1,127 @@
 # Current Phase
 
-**Phase 1 — Core Foundation: complete and merged** ([#20](https://github.com/clydepro/encore/pull/20),
-commit `eda2d22` on `main`). **Phase 2 — persistence and the Library Builder (AIG
-steps 5 and 6): not started; the decisions are settled and the code is not.**
+**Phase 2 — persistence and the Library Builder (AIG steps 5 and 6): implemented on
+`feat/19-persistence-and-library-builder`, not yet merged.** Phase 1 — Core Foundation —
+is merged ([#20](https://github.com/clydepro/encore/pull/20), `eda2d22`).
 
 Read this page first in a new session, then [`context/milestones.md`](context/milestones.md)
 for what exists and what is scaffolding. Neither is authoritative: precedence is
 task request → SAPRS → AIG → ADRs → AEP (AEP 2).
 
-## What "Phase 1" was taken to mean
-
-The phrase is not defined in the SAPRS, AIG or AEP. It was read as the AIG 21
-steps that have no dependency on storage, playback or HTTP — **steps 2, 3 and
-4** — which is PBK's milestone 2, "Core Framework" (configuration, dependency
-injection, logging, Event Bus). Step 1, repository initialization, was already
-complete.
-
-If a different split was intended, the work below does not need to be redone: it
-is the same code, and the parts of it that belonged to a different phase are
-already separated by package.
-
 ## Delivered
 
 | AIG 21 | Delivered as | Spec |
 | ------ | ------------ | ---- |
-| 2 — Core domain model | `encore/domain/` | SAPRS Ch. 4 |
-| 3 — Event Bus | `encore/events/` | SAPRS 11.1–11.4, ADR-004 |
-| 4 — Configuration | `encore/config/` | SAPRS Ch. 12 |
-| (PBK 2 logging + DI) | `encore/services/` | AEP 15–16, AEP 9 |
+| 5 — Repositories | `encore/repositories/` | ADR-009, SAPRS Ch. 5, 10 |
+| 6 — Library Builder | `apps/builder/` | ADR-010, SAPRS Ch. 6 |
 
-`encore/utilities/clock.py` and `redaction.py` exist because both the domain and
-the log formatter needed them and neither should own them.
+Both databases now exist and are opened by both applications that name them:
+
+- **`library.db`** is written only by the Builder. The Server opens it through raw
+  `sqlite3` on a `mode=ro` URI with `PRAGMA query_only=ON`, one module of SQL
+  (`library/queries.py`), one module of row mapping, and existence checks that
+  share a `SELECT` list with the mappers so they cannot be skipped.
+- **`runtime.db`** is SQLAlchemy 2.x over WAL, with ORM models, numbered
+  forward-only migrations applied on open, and repositories that take domain
+  `SongId`/`QueueId` rather than integers.
+- **`contract.py`** names every table and column once. That is what makes the two
+  halves of ADR-009 safe: the Builder owns the DDL, the Server owns the reads, and
+  neither can drift from the other silently.
+
+The Builder is a stage-per-module pipeline (`apps/builder/pipeline.py`): discovery,
+extraction, normalization, precedence, optional MusicBrainz enrichment, artwork,
+construction, validation, publication. `encore-builder` is a real console script,
+with the four documented exit codes, a human report by default and `--json` for
+automation, and incremental rebuilds keyed on `(path, size, mtime_ns, tag hash,
+rules version)`.
 
 ## Verification state
 
 - `scripts/check.sh` — all gates pass: ruff (lint + format), yamllint,
-  markdownlint, secret scan, mypy strict, **342 tests**, 99% coverage of
-  `encore/` against a 90% floor.
-- `scripts/check.sh --slow` — 344 pass; the six skips are the performance and
-  Party Simulation benchmarks, which name the milestone that will fill them in.
+  markdownlint, secret scan, mypy strict, **702 tests**, 91.8% coverage.
+- `scripts/check.sh --slow` — 708 pass, 6 skips (SSE and playback benchmarks,
+  which name the milestones that fill them).
 - `uv run python tools/check_links.py` — clean.
-- The new guardrails were mutation-checked: a `source_ip` field on `QueueItem`,
-  a domain→services import, a module-level `EventBus()`, an unfrozen event and a
-  `write_text` in `encore/config/` each make CI fail. That is the only evidence
-  that a guardrail is real.
-- CI on the merged commit: 14 required checks green on `main`. One CodeQL alert
-  (`py/clear-text-logging-sensitive-data`, tests/unit/test_logging_service.py:269)
-  was dismissed as a false positive — that line is the redaction test, which logs
-  a password unredacted on purpose. Under this repo's code-scanning merge
-  protection an undismissed alert blocks the merge even with all 14 checks green.
+- **`tests/integration/test_library_contract.py` is the load-bearing test of this
+  phase.** It executes every statement in `library/queries.py` against a
+  `library.db` produced by a real Builder run, so the read side cannot drift from
+  `apps/builder/schema.py` in either direction. ADR-009 named schema drift as its
+  one real risk; this is the mitigation, and it is automatic rather than a review
+  habit.
+- `tests/integration/test_builder_pipeline.py` is the milestone gate: the whole
+  pipeline over generated media, including publication, the event, and the CLI.
+- **Measured, not assumed** (`tests/performance/test_builder_scale.py`, `--run-slow`):
+  1,500 songs built in ~3.7 s; song search p95 ~8 ms against a 100 ms budget; an
+  incremental rebuild of the same corpus in ~1.7 s with every song reused and no
+  artwork rewritten.
+- **Pressed against the real corpus**: discovery over `/opt/music` scans 3,308
+  entries in ~0.3 s, classifies 3,049 as supported and 257 as unsupported
+  (188 `.m4p`, 41 `.wma`, 10 `.mid`, 7 `.m4v`, …), and reports nothing unreadable.
+  The 231-file figure in ADR-010 was `.m4p`/`.wma`/`.aif` only; the larger number
+  is what the aggregate report now shows once every unplayable extension counts.
+- The mutation check that matters this phase: repoint one column name in
+  `contract.py` and the library contract test fails; delete a table from
+  `schema.py` and it fails; make `publish()` rename before it validates and the
+  pipeline integration test fails.
 
 ## Explicitly not in this phase
 
-Repositories and both database schemas; the Library Builder; search; playback;
-the queue service; FastAPI, HTMX, SSE and the admin interface; the installer.
-Nothing in `encore/repositories/`, `encore/playback/`, `encore/search/`,
-`encore/api/`, `encore/controllers/`, `encore/templates/` or `encore/static/` was
-written, and `apps/server/` and `apps/builder/` are still placeholders.
+Search *service* (`encore/search/`), playback, the queue service, FastAPI, HTMX,
+SSE, the admin interface, and the installer. `apps/server/` is still a
+placeholder: nothing opens the two stores in a running application yet, because
+that composition belongs to the server's startup path and pulling SQLAlchemy into
+`build_core_services` would have made the core foundation depend on storage.
+
+`encore/repositories/` is therefore finished but **unused at runtime**. The first
+consumer arrives with milestone 9 (queue) and 11 (FastAPI).
 
 ## Next
 
-**AIG steps 5 and 6 together**: the two database schemas and their repositories
-([issue #19](https://github.com/clydepro/encore/issues/19), which
-[`PR 20`](https://github.com/clydepro/encore/pull/20) closed in error — run
-`gh issue reopen 19` before starting, per [`HANDOFF.md`](HANDOFF.md)), and the Library
-Builder that fills one of them. They are inseparable in practice — the schema is
-the Builder's output contract (ADR-010) — and both are now unblocked because the
-two open design questions have been decided in writing:
+**AIG steps 7–9: search, playback, queue.** No issues exist for them — `gh issue list`
+shows #19 as the only issue ever opened besides two tooling ones, so per
+CONTRIBUTING §2 the next session opens its own before branching. Do not assume one
+is waiting.
 
-- **ADR-009** settles the access layer, superseding ADR-003's "SQLAlchemy
-  repositories for both" clause: raw `sqlite3` read-only for `library.db`,
-  SQLAlchemy 2.x transactions for `runtime.db`, numbered forward-only migrations
-  for the latter, version stamp inside the former, and a startup shape check on both
-  stores. Its rationale was amended on the day of acceptance after measurement — the
-  read-only guarantee comes from the connection URI, not the driver choice, and the
-  performance argument for raw `sqlite3` is void at 15,000 songs. The decision
-  stands on schema ownership. SQLAlchemy Core is recorded there as the rejected
-  strongest alternative.
-- **ADR-010** settles the Builder: stage-per-module pipeline, the Builder owns the
-  DDL alone, a four-level metadata precedence rule with the path demoted to a hint,
-  uncatatalogueable files reported rather than fatal, and `paths.music_dir` default
-  `/opt/music`.
+What is already decided that the next phase can lean on:
 
-Both are Accepted and dated 2026-10-09. ADR-010's Context carries the measurements
-the rules were written against, so read it before designing anything that touches
-the corpus.
+- Search is `LibraryStore.search` over contentless FTS5 with `bm25` ranking,
+  already measured at 8 ms p95 on 1,500 songs. `encore/search/` should be a thin
+  service over it, not a second query layer — the SQL lives in `queries.py` and
+  belongs there.
+- The queue's persistence exists and is tested (`runtime/queue.py`, 1-based
+  positions, `played_at` written on status change). `QueueService` is the business
+  rule on top of it, and `QueueItem`/`PlaybackOutcome` are already in the domain.
+- `BuildCompleted` is published by the Builder and is the event a running Server
+  subscribes to for `LibraryReloaded`.
+
+Two decisions the next session should make before writing code:
+
+1. **Where the stores get constructed.** The honest answer looks like
+   `apps/server/` composing them and handing them to services, not
+   `build_core_services`. Anything else drags storage into every config and domain
+   test.
+2. **What playback tests do about synthetic media.** `tests/support/media.py`
+   writes valid MP3/FLAC *containers* with silent audio — enough for metadata,
+   discovery, dedupe and search, **not** enough for decoding. mpv tests need real
+   recorded fixtures (licensed, small, committed via LFS or generated by `ffmpeg`
+   in CI) or they need to skip. Decide, and record it as an ADR if the answer is
+   "commit audio files", because it changes what a clone contains.
 
 ## Loose ends
 
-- **Music corpus cleanup, before any Builder run.** Decided not to prune in order to
-  simplify the Builder — SAPRS 6.8 forbids the Builder deleting user music and 6.4
-  makes tags primary, so a Builder that only works on clean data is not the
-  appliance. Two actions remain, and both are the operator's, not the code's:
-  231 real-but-unplayable files (188 `.m4p` DRM, 41 `.wma`, 2 `.aif`) should move out
-  of `/opt/music` or be transcoded so the build report's skip list stays readable;
-  and 15 playable files have no usable artist (7 no artist and no title) that only a
-  human can identify. The non-music strays (`.DS_Store`, GarageBand internals,
-  `.mid`, `.m4v`) need nothing — `AudioFormat.for_path` ignores them.
-- **`paths.music_dir` does not exist yet**, although SAPRS 12.2 requires a library
-  location. It is a one-field change that must land with `examples/config.yaml` and
-  the Administrator guide simultaneously (ADR-010 explains why two of three fails
-  CI).
-- **A regression test for the `slots` + `super()` trap** belongs in
-  `tests/regression/` per AEP 13, but that suite's convention (and CI check) is
-  one file per issue number and no issue exists for a defect found while writing
-  code. The guard lives in `tests/unit/test_events.py`, named as a regression
-  guard there; opening a `chore` issue and moving it is the tidy follow-up.
-- **No issue was opened for AIG steps 2–4**, which CONTRIBUTING §2 asks for. The
-  commit and the CHANGELOG entry are the record instead.
-- **Human review is still a norm, not a gate.** GitHub will not let a sole
-  maintainer approve their own pull request, so the reviewer checklist in the
-  template is left unticked on purpose. Revisit alongside `required_approving_
-  review_count` (currently 0) when a second developer arrives, with the two ADR
-  questions above already closed.
+- **Issue #19 was closed in error once before** (PR #20's "Related issue" line).
+  If this branch's PR repeats that phrasing GitHub will close it again; link with
+  `Closes #19` in the body only if that is what is meant, and record the outcome in
+  `ai/HANDOFF.md` either way.
+- **`/opt/music` cleanup is still the operator's**: 257 unplayable files (DRM `.m4p`
+  mostly) and 15 unidentifiable ones. The Builder handles all of them correctly now
+  and says so in the report; moving them is a choice about what the report should
+  look like, not a bug.
+- **`aac`/`m4a` generation still raises** `SyntheticMediaUnavailableError`, asserted
+  rather than skipped so the gap stays visible. Closing it means either committing an
+  encoder dependency or hand-writing ADTS frames; until then the M4A extraction path
+  is only exercised by real files.
+- **The `slots` + `super()` trap** still lacks its own regression file (AEP 13 wants
+  one per issue); the guard is in `tests/unit/test_events.py`.
+- **Human review is still a norm, not a gate** — `required_approving_review_count`
+  is 0 because GitHub will not let a sole maintainer approve their own PR.

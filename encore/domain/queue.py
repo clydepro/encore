@@ -54,6 +54,9 @@ class QueueItem:
             (ADR-007), so this is the only fact about the request beyond what
             to play: there is no requester field, and adding one would break
             SAPRS 1.3.
+        played_at: When this item started playing, once it did. SAPRS 4.5 lists it
+            and the queue table stores it, which is what lets the admin interface
+            answer "how long has this one been on" without a history read.
     """
 
     id: QueueItemId
@@ -61,9 +64,12 @@ class QueueItem:
     position: int
     status: QueueItemStatus = QueueItemStatus.PENDING
     enqueued_at: datetime = field(default_factory=utc_now)
+    played_at: datetime | None = None
 
     def __post_init__(self) -> None:
         ensure_aware(self.enqueued_at, field_name="enqueued_at")
+        if self.played_at is not None:
+            ensure_aware(self.played_at, field_name="played_at")
         if self.position < 1:
             raise ValueError(f"position is 1-based, got {self.position}")
 

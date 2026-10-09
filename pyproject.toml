@@ -39,6 +39,11 @@ dependencies = [
     "uvicorn[standard]>=0.30",
 ]
 
+[project.scripts]
+# The Builder is a command you run to completion, not a service (ADR-001). The
+# Server's entry point lands with its own milestone.
+encore-builder = "apps.builder.main:main"
+
 [project.urls]
 Homepage = "https://github.com/clydepro/encore"
 Documentation = "https://github.com/clydepro/encore/tree/main/docs"
@@ -66,6 +71,8 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = [
+    "apps",
+    "apps.builder",
     "encore",
     "encore.api",
     "encore.config",
@@ -134,7 +141,13 @@ ignore = [
     "PLR2004",# spec numbers (15,000 songs, 40 guests) belong in the assertion
     "S101",   # assert is the test language
     "S105",   # dummy credentials in tests
+    "S108",   # /tmp paths are what a filesystem test wants, and tmp_path is not always enough
+    "S608",   # tests assemble SQL against contract names to prove the contract; the
+              # interpolation is never user-supplied, which is the point of the check
+    "PLC0415",# a test that imports inside a function is importing for the failure case
+    "T201",   # the performance suite prints its measurements
 ]
+"tests/support/**" = ["S608"]
 "tools/**" = [
     "INP001",
     "PLR2004",
@@ -143,9 +156,21 @@ ignore = [
     "T201",   # a CLI's output channel is stdout
 ]
 "scripts/**" = ["INP001"]
+"apps/builder/main.py" = [
+    "T201", # a CLI's output channel is stdout, and this is the Builder's CLI
+]
+"apps/builder/**" = [
+    "PLC0415", # an offline build imports its optional collaborators where they are used
+]
+
+[tool.ruff.lint.pep8-naming]
+# The column-name namespaces in `contract.py` are interpolated into SQL dozens of times
+# per query; `SC.title`, `AR.name` is what keeps a 40-line SELECT readable, and the
+# alternative — `SongColumn.title` on every line — is worse for the reader, not better.
+ignore-names = ["AC", "AR", "AW", "FC", "SC", "RT", "LT", "MC"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["encore"]
+known-first-party = ["encore", "apps", "tests"]
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -158,12 +183,19 @@ show_error_codes = true
 pretty = true
 namespace_packages = true
 explicit_package_bases = true
-files = ["encore", "tests", "tools"]
+files = ["encore", "apps", "tests", "tools"]
 exclude = ["^\\.venv/", "^docs/", "^scripts/"]
 
 [[tool.mypy.overrides]]
+# mutagen ships a `py.typed` marker but annotates almost nothing: every frame class is
+# `Any` at the call site. `disallow_untyped_calls` would otherwise be satisfied only by
+# wrapping all of mutagen in a second, thinner library, so the rule is switched off for
+# mutagen alone - and the code that depends on it (the Builder's probe, the synthetic
+# media generator) is the code covered by the corpus tests.
 module = ["mutagen.*", "PIL.*"]
 ignore_missing_imports = true
+follow_imports = "skip"
+follow_imports_for_stubs = true
 
 [tool.pytest.ini_options]
 minversion = "8.2"
