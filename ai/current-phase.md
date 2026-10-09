@@ -38,10 +38,10 @@ rules version)`.
 ## Verification state
 
 - `scripts/check.sh` — all gates pass: ruff (lint + format), yamllint,
-  markdownlint, secret scan, mypy strict, **705 tests**, 91.8% coverage. That is
+  markdownlint, secret scan, mypy strict, **706 tests**, 91.8% coverage. That is
   the unit + integration + regression total, which is what CI runs.
 - `scripts/check.sh --slow` adds the performance and Party Simulation suites:
-  714 pass, 5 skips. Every skip is a benchmark whose subsystem does not exist yet
+  715 pass, 5 skips. Every skip is a benchmark whose subsystem does not exist yet
   and names the milestone that writes it — four of the five. The search budget is
   measured now, so it is no longer in that list.
 - `uv run python tools/check_links.py` — clean.

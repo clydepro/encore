@@ -8,7 +8,7 @@ not an authority, and it will be wrong faster than the SAPRS is.
 
 State as of this writing: **Phase 1 is merged; Phase 2 is on
 `feat/19-persistence-and-library-builder`, unmerged.** Both databases exist, the
-Builder builds them, 705 tests pass and `scripts/check.sh` is green (714 with the
+Builder builds them, 706 tests pass and `scripts/check.sh` is green (715 with the
 slow suites). Nothing opens either store from a running application yet — that is
 the next phase's job, and it is the reason `encore/repositories/` is finished but
 has no production caller. Where that composition goes is decided: `apps/server/`.
@@ -139,7 +139,7 @@ built on.
   are tested against `MockMpv`, which is honest because it speaks the same JSON.
   If the skips start hiding real regressions, revisit — that is the point where
   skipping becomes wrong rather than disciplined.
-- **`tests/regression/` is one file per issue**, so this phase's eight fixed defects
+- **`tests/regression/` is one file per issue**, so this phase's ten fixed defects
   all live in `test_issue_19_persistence_and_library_builder.py`. Their value is the
   docstrings saying what each symptom was; a future session that fixes three bugs on
   one PR will be tempted to make three files. Resist that — the convention is per

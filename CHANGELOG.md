@@ -182,6 +182,21 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Fixed
 
+- Ten silent failures in the persistence and Library Builder work were found and
+  fixed while building it, each now guarded by
+  `tests/regression/test_issue_19_persistence_and_library_builder.py`. They are
+  listed together because none of them raised: FTS5 `MATCH` against a table alias
+  returned nothing, a contentless index returned `title=None`, an ID3 `TDRC` frame
+  is not a `str` so every ID3 date vanished, an all-time statistics row keyed on a
+  `NULL` day duplicated once per reset, `.git/objects` was indexed as music, DAW
+  package internals were reported as unplayable audio, and a relative
+  `--music-dir` built a library that its own validation then refused to publish
+  (#19).
+- `encore-builder` is now a real command. The Administrator guide, ADR-009, ADR-010
+  and three repository error messages all told operators to run it, and no console
+  script existed (#19).
+- `scripts/run-builder.sh` called `--source`/`--output`, flags the Builder's CLI
+  never had, and changed directory before resolving a relative argument (#19).
 - `scripts/sync-labels.sh` and `scripts/setup-github-repo.sh` failed with
   "unknown flag: --repo" on the GitHub CLI shipped by Debian (2.23), where
   `gh api` has no such flag; repository selection now travels in the API path
