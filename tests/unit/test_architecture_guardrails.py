@@ -183,6 +183,111 @@ def test_playback_knows_nothing_about_http() -> None:
         assert not offenders, f"{path.relative_to(PROJECT_ROOT)} leaks HTTP into playback"
 
 
+def test_playback_reaches_no_database() -> None:
+    """SAPRS 7.9's "the file to play arrives as an argument", enforced as an import rule.
+
+    Playback takes a `Song`. If it ever learned to open `library.db` itself, the queue's
+    decision about *which* song becomes mpv's decision, and the two would disagree about a
+    rebuilt library — the exact situation ADR-009's separation exists to make impossible.
+    """
+
+    for path in _python_files("encore/playback"):
+        offenders = {
+            name
+            for name in _imports(path)
+            if name.startswith("encore.repositories") or name.split(".")[0] in STORAGE_IMPORTS
+        }
+        assert not offenders, f"{path.relative_to(PROJECT_ROOT)} reaches for a database"
+
+
+def test_playback_reaches_no_other_service() -> None:
+    """ADR-011's half of the bargain: the queue→playback dependency is one-way.
+
+    Playback may be *commanded* and may announce facts on the bus, but it must not know the
+    queue, search or any other collaborator exists — otherwise the asymmetry ADR-011 argues
+    for has quietly become a cycle, and the cycle is invisible until a restart deadlocks.
+    """
+
+    for path in _python_files("encore/playback"):
+        offenders = {
+            name for name in _imports(path) if name.startswith(("encore.services", "encore.search"))
+        }
+        assert not offenders, (
+            f"{path.relative_to(PROJECT_ROOT)} knows about another service: {sorted(offenders)}"
+        )
+
+
+def test_the_queue_does_not_import_the_playback_package() -> None:
+    """ADR-011's one direct dependency is a protocol, not an import.
+
+    `QueueService` calls the engine — that call is the justified exception. Importing
+    `encore.playback` would turn a justified coupling into a wiring dependency: the queue
+    would start knowing which player exists, and a test of queue rules would need mpv, real
+    or mocked. `Player` is the seam, and this test is what keeps it one.
+    """
+
+    for path in _python_files("encore/services"):
+        offenders = {name for name in _imports(path) if name.startswith(PLAYBACK_MODULE)}
+        assert not offenders, (
+            f"{path.relative_to(PROJECT_ROOT)} imports playback instead of naming it"
+        )
+
+
+def test_the_search_package_holds_no_sql() -> None:
+    """AIG 4: repositories own the SQL, services own the rules.
+
+    `encore/search/` compiles a guest's text into an FTS5 `MATCH` expression and decorates
+    the rows the repository returns. Both halves of that are Python. The moment a `SELECT`
+    appears here, there are two places that know the shape of `song_search`, and the Builder
+    that owns that DDL (ADR-010) changes it without finding the second one.
+
+    Checked as source text rather than imports because SQL in this layer would not be an
+    import: it would be a string. Docstrings and comments are excluded, since this package
+    has good reasons to *talk* about a `MATCH` expression — it compiles them.
+    """
+
+    offenders: list[str] = []
+    for path in _python_files("encore/search"):
+        found = _sql_in_string_literals(path)
+        if found:
+            offenders.append(f"{path.relative_to(PROJECT_ROOT)}: {found}")
+
+    assert not offenders, "SQL belongs in encore/repositories/library: " + "; ".join(offenders)
+
+
+SQL_MARKERS = ("SELECT ", "INSERT INTO", "UPDATE ", "DELETE FROM", "FROM ", "CREATE VIRTUAL TABLE")
+
+
+def _sql_in_string_literals(path: Path) -> list[str]:
+    """The string literals in a module that read like SQL, ignoring its documentation.
+
+    A keyword test on the whole file would flag prose, and prose is where this package
+    legitimately explains what it compiles. A test with that many false positives gets a
+    noqa inside a week, which is worse than no test.
+    """
+
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    documented = {
+        id(statement.value)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+        for statement in node.body[:1]
+        if isinstance(statement, ast.Expr)
+        and isinstance(statement.value, ast.Constant)
+        and isinstance(statement.value.value, str)
+    }
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        if id(node) in documented:
+            continue
+        upper = node.value.upper()
+        if any(marker in upper for marker in SQL_MARKERS):
+            found.append(node.value[:48])
+    return found
+
+
 def test_builder_does_not_import_runtime_playback() -> None:
     for path in _python_files(BUILDER_ROOT):
         offenders = {name for name in _imports(path) if name.startswith(PLAYBACK_MODULE)}

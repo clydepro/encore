@@ -49,7 +49,12 @@ destination (90% overall, 95% domain/queue/search, 90% playback/builder).
 ## Doubles (`tests/support/`)
 
 - `sqlite.py` — temp databases, read-only connections, FTS5 probe.
-- `mpv.py` — the mock player: commands, properties, events, `crash()`.
+- `mpv.py` — the mock player: commands, properties, events, `crash()`. It models
+  mpv's *state*, not just its reply codes, which is the difference between a double
+  that can drive a recovery test and one that merely answers. Loading a file clears
+  `eof-reached` and `pause` (a mock that left them set made a queue advance appear to
+  walk the whole list in one tick, and `test_mpv_mock.py` now pins it), and
+  `crash()` closes the socket so a channel sees the death the way `JsonIpc` does.
 - `media.py` — synthetic media. Writes real, playable-headed MP3 and FLAC
   containers with valid frames, tags them through mutagen, and embeds genuine
   JPEG covers built with Pillow. Duration comes from the container, so a test
@@ -118,19 +123,40 @@ that previously produced eight unmergeable pull requests.
 ## Party Simulation (SAPRS 14.11)
 
 Profiles in `tests/party_simulation/profiles/` describe 5 / 25 / 50 / 100+ guest
-parties plus the SAPRS baseline (40 guests, one hour, 15,000 songs). The driver
-arrives with milestone 16; the loader and the profile assertions already run so
-that the vocabulary cannot drift.
+parties plus the SAPRS baseline (40 guests, one hour, 15,000 songs). The loader and
+the profile assertions have run since milestone 2, so the vocabulary cannot drift.
+
+`test_queue_and_playback.py` simulates a bounded party today: six minutes of the
+baseline profile's rates — guests queueing, an administrator skipping, mpv dying
+mid-set — against the real queue, the real playback state machine and both databases.
+The assertions are accounting and ordering, not latency: every request ends up in
+exactly one bucket, the songs heard are a subsequence of the songs asked for, a
+duplicate plays twice, and nothing is left `Playing`. That is the failure mode this
+suite exists for, and it does not need 15,000 files to show up.
+
+What is not here: HTTP, SSE, browsing, and the 15,000-song corpus. `test_party_simulation.py`
+says so in its skip reason, and the full driver lands with milestone 16.
 
 ## Chaos and recovery (SAPRS 14.10, 14.13)
 
-Planned seams, using the doubles that already exist:
+These are no longer planned seams; they are tests that run.
 
-- Kill the mock player (`mpv.crash()`) and assert `PlaybackRecovered` plus
-  queue continuation.
-- Drop SSE subscribers while publishing events.
-- Delete a media file or artwork reference mid-session.
-- Restart the service between queue operations.
+- Kill the mock player (`mpv.crash()`, or `launcher.alive = False` for the monitor) and
+  assert `SongFinished(FAILED)` before `PlaybackRecovered`, then queue continuation.
+  `tests/unit/test_playback_supervisor.py` and the crash cases in
+  `tests/integration/test_queue_playback_and_search.py`.
+- Twenty files the engine cannot open, and the queue still empties (the re-entrancy
+  limit, `test_twenty_files_the_engine_cannot_open_do_not_nest_twenty_handlers`).
+- Restart the service between queue operations: a `PLAYING` row left by a dead process
+  returns to `PENDING` and the next guest's request continues the list
+  (`test_a_restart_leaves_the_queue_waiting_and_silent`).
+- mpv refusing to come back: a bounded retry ladder, and `health()` reporting
+  `DEGRADED` rather than the stale `HEALTHY`.
+- Deleting a media file mid-session is covered as "a song that left the library" — the
+  queue drops it with a warning and plays the rest. A whole `library.db` replacement is
+  `LibraryReloaded`'s business and lands with the server.
+- Dropping SSE subscribers while publishing events arrives with milestone 13; the bus
+  tests already cover a handler that raises and a handler that never finishes.
 
 ## Performance
 
@@ -138,13 +164,35 @@ Planned seams, using the doubles that already exist:
 one place. Benchmarks must report p50/p95/p99 and fail on p95 against those
 numbers — measure before optimizing (AEP 14).
 
-`tests/performance/test_builder_scale.py` is the one that measures something
-today: it generates a 1,500-file corpus, builds a real library, and asserts the
-search budget (p95 < 100 ms) and that a second, incremental build does less work
-than the first. Build *throughput* is printed rather than asserted — a wall-clock
-line that fails on a loaded CI runner teaches people to disable the suite, and the
-reuse ratio is the assertion that actually catches a regression. Both run only
-under `--run-slow`.
+`tests/performance/test_builder_scale.py` builds a real 1,500-song library and holds
+search to the 100 ms budget (measured: ~8 ms p95), and asserts that a second,
+incremental build does less work than the first. Build *throughput* is printed rather
+than asserted — a wall-clock line that fails on a loaded CI runner teaches people to
+disable the suite, and the reuse ratio is the assertion that actually catches a
+regression.
+
+`tests/performance/test_runtime_latency.py` measures the two budgets that milestone 3
+made real, over both *real* databases rather than fakes, because the cost of a queue
+operation is almost entirely SQLite. Measured on the reference machine: enqueue ~11 ms
+p95, removal ~23 ms p95, queue advance ~43 ms p95 against 50 ms (a thin margin, said so
+in the test rather than smoothed over — the spikes are WAL checkpoints), and playback
+start ~18 ms p95.
+
+That last number is Encore's share only. mpv's part of "playback start" — a decoder
+opening a file — is not measurable in a suite that SAPRS 14.4 forbids tying to a real
+mpv process, so the endpoint is the `SongStarted` event rather than sound from the
+speakers. The end-to-end figure is a hardware measurement and belongs in the
+Administrator Guide's bring-up; the benchmark here is the half a software change can
+slow down. All of it runs only under `--run-slow`.
+
+**Those four tests skip under coverage tracing, deliberately.** The queue's work is
+SQLite writes, and instrumented, the same 200 advances that cost 43 ms p95 cost 141 ms.
+A budget test that fails because the runner is measuring line coverage argues for
+deleting budget tests, so the file checks for a tracer and skips with a reason.
+`scripts/check.sh --slow` and the scheduled slow job pass `--no-cov` for that reason, and
+get their coverage number from the ordinary gate run instead — the run where a missing
+test is what is being looked for. `release.yml` is the one place that asks for both at
+once; there the timing tests skip, which is why the scheduled runs matter.
 
 ## Guardrails that are tests, not opinions
 
@@ -160,6 +208,14 @@ reviewer would approve.
   importing the core services pulls in no web framework at all — the check that
   keeps "domain services never import FastAPI" true by construction rather than
   by care.
+
+Milestone 3 extended it with four rules specific to the packages it added:
+playback may import neither a repository nor a storage driver (so a song's path
+arrives as an argument, SAPRS 7.9); playback may import no other service (the
+queue→player dependency is one-way, ADR-011); `encore/services/` may not import
+`encore.playback` (the coupling is a protocol, not a package); and `encore/search/`
+may contain no SQL in any string literal, checked by parsing literals rather than by
+grepping text, so that a docstring about `MATCH` does not trip the rule.
 
 ## Test-writing conventions
 

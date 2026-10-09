@@ -14,11 +14,11 @@ or too early.
 | 4 | Configuration | **Done — `encore/config/` + `services/logging_service.py`** |
 | 5 | Repositories | **Done — `encore/repositories/`** |
 | 6 | Library Builder | **Done — `apps/builder/`, `encore-builder`** |
-| 7 | Search | Not started ← **next** |
-| 8 | Playback | Not started |
-| 9 | Queue | Not started |
-| 10 | Runtime database | Not started |
-| 11 | FastAPI | Not started |
+| 7 | Search | **Done — `encore/search/`** |
+| 8 | Playback | **Done — `encore/playback/`** |
+| 9 | Queue | **Done — `encore/services/queue_service.py`** |
+| 10 | Runtime database | **Done — migrations in step 5** |
+| 11 | FastAPI | Not started ← **next** |
 | 12 | HTMX | Not started |
 | 13 | SSE | Not started |
 | 14 | Administrative interface | Not started |
@@ -30,6 +30,9 @@ The steps are ordered, not independent: 2–4 are the ground that 5 and 6 stand
 on. Step 5 is where `library.db` and `runtime.db` schemas first exist, which is
 why nothing before them touched SQLite — and step 6 is where `library.db`'s DDL
 actually lives, which is why 5 and 6 were done together rather than in sequence.
+Steps 7–9 were done together for the mirror-image reason: a queue that cannot
+start a song is untestable, a player that nothing commands is unexercised, and
+the search service is what makes a guest's request exist at all.
 
 PBK's ten-milestone view groups the same work; both are listed in the README
 roadmap. Steps 2, 3 and 4 are PBK milestone 2 ("Core Framework"), and are
@@ -89,33 +92,67 @@ Two things this phase deliberately did **not** do: it did not wire the stores in
 and it did not add any search, queue or playback service on top of them. So both
 repositories are finished, tested and unused by a running application.
 
+## What steps 7–9 delivered
+
+- `encore/search/` — `parse()` turns a guest's typing into a safe FTS5 `MATCH`
+  expression, `SearchService` answers songs/albums/artists over the repository's
+  `SearchRead`, and `SearchUnavailable` distinguishes "no matches" from "search cannot
+  happen" (SAPRS 11.2). No SQL in the package; a guardrail test parses the string
+  literals to keep it that way.
+- `encore/playback/` — `ipc.py` (JSON IPC: framing, `request_id` replies, events beside
+  them, `MpvProcess` with a socket-length guard and `quit`-before-`kill`), `player.py`
+  (`MpvPlayer`, state read from mpv properties, not assumed), `service.py` (SAPRS 7.3's
+  machine, one `SongFinished` per track, `tick()` watching for eof), `supervisor.py`
+  (SAPRS 7.2/7.6: watches the process, restarts with a bounded ladder, publishes
+  `PlaybackRecovered`, binds to the service it reports deaths to), `transition.py`
+  (gapless and crossfade *policy*, documented as what v1 actually does).
+- `encore/services/queue_service.py` — strict FIFO, duplicates allowed, the ceiling
+  enforced inside the transaction, settlement by `FinishedReason` (`COMPLETED`→`FINISHED`,
+  `SKIPPED`→`SKIPPED`, `FAILED`→`REMOVED`, `STOPPED`→`PENDING` at the head), history one
+  row per ended track, wait times, and advancement as a bounded loop rather than a
+  recursion. It subscribes to `SongFinished` and `PlaybackRecovered` and commands the
+  player through a local `Player` protocol: ADR-011.
+- `tests/integration/test_queue_playback_and_search.py` — the three together over both
+  real databases, including a crash mid-set, a file that cannot be opened, a song that
+  left the library, and a process restart.
+- `tests/performance/test_runtime_latency.py` and a bounded party in
+  `tests/party_simulation/test_queue_and_playback.py`.
+
+Two things this phase deliberately did **not** do: it did not add a composition root for
+them (`container.py` still builds config and logging only — the wiring belongs to
+`apps/server/`, milestone 11), and it did not add a ninth event. `SongFinished` grew a
+`completion` field instead, which ADR-011 explains.
+
 ## What exists today
 
 - Fixed directory layout; `encore/domain`, `encore/events`, `encore/config`,
-  `encore/services` and `encore/repositories` implemented; `apps/builder/` is a
-  working application. `encore/api`, `encore/controllers`, `encore/playback`,
-  `encore/search`, `encore/templates` and `encore/static` are still documented
+  `encore/services`, `encore/repositories`, `encore/search` and `encore/playback`
+  implemented; `apps/builder/` is a working application. `encore/api`,
+  `encore/controllers`, `encore/templates` and `encore/static` are still documented
   placeholders, as is `apps/server/`.
 - `pyproject.toml` + `uv.lock` + `.python-version`; editable install.
 - Ruff, MyPy (strict), pytest with category markers, coverage, pre-commit.
 - Five GitHub Actions workflows; issue forms; PR template; labels; CODEOWNERS;
   Dependabot; branch protection definition.
-- Documentation scaffolding and ADR-001…ADR-010. ADR-009 supersedes ADR-003's
+- Documentation scaffolding and ADR-001…ADR-011. ADR-011 is the queue→playback seam:
+  one direct command, in one direction, everything backward through the bus.
+  ADR-009 supersedes ADR-003's
   access-layer clause (raw `sqlite3` read-only for `library.db`, SQLAlchemy 2.x
   transactions for `runtime.db`); ADR-010 fixes the Builder pipeline, gives the
   Builder sole ownership of the `library.db` schema and sets `paths.music_dir` to
   `/opt/music`. Both are Accepted, and both are implemented.
 - Test infrastructure: fixtures, temp SQLite helpers, mock mpv, Party Simulation
-  profiles + loader, a performance target registry whose search budget is measured
-  rather than promised, and a synthetic media generator that writes real silent
-  MP3/FLAC containers with valid tags and embedded covers. 706 tests (715 with the
-  slow suites), 91.8% coverage.
+  profiles + loader, a performance target registry with three of its five budgets
+  measured rather than promised, and a synthetic media generator that writes real silent
+  MP3/FLAC containers with valid tags and embedded covers. 912 tests (931 with the
+  slow suites).
 - Architecture guardrail tests and `tools/check_links.py`.
 
 ## Explicitly not implemented
 
 - Any HTTP endpoint, template, static asset or SSE stream.
-- Any mpv integration, queue rule, search implementation or running service.
+- Any *running* service: `encore/playback/` is exercised by tests against `MockMpv` and
+  has never been started against a real mpv on this machine (it is not installed here).
 - **Any application that opens either database.** The Builder writes `library.db`;
   nothing in a running Server reads it yet. Composition is decided — `apps/server/`,
   not `build_core_services` — and recorded in `apps/server/README.md`.
@@ -126,13 +163,18 @@ repositories are finished, tested and unused by a running application.
 
 ## Where to put the first feature
 
-Step 7 (search) starts in `encore/search/` as a thin service over
-`LibraryStore.search`, which already exists, is already measured (p95 ~8 ms on
-1,500 songs) and is already correct. The SQL belongs in
-`encore/repositories/library/queries.py` and nowhere else — a second query layer
-would be the drift that ADR-009's contract test exists to prevent. Step 9 (queue)
-can use `runtime/queue.py` as it stands; `QueueService` is the rule on top of it,
-not a new repository.
+Step 11 (FastAPI) starts in `apps/server/`, which is the composition root decided in
+phase 2 and still unwritten: it opens both stores, builds `SearchService`,
+`PlaybackService`, `PlaybackSupervisor` and `QueueService`, binds the supervisor to the
+service (`supervisor.bind(playback)`), starts the queue (which restores a `PLAYING` row
+from a dead process), and stops them in that order. The pieces are tested together
+already — `tests/integration/test_queue_playback_and_search.py` wires exactly this graph
+by hand, so the server's job is to copy that file, not to invent it.
+
+`EventBus` is synchronous and `QueueService.start()` is not async, so nothing here needs
+an event loop except SSE (milestone 13), which publishes *from* handlers. Keep playback
+off the request path: `PlaybackService.tick()` belongs to a background task, and a
+request that plays a song should publish and return.
 
 ## Known open questions to resolve before v1
 

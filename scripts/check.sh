@@ -28,8 +28,16 @@ echo "==> Documentation link check"
 uv run python tools/check_links.py
 
 if [[ "$SLOW" == "1" ]]; then
-  echo "==> Everything, including slow suites"
-  exec uv run pytest --run-slow --cov=encore --cov-report=term-missing
+  # The budgets in tests/performance are wall-clock, and coverage tracing multiplies
+  # SQLite-heavy work by several times. So the slow suites run untraced, and coverage comes
+  # from the same command the standard gate uses. One command that did both would either
+  # report a false failure or silently skip the numbers it exists to check.
+  echo "==> Coverage (unit + integration + regression)"
+  uv run pytest tests/unit tests/integration tests/regression \
+    --cov=encore --cov-report=term-missing
+
+  echo "==> Everything, including slow suites (untraced, so the budgets mean something)"
+  exec uv run pytest --run-slow --no-cov
 fi
 
 echo "==> Tests (unit + integration + regression) with coverage"

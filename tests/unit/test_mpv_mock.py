@@ -100,6 +100,28 @@ def test_commands_are_recorded_in_order() -> None:
     assert mpv.command_names() == ["loadfile", "set_property", "stop"]
 
 
+def test_loading_a_file_clears_the_previous_tracks_state() -> None:
+    """The double's most important obligation: `eof-reached` belongs to a file, not to a process.
+
+    mpv reports end-of-file for the track it loaded, and starting a new one resets the flag.
+    A mock that left it set made a queue advance look like it had walked the whole list in one
+    tick — which is a behaviour the real appliance cannot have, and the reason the recovery
+    and progress tests would have passed against a lie.
+    """
+
+    mpv = MockMpv()
+    mpv.send_command("loadfile", "mock://a")
+    mpv.properties["eof-reached"] = True
+    mpv.properties["pause"] = True
+
+    mpv.send_command("loadfile", "mock://b")
+
+    assert mpv.properties["eof-reached"] is False
+    assert mpv.properties["pause"] is False
+    assert mpv.properties["filename"] == "mock://b"
+    assert mpv.properties["time-pos"] == 0.0
+
+
 def test_event_payload_is_valid_json() -> None:
     mpv = MockMpv()
     line = encode_command("set_property", "volume", 42)

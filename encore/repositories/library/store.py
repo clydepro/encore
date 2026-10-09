@@ -15,12 +15,12 @@ property of the file handle rather than of everyone remembering not to call `com
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from encore.domain import Album, Artist, Artwork, Metadata, Song, SongId
+from encore.domain import Album, AlbumId, Artist, ArtistId, Artwork, Metadata, Song, SongId
 from encore.repositories.contract import (
     LIBRARY_SCHEMA_VERSION,
     LIBRARY_TABLES,
@@ -144,6 +144,22 @@ class LibraryStore:
 
     def album(self, album_id: object) -> Album | None:
         return self.albums.by_id(album_id)  # type: ignore[arg-type]
+
+    def artists_by_ids(self, ids: Sequence[ArtistId]) -> list[Artist]:
+        """Batch artist read, named the way `songs_by_ids` is.
+
+        Added for `encore.search`, which labels song hits with their artist in one
+        round trip. The nested `store.artists.by_ids` says the same thing, but a
+        service that reaches through an attribute to a repository is a service that
+        depends on the store's shape rather than on a capability.
+        """
+
+        return self.artists.by_ids(ids)
+
+    def albums_by_ids(self, ids: Sequence[AlbumId]) -> list[Album]:
+        """Batch album read. See `artists_by_ids` for why it is here."""
+
+        return self.albums.by_ids(ids)
 
     def artwork_for_song(self, song_id: SongId) -> Artwork | None:
         return self.artwork.for_song(song_id)
