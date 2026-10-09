@@ -106,9 +106,10 @@ repositories are finished, tested and unused by a running application.
   Builder sole ownership of the `library.db` schema and sets `paths.music_dir` to
   `/opt/music`. Both are Accepted, and both are implemented.
 - Test infrastructure: fixtures, temp SQLite helpers, mock mpv, Party Simulation
-  profiles + loader, performance target registry, and a synthetic media generator
-  that writes real silent MP3/FLAC containers with valid tags and embedded covers.
-  702 tests (708 with the slow suites), 91.8% coverage.
+  profiles + loader, a performance target registry whose search budget is measured
+  rather than promised, and a synthetic media generator that writes real silent
+  MP3/FLAC containers with valid tags and embedded covers. 703 tests (712 with the
+  slow suites), 91.8% coverage.
 - Architecture guardrail tests and `tools/check_links.py`.
 
 ## Explicitly not implemented

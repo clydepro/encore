@@ -218,6 +218,28 @@ def test_a_text_file_is_not_reported_as_unplayable_music(tmp_path: Path) -> None
     assert found.scanned == 1
 
 
+def test_a_daw_package_internals_are_not_unplayable_music(tmp_path: Path) -> None:
+    """Regression: five `projectData`/`PkgInfo` files reached the skip aggregate.
+
+    They have no extension at all, so the suffix rule could not see them and they landed
+    under `<no extension>` — a line that reads like the library contains unidentified
+    audio and actually reads like someone opened GarageBand once in 2011. Same defect
+    class as the `.jpg` case above, different mechanism: this one is about names, not
+    suffixes, and the comparison has to be case-insensitive to catch `projectData`.
+    """
+
+    bundle = tmp_path / "GarageBand" / "My Song.band" / "Contents"
+    bundle.mkdir(parents=True)
+    (bundle / "PkgInfo").write_bytes(b"BNDLGBnd")
+    (tmp_path / "GarageBand" / "My Song.band" / "projectData").write_bytes(b"data")
+    (tmp_path / "Artist").mkdir()
+    (tmp_path / "Artist" / "locked.m4p").write_bytes(b"drm")
+
+    found = discover(tmp_path)
+    assert dict(found.unsupported) == {".m4p": 1}
+    assert found.scanned == 1
+
+
 # -- publication: the failure that escaped as a traceback -----------------
 
 

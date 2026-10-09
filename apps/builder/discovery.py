@@ -41,7 +41,20 @@ __all__ = ["IGNORED_NAMES", "NON_AUDIO_SUFFIXES", "Discovery", "discover"]
 #: Names that are never music on any platform Encore installs on. `._x.mp3` is
 #: macOS's resource-fork shadow of `x.mp3`; indexing it would report the same track
 #: twice and fail to play either copy.
-IGNORED_NAMES: Final[frozenset[str]] = frozenset({".DS_Store", "desktop.ini", "Thumbs.db"})
+IGNORED_NAMES: Final[frozenset[str]] = frozenset(
+    {
+        ".DS_Store",
+        "desktop.ini",
+        "Thumbs.db",
+        # GarageBand saves a song as a `x.band` *directory*; its internals are an
+        # application package rather than a recording. `projectData` and `PkgInfo`
+        # carry no extension at all, so suffix matching cannot see them, and counting
+        # five of those as "music Encore cannot play" would be the report describing
+        # the filesystem instead of the decision.
+        "projectdata",
+        "pkginfo",
+    }
+)
 
 #: Suffixes that are not audio in any container. The distinction from "unsupported"
 #: is what keeps ADR-010's aggregate honest: `188 .m4p` is a story about a library
@@ -76,6 +89,7 @@ NON_AUDIO_SUFFIXES: Final[frozenset[str]] = frozenset(
         ".pls",
         ".wpl",
         ".asx",
+        ".plist",
         ".url",
         ".lnk",
         ".lrc",
@@ -255,7 +269,7 @@ def _ignored(path: Path) -> bool:
         # against. The same reasoning that removes `.DS_Store` removes `folder.jpg`.
         return True
     name = path.name
-    if name in IGNORED_NAMES or name.startswith(("._", ".")):
+    if name.lower() in IGNORED_NAMES or name.startswith(("._", ".")):
         return True
     return any(part.startswith(".") for part in path.parts[:-1])
 
