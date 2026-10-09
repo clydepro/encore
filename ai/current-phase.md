@@ -38,9 +38,12 @@ rules version)`.
 ## Verification state
 
 - `scripts/check.sh` — all gates pass: ruff (lint + format), yamllint,
-  markdownlint, secret scan, mypy strict, **702 tests**, 91.8% coverage.
-- `scripts/check.sh --slow` — 708 pass, 6 skips (SSE and playback benchmarks,
-  which name the milestones that fill them).
+  markdownlint, secret scan, mypy strict, **703 tests**, 91.8% coverage. That is
+  the unit + integration + regression total, which is what CI runs.
+- `scripts/check.sh --slow` adds the performance and Party Simulation suites:
+  712 pass, 5 skips. Every skip is a benchmark whose subsystem does not exist yet
+  and names the milestone that writes it — four of the five. The search budget is
+  measured now, so it is no longer in that list.
 - `uv run python tools/check_links.py` — clean.
 - **`tests/integration/test_library_contract.py` is the load-bearing test of this
   phase.** It executes every statement in `library/queries.py` against a
@@ -54,11 +57,14 @@ rules version)`.
   1,500 songs built in ~3.7 s; song search p95 ~8 ms against a 100 ms budget; an
   incremental rebuild of the same corpus in ~1.7 s with every song reused and no
   artwork rewritten.
-- **Pressed against the real corpus**: discovery over `/opt/music` scans 3,308
-  entries in ~0.3 s, classifies 3,049 as supported and 257 as unsupported
-  (188 `.m4p`, 41 `.wma`, 10 `.mid`, 7 `.m4v`, …), and reports nothing unreadable.
-  The 231-file figure in ADR-010 was `.m4p`/`.wma`/`.aif` only; the larger number
-  is what the aggregate report now shows once every unplayable extension counts.
+- **Pressed against the real corpus**: discovery over `/opt/music` scans 3,299
+  entries in ~0.3 s, classifies 3,049 as supported and 250 as unsupported
+  (188 `.m4p`, 41 `.wma`, 10 `.mid`, 7 `.m4v`, 2 `.aif`, 2 `.m4r`), and reports
+  nothing unreadable. ADR-010's 231 counted only `.m4p`/`.wma`/`.aif`; the larger
+  number is what the aggregate shows once every unplayable extension counts. What
+  it deliberately excludes is paperwork — images, lyric files, playlists, and the
+  extensionless `projectData`/`PkgInfo` inside GarageBand bundles — because a skip
+  line that mixes those in describes the filesystem rather than the decision.
 - The mutation check that matters this phase: repoint one column name in
   `contract.py` and the library contract test fails; delete a table from
   `schema.py` and it fails; make `publish()` rename before it validates and the
@@ -113,7 +119,7 @@ Two decisions the next session should make before writing code:
   If this branch's PR repeats that phrasing GitHub will close it again; link with
   `Closes #19` in the body only if that is what is meant, and record the outcome in
   `ai/HANDOFF.md` either way.
-- **`/opt/music` cleanup is still the operator's**: 257 unplayable files (DRM `.m4p`
+- **`/opt/music` cleanup is still the operator's**: 250 unplayable files (DRM `.m4p`
   mostly) and 15 unidentifiable ones. The Builder handles all of them correctly now
   and says so in the report; moving them is a choice about what the report should
   look like, not a bug.

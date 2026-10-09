@@ -8,7 +8,8 @@ not an authority, and it will be wrong faster than the SAPRS is.
 
 State as of this writing: **Phase 1 is merged; Phase 2 is on
 `feat/19-persistence-and-library-builder`, unmerged.** Both databases exist, the
-Builder builds them, 702 tests pass and `scripts/check.sh` is green. Nothing opens
+Builder builds them, 703 tests pass and `scripts/check.sh` is green (712 with the
+slow suites). Nothing opens
 either store from a running application yet — that is the next phase's job, and it
 is the reason `encore/repositories/` is finished but has no production caller.
 
