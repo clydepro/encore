@@ -66,13 +66,22 @@ in registration order and coroutines are scheduled, so a slow subscriber cannot
 delay playback (SAPRS 11.4). `publish_async()` and `drain()` are for shutdown and
 for tests, where ordering must be observed.
 
-## Storage (SAPRS 5, ADR-003, ADR-006)
+## Storage (SAPRS 5, ADR-006, ADR-009, ADR-010)
 
 - `library.db`: normalized `artists`, `albums`, `songs`, `artwork`,
   `music_files` + denormalized FTS5 search structures; published atomically;
   opened read-only by the runtime.
 - `runtime.db`: queue, playback history, statistics, administrative state.
 - Artwork stored as files with stable database references.
+- Access is split by mutability (ADR-009): raw `sqlite3` with a read-only URI for
+  `library.db`, SQLAlchemy 2.x transactions for `runtime.db`. Neither an ORM nor a
+  `Session` crosses a repository boundary; repositories return domain types.
+- Opening a database file is not the same as having one: both access layers *create*
+  a missing file and hand back a working empty library. Startup must assert the
+  library's shape — file exists, expected tables present, song count logged — not
+  merely that a connection succeeded (ADR-009).
+- `library.db` schema is written only by the Builder and versioned inside the file;
+  `runtime.db` is migrated by numbered, forward-only modules.
 
 ## Playback (SAPRS 7, ADR-005)
 
@@ -92,18 +101,25 @@ otherwise append. No priority, no reordering.
 Jinja2 + Tailwind + HTMX fragments in a persistent shell; SSE for live state.
 No SPA framework, no client-side routing, no polling.
 
-## Configuration (SAPRS 12, ADR-008)
+## Configuration (SAPRS 12, ADR-008, ADR-010)
 
 Installation-time YAML, validated at startup, never rewritten by the app, never
 used as a database. Admin UI shows it read-only. Secrets from the environment or
 system store.
 
+`paths.music_dir` (default `/opt/music`, Builder-only) is specified by SAPRS 12.2's
+"Library location" and **not yet implemented**: `PathsConfig` has no such field.
+It must be added to the model, `examples/config.yaml` and the Administrator guide in
+one change, because `extra="forbid"` plus the test that executes the example makes
+any subset of the three fail CI.
+
 ## Deployment (SAPRS 13)
 
 Raspberry Pi 4 / Raspberry Pi OS 64-bit primary; Debian 12 and Ubuntu 24.04
 secondary. systemd units, `/opt/encore`, `/etc/encore`, `/var/lib/encore`,
-`/var/cache/encore`. Manual installation is authoritative; `encore-install`
-automates the same steps.
+`/var/cache/encore`. User music is read from `/opt/music`; the `encore` service
+account needs read access to it (SAPRS 13.5) while owning nothing there. Manual
+installation is authoritative; `encore-install` automates the same steps.
 
 ## Non-goals for v1 (SAPRS 1.7)
 

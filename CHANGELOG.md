@@ -70,6 +70,20 @@ The release process moves the section into a dated, bracketed version heading.
 - Initial ADRs 001–008, covering builder/server separation, HTMX over a SPA,
   SQLite storage, the internal Event Bus, mpv playback, the immutable library
   database, the anonymous guest model and the appliance-first philosophy.
+- ADR-009 (Split the Storage Access Layer by Mutability): `library.db` is read
+  through raw `sqlite3` on a read-only URI with `PRAGMA query_only`, so the
+  runtime's inability to write the catalogue is enforced by SQLite rather than by
+  review; `runtime.db` keeps SQLAlchemy 2.x transactions, where a torn write is the
+  failure that loses a party. Also settles `runtime.db` versioning: numbered,
+  forward-only migrations applied at startup, while `library.db` is stamped by the
+  Builder and never migrated. Supersedes ADR-003's "SQLAlchemy repositories for
+  both" clause.
+- ADR-010 (Library Builder Pipeline Shape and Library Ownership): one module per
+  SAPRS 6.2 stage, the Builder alone holds the `library.db` DDL, metadata resolved by
+  a fixed four-level precedence with the filesystem path demoted to a hint, files
+  that cannot be catalogued reported rather than fatal, and a new `paths.music_dir`
+  defaulting to `/opt/music`. Its Context records what was measured in the real
+  corpus rather than assumed.
 - Test infrastructure: shared fixtures, temporary SQLite helpers, a mock mpv
   JSON-IPC double, Party Simulation load profiles with a loader, performance
   target registry, and synthetic media generator hooks (placeholders).
@@ -83,6 +97,16 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Changed
 
+- ADR-003 is marked superseded by ADR-009. SQLite remains the storage engine for
+  both databases — only the access layer changed — and the record is kept and
+  annotated rather than edited, per `docs/adr/README.md`.
+- ADR-009's rationale was amended before implementation, not its decision. Three
+  justifications failed measurement: read-only enforcement belongs to the connection
+  URI rather than the driver choice, the performance case for raw `sqlite3` is void
+  at 15,000 songs (every access path is 10×+ inside the SAPRS 1.8 budgets), and
+  SQLAlchemy Core had never been considered as the alternative. The record now rests
+  the decision on schema ownership and adds a startup shape check, because both
+  access layers create a missing database file and hand back an empty library.
 - Architecture guardrail tests now run against real packages rather than
   docstrings: `tests/unit/test_architecture_guardrails.py` imports the core and
   inspects it, so a violation added later fails in CI instead of in review.

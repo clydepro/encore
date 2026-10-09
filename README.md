@@ -134,9 +134,10 @@ fails the build when they are broken.
 **Stack** — Python 3.12+, FastAPI, Jinja2, HTMX, Tailwind, SSE, SQLite + FTS5,
 SQLAlchemy 2.x, Pydantic, mpv JSON IPC, systemd. Chosen and justified in
 [ADR-002](docs/adr/ADR-002-htmx-instead-of-spa.md),
-[ADR-003](docs/adr/ADR-003-sqlite-as-the-storage-engine.md),
-[ADR-004](docs/adr/ADR-004-internal-event-bus.md) and
-[ADR-005](docs/adr/ADR-005-mpv-playback-engine.md).
+[ADR-004](docs/adr/ADR-004-internal-event-bus.md),
+[ADR-005](docs/adr/ADR-005-mpv-playback-engine.md) and, for storage, ADR-003 as
+superseded by
+[ADR-009](docs/adr/ADR-009-split-the-storage-access-layer-by-mutability.md).
 
 ## Installation
 

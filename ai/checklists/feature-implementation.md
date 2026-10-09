@@ -21,8 +21,13 @@ document behind it; a blank answer is an unfinished task.
       typed, timestamped event (AIG 8, ADR-004).
 - [ ] New configuration is installation-time YAML, never application-managed
       state (SAPRS 12, ADR-008).
-- [ ] Mutable state goes to `runtime.db`; `library.db` stays read-only
-      (ADR-003, ADR-006).
+- [ ] Mutable state goes to `runtime.db` (SQLAlchemy transactions); `library.db`
+      stays read-only and is reached through raw `sqlite3` (ADR-006, ADR-009).
+- [ ] A store is verified by shape, not by handle: opening a missing SQLite file
+      succeeds and yields an empty library, so existence, expected tables and a
+      logged row count are required (ADR-009).
+- [ ] No ORM object, `Session` or raw row crosses a repository boundary; repos
+      return `encore.domain` types (ADR-009).
 - [ ] No new dependency, or AEP 10's questions answered in the PR.
 - [ ] Failure mode considered: what does the appliance do when this fails
       (SAPRS 11.9)?

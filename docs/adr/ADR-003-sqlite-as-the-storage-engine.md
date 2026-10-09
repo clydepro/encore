@@ -2,11 +2,15 @@
 
 ## Status
 
-Accepted
+Superseded by ADR-009. The choice of SQLite for both stores still stands; only its
+access-layer clause — "accessed through SQLAlchemy 2.x repositories" — was
+replaced, because Phase 1 showed that mapping an ORM over a store the runtime must
+never write to is a liability rather than a convenience. ADR-009 restates the parts
+of this decision that carry forward.
 
 ## Date
 
-2026-10-07
+2026-10-07 (superseded 2026-10-09)
 
 ## Context
 

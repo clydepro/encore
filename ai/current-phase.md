@@ -1,6 +1,8 @@
 # Current Phase
 
-**Phase 1 — Core Foundation. Complete, pending commit.**
+**Phase 1 — Core Foundation: complete and merged** ([#20](https://github.com/clydepro/encore/pull/20),
+commit `eda2d22` on `main`). **Phase 2 — persistence and the Library Builder (AIG
+steps 5 and 6): not started; the decisions are settled and the code is not.**
 
 Read this page first in a new session, then [`context/milestones.md`](context/milestones.md)
 for what exists and what is scaffolding. Neither is authoritative: precedence is
@@ -42,6 +44,11 @@ the log formatter needed them and neither should own them.
   a domain→services import, a module-level `EventBus()`, an unfrozen event and a
   `write_text` in `encore/config/` each make CI fail. That is the only evidence
   that a guardrail is real.
+- CI on the merged commit: 14 required checks green on `main`. One CodeQL alert
+  (`py/clear-text-logging-sensitive-data`, tests/unit/test_logging_service.py:269)
+  was dismissed as a false positive — that line is the redaction test, which logs
+  a password unredacted on purpose. Under this repo's code-scanning merge
+  protection an undismissed alert blocks the merge even with all 14 checks green.
 
 ## Explicitly not in this phase
 
@@ -53,27 +60,54 @@ written, and `apps/server/` and `apps/builder/` are still placeholders.
 
 ## Next
 
-**[Issue #19 — Persistence layer: `library.db` and `runtime.db` schemas and
-repositories (AIG step 5)](https://github.com/clydepro/encore/issues/19).** It is
-the dependency for both the Library Builder (step 6) and everything that reads a
-song, so it goes first.
+**AIG steps 5 and 6 together**: the two database schemas and their repositories
+([issue #19](https://github.com/clydepro/encore/issues/19)), and the Library
+Builder that fills one of them. They are inseparable in practice — the schema is
+the Builder's output contract (ADR-010) — and both are now unblocked because the
+two open design questions have been decided in writing:
 
-Two things in that issue need a decision before code, not during it: whether
-SQLAlchemy earns its place in `runtime.db`, and how `runtime.db` is versioned
-(SAPRS 5.7 permits rebuild-or-migrate and does not choose).
+- **ADR-009** settles the access layer, superseding ADR-003's "SQLAlchemy
+  repositories for both" clause: raw `sqlite3` read-only for `library.db`,
+  SQLAlchemy 2.x transactions for `runtime.db`, numbered forward-only migrations
+  for the latter, version stamp inside the former, and a startup shape check on both
+  stores. Its rationale was amended on the day of acceptance after measurement — the
+  read-only guarantee comes from the connection URI, not the driver choice, and the
+  performance argument for raw `sqlite3` is void at 15,000 songs. The decision
+  stands on schema ownership. SQLAlchemy Core is recorded there as the rejected
+  strongest alternative.
+- **ADR-010** settles the Builder: stage-per-module pipeline, the Builder owns the
+  DDL alone, a four-level metadata precedence rule with the path demoted to a hint,
+  uncatatalogueable files reported rather than fatal, and `paths.music_dir` default
+  `/opt/music`.
+
+Both are Accepted and dated 2026-10-09. ADR-010's Context carries the measurements
+the rules were written against, so read it before designing anything that touches
+the corpus.
 
 ## Loose ends
 
-- **Uncommitted work.** Everything listed above is in the working tree, not on a
-  branch. `CONTRIBUTING.md` §7 wants issue → feature branch → PR, and branch
-  protection makes `main` non-pushable with linear history required. The bootstrap
-  commit landed on `main` directly (it predates the protection it defines); this
-  phase is best shipped as a branch and a pull request, with #19 named as the
-  follow-on rather than the parent, since no issue was opened for steps 2–4.
+- **Music corpus cleanup, before any Builder run.** Decided not to prune in order to
+  simplify the Builder — SAPRS 6.8 forbids the Builder deleting user music and 6.4
+  makes tags primary, so a Builder that only works on clean data is not the
+  appliance. Two actions remain, and both are the operator's, not the code's:
+  231 real-but-unplayable files (188 `.m4p` DRM, 41 `.wma`, 2 `.aif`) should move out
+  of `/opt/music` or be transcoded so the build report's skip list stays readable;
+  and 15 playable files have no usable artist (7 no artist and no title) that only a
+  human can identify. The non-music strays (`.DS_Store`, GarageBand internals,
+  `.mid`, `.m4v`) need nothing — `AudioFormat.for_path` ignores them.
+- **`paths.music_dir` does not exist yet**, although SAPRS 12.2 requires a library
+  location. It is a one-field change that must land with `examples/config.yaml` and
+  the Administrator guide simultaneously (ADR-010 explains why two of three fails
+  CI).
 - **A regression test for the `slots` + `super()` trap** belongs in
   `tests/regression/` per AEP 13, but that suite's convention (and CI check) is
   one file per issue number and no issue exists for a defect found while writing
   code. The guard lives in `tests/unit/test_events.py`, named as a regression
   guard there; opening a `chore` issue and moving it is the tidy follow-up.
-- **`PHASE-1` was never a label or a milestone**, so nothing in GitHub marks this
-  work as one unit. The commit and the CHANGELOG entry are the record.
+- **No issue was opened for AIG steps 2–4**, which CONTRIBUTING §2 asks for. The
+  commit and the CHANGELOG entry are the record instead.
+- **Human review is still a norm, not a gate.** GitHub will not let a sole
+  maintainer approve their own pull request, so the reviewer checklist in the
+  template is left unticked on purpose. Revisit alongside `required_approving_
+  review_count` (currently 0) when a second developer arrives, with the two ADR
+  questions above already closed.
