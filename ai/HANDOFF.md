@@ -1,195 +1,151 @@
-# Handoff — before AIG steps 5 and 6 (persistence and the Library Builder)
+# Handoff — after AIG steps 5 and 6 (persistence and the Library Builder)
 
 For whoever picks this up next. Read with
 [`current-phase.md`](current-phase.md) (what was done) and
 [`context/milestones.md`](context/milestones.md) (what exists). Precedence is
-unchanged: task request → SAPRS → AIG → ADRs → AEP (AEP 2). This page is a
-pointer, not an authority, and it will be wrong faster than the SAPRS is.
+unchanged: task request → SAPRS → AIG → ADRs → AEP (AEP 2). This page is a pointer,
+not an authority, and it will be wrong faster than the SAPRS is.
 
-State as of this writing: **Phase 1 is merged to `main`** (`eda2d22`, via
-[#20](https://github.com/clydepro/encore/pull/20)), CI green, 342 tests, 99%
-coverage of `encore/`. **No database, schema, repository or Builder code exists
-yet.** The design questions that blocked steps 5 and 6 are decided in
-[ADR-009](../docs/adr/ADR-009-split-the-storage-access-layer-by-mutability.md) and
-[ADR-010](../docs/adr/ADR-010-library-builder-pipeline-shape-and-library-ownership.md);
-neither has been implemented, and ADR-010's Context section carries measurements
-that only make sense to read before you design, not after.
+State as of this writing: **Phase 1 is merged; Phase 2 is on
+`feat/19-persistence-and-library-builder`, unmerged.** Both databases exist, the
+Builder builds them, 702 tests pass and `scripts/check.sh` is green. Nothing opens
+either store from a running application yet — that is the next phase's job, and it
+is the reason `encore/repositories/` is finished but has no production caller.
+
+**[Issue #19](https://github.com/clydepro/encore/issues/19) is open, and this is the
+branch that closes it.** It was closed in error once already (PR #20 put a closing
+keyword in a "Related issue" line and GitHub obeyed it). Do not repeat that: decide
+whether this PR closes #19, say so in one unambiguous sentence, and if it does not,
+comment on #19 with what remains.
 
 ## Start here
 
-Work on **[issue #19](https://github.com/clydepro/encore/issues/19)** — the two
-schemas and `encore/repositories/` — with the **Library Builder (step 6) in the
-same arc**, because the `library.db` schema is the Builder's output contract and
-ADR-010 gives the Builder sole ownership of it. #19's text predates both ADRs;
-where they disagree, the ADRs are newer and ADR-009 supersedes ADR-003, which #19
-cites.
+The four packages this phase added, in the order that makes sense to read them:
 
-Sequence that will not cause rework:
+1. **`encore/repositories/contract.py`** — five minutes, and it is the hinge of the
+   whole phase. Every table and column name, once, for both databases. Read it
+   before `library/queries.py` and the SQL stops being mysterious.
+2. **`encore/repositories/library/`** — the read side. `connection.py` (the only
+   place a library connection is made: `mode=ro`, `query_only`, the shape check),
+   then `queries.py` (all the SQL, nothing else), then `mappers.py`, then the
+   repositories. `store.py` is what a caller uses.
+3. **`encore/repositories/runtime/`** — the write side, and deliberately the
+   opposite shape: `models.py` (ORM), `migrations.py` (numbered, forward-only,
+   applied on open), `session.py` (WAL, transactional), then the repositories.
+4. **`apps/builder/pipeline.py`** — the only file worth reading start-to-finish in
+   the Builder. Every stage is one module behind it; the pipeline's job is ordering,
+   accounting and the event.
 
-1. `library.db` DDL in the Builder, plus the artwork cache layout (SAPRS 5.3–5.6).
-2. `runtime.db` schema and its numbered migrations (ADR-009). ADR-003's
-   SQLAlchemy-for-both clause no longer applies.
-3. `encore/repositories/` — read side on raw `sqlite3` with `mode=ro`, write side on
-   SQLAlchemy. Neither a `Session` nor a raw row crosses the boundary.
-4. A startup shape check on both stores: file exists, expected tables present, song
-   count logged. `sqlite3.connect()` and `create_engine()` both *create* a missing
-   file and return a working empty library, so a typo in `paths.library_db` boots an
-   appliance with zero songs and no error. ADR-009 requires this; nothing else in the
-   design catches it, and it is the only silent failure mode in this area.
-5. The Builder pipeline stage-by-stage (SAPRS 6.2), ending in validation and
-   atomic publication (5.8, 6.10, 6.11).
-6. `paths.music_dir`, default `/opt/music`, **added to three files in one commit** —
-   `PathsConfig`, `examples/config.yaml`, the Administrator guide. It does not exist
-   yet, and two of the three fails CI: `extra="forbid"` rejects an unknown key in the
-   example, and a test executes `examples/config.yaml` against the model.
-
-Branch it, per `CONTRIBUTING.md` §7. `main` rejects direct pushes.
-
-## The corpus you are building against
-
-`/opt/music` is the shipping library — 3,049 playable files in 20 GB, world-readable,
-no permission problems, and the target for step 6's acceptance run. Sized for
-15,000 without significant performance impact, which is roughly four times what is
-there now, so the FTS5 and index choices in step 5 are made against a corpus four
-times larger than the one you can measure.
-
-The findings that change code, all measured rather than assumed:
-
-- **`albumartist` is on only 19% of files**, so the album-grouping field SAPRS 6.4
-  names must be derived or repaired, not read.
-- **Path is not a reliable artist source.** `country_5/`, `fun_songs/`, `gospel/`
-  and `Unknown_Artist/` hold 44 files whose directory is a mood bucket, not an
-  artist (Deanna Carter, Elvis Presley, The Muppets — all in tags only), while
-  `AC_DC/`, `Amy_Winehouse/` and 330 others are genuine artist trees. Of the 15
-  files that have no tag artist and so would fall back to the path, the directory
-  name supplies a usable artist in **zero** of them and the filename in 8. ADR-010
-  therefore puts the path at precedence level 3 and the filename at level 4.
-- **Tags are not automatically the truth either**: `Uncle Kraker - Drift Away.mp3`
-  has the correct artist in tags and a promo `No Stranger To Shame-ADVANCE` album;
-  one 53-minute whole-album file is tagged `artist="AlbumWrap - Kenny Chesney"`.
-- **15 playable files cannot be catalogued** — no usable artist, 7 with no title
-  either. `Metadata` raises on both (SAPRS 6.5), so the Builder must catch and
-  report, not crash mid-run. These 15 and the 231 unplayable files below are the
-  operator's cleanup, decided deliberately *not* to be pruned to make the Builder's
-  job easier: 6.8 forbids the Builder deleting user music and a Builder that only
-  works on clean data fails the first time someone adds a mix CD.
-- **231 files are real music the appliance cannot play**: 188 `.m4p` (DRM — a
-  permanent no, not a codec to add later), 41 `.wma`, 2 `.aif`. Report them in
-  aggregate; a 263-line skip list trains the operator to ignore the report.
-- **Artwork**: embedded on 98% of M4A, 23% of MP3, 0% of FLAC. The artwork stage
-  must treat "nothing to write" as normal (6.7).
-
-Use `tests/support/media.py` for fixtures and keep the above as real-data
-integration cases; the unit tests cannot represent "the tag disagrees with the
-path" honestly.
-
-## Ten minutes of orientation
-
-```bash
-scripts/bootstrap.sh          # once
-scripts/check.sh              # the gate CI runs; ~8 s
-uv run pytest tests/unit/test_event_bus.py -q --no-cov   # the most alive part
-```
-
-The four packages to read, in the order that makes sense:
-
-1. `encore/domain/` — SAPRS Ch. 4 as frozen dataclasses. Fifteen minutes, and it
-   is the vocabulary everything else speaks. `media.py` holds `AudioFormat` and its
-   `for_path`, which is the whole of discovery's format rule; `metadata.py` holds the
-   required-field rule that the 15 unidentifiable files will hit.
-2. `encore/events/` — `base.py` first (three properties of a fact), then `bus.py`.
-   `BuildCompleted` and `LibraryReloaded` already exist as types; steps 5 and 6 are
-   the first code allowed to publish them.
-3. `encore/config/` — `models.py` mirrors `examples/config.yaml` one class per
-   section; `service.py` is the loader and the diagnostic. `PathsConfig` is where
-   `music_dir` goes, and its `_databases_are_distinct` validator is the pattern for
-   path rules.
-4. `encore/services/container.py` — 97 lines, and the only place that knows how
-   the core is built. Repositories get constructed here, not inside a service.
+Then `tests/integration/test_library_contract.py`, which is what keeps 2 and 4 from
+drifting apart.
 
 ## Things that will surprise you
 
-- **`@dataclass(slots=True)` and zero-argument `super()` do not mix.** A subclass
-  calling `super().__post_init__()` raises `TypeError` on first *publication*, not
-  at import. Every event uses `Event.__post_init__(self)`. See
-  `encore/events/base.py`.
-- **A dataclass field named `logging` shadows the module** for the rest of that
-  class body, so `CoreServices.logger` is annotated `Logger`, not
-  `logging.Logger`. See the comment in `encore/services/container.py`.
-- **`publish()` does not await coroutine handlers.** It schedules them, so a slow
-  subscriber cannot delay playback (SAPRS 11.4). Tests that need completion call
-  `await bus.drain()`, or use `publish_async()`. A coroutine handler published with
-  no running loop is *skipped and logged*, not run late.
-- **`EventCycleError` escapes while every other handler error is swallowed.** That
-  asymmetry is deliberate: SAPRS 11.3 protects a publication from a subscriber,
-  not from the wiring being wrong. A cycle would otherwise exhaust the stack.
-- **`allow_duplicates: false` fails startup.** SAPRS 8.3 is a rule, not a
-  preference, and the configuration layer refuses to look like a knob for it
-  (SAPRS 12.3). The same guard sits on the model, so `model_copy(update=…)` cannot
-  bypass it — `EncoreConfig` revalidates instances.
-- **An empty section (`audio:` with nothing under it) means "defaults"**, not
-  "disabled". Normalized in the loader, with the reason in a comment.
-- **Secrets are withheld by the log formatter**, not by callers, because a service
-  forgetting to redact is the normal case. `record_fields()` is the single answer
-  to "what did we log?". An `extra` key that collides with the four envelope keys
-  is kept under an `extra_` prefix rather than dropped or allowed to overwrite.
-- **`assert` in production code is not a validation strategy.** Every invariant in
-  this phase raises `ValueError` from `__post_init__` or a Pydantic validator. The
-  same reasoning applies to schema constraints: prefer `NOT NULL` and `CHECK` in
-  DDL over a Python check that a direct INSERT can bypass.
-- **CodeQL's merge protection blocks on alerts, not on checks.** A dismissed
-  false positive looks like a swallowed finding, so dismissals get a paragraph in
-  the PR body — see #20's note on `py/clear-text-logging-sensitive-data`.
+- **`sqlite3.connect()` and `create_engine()` both create a missing file.** A typo
+  in `paths.library_db` boots an appliance with zero songs and no error. ADR-009
+  named this as the one silent failure mode in the area, so both stores check shape
+  on open and raise `StoreNotFoundError`/`LibraryContractError`. If you add a third
+  way to open either database, it needs the same check; `open_library()` and
+  `open_runtime_store()` exist so that nobody writes a fourth `connect()`.
+- **Contentless FTS5 has two traps, both silent.** `x MATCH ?` is read by SQLite as
+  *a column named `x`* — the table name must appear on the left, not an alias. And
+  you cannot `SELECT title FROM song_search`: a contentless index stores no
+  columns, so a hit must be resolved by `rowid` through the view. Both were shipped
+  bugs here, caught only when a real database was queried; `MATCH` against an empty
+  index returns nothing and does not complain.
+- **`UNIQUE` treats `NULL` as distinct.** `runtime_statistics` needed both per-day
+  and all-time rows in one table with a `UNIQUE(metric, day)`; an all-time row keyed
+  on `day = NULL` duplicated once per reset. All-time totals use the empty string.
+- **`mutagen` returns objects that are not `str`.** An ID3 `TDRC` frame gives you an
+  `ID3TimeStamp`. A reader that only understands `str` drops every ID3 date and
+  nothing fails. See `extraction.py._rendered` — it rejects anything that stringifies
+  to `<...>` on purpose, because `<mutagen.id3.ID3TimeStamp object at 0x…>` in an
+  artist field is worse than absent.
+- **SQLite `mtime` is second-granular and `shutil.copy2` preserves it**, so "size +
+  mtime" is not an identity. The cache key includes a tag hash and the
+  normalization-rule version for exactly this reason (ADR-010).
+- **The Builder ignores hidden trees and non-audio files rather than reporting them
+  as unsupported.** `scanned == songs + skipped` is an invariant the report prints,
+  and a `.DS_Store` counted as "music Encore cannot play" makes one line of the
+  report describe the filesystem instead of the decision.
+- **`enrich=False` by default is a measured decision, not a placeholder.** At
+  MusicBrainz's 1 request/second, filling gaps on 3,000 files is a 50-minute build.
+  Enrichment also does not query for a missing *date* alone — too common to be worth
+  a request each; the date comes along when another gap triggers the lookup.
+- **Domain types now include `PlaybackOutcome` and `QueueItem.played_at`.** The
+  first is SAPRS 4.5's vocabulary for how a track ended, which the playback service
+  had been spelling in strings at each call site. Playback (step 8) should record
+  history through it, not invent a parallel enum.
+
+## Guardrails that exist now
+
+- `tests/integration/test_library_contract.py` — every library statement executes
+  against a real built database. Fails on drift in either direction.
+- `tests/unit/test_architecture_guardrails.py` — imports the real packages and
+  asserts AIG 4. `encore/repositories/**` may not import FastAPI; services and
+  domain may not import either store's driver.
+- `tests/integration/test_core_foundation.py` — importing the core pulls in no web
+  framework. **This was narrowed this phase**: it previously banned `sqlalchemy`
+  outright, written in milestone 2 when nothing stored anything, and it would have
+  failed the milestone it was protecting. ADR-009 makes SQLAlchemy the runtime
+  write store by decision. Do not re-widen it without amending the ADR.
+- Builder stages may not open a socket: `TID251`-style review is manual here, and
+  `musicbrainz.py` is the only module with a URL in it. The tests inject an opener
+  and never hit the network (SAPRS 14.4).
 
 ## What is deliberately not here
 
-No HTTP, no database, no player, no templates, no installer. If a task looks like
-it needs one of those, it is a later step and the honest answer is that this phase
-prepared the vocabulary for it and nothing else.
+No HTTP, no player, no templates, no installer, no `encore/search/` service, and
+**no caller of either store**. If a task looks like it needs one of those, it is a
+later step; this phase made storage real and correct, which is what steps 7–13 are
+built on.
 
-## Claims made in Phase 1 that later code must keep true
+## Claims made that later code must keep true
 
-- The domain imports nothing from `encore/` except `encore.utilities`. Checked.
-- No service instance is reachable as a module global. Checked.
-- No entity or event carries guest identity. Checked by field name, so
-  `source_ip` fails CI.
-- Configuration cannot write anything. Checked by AST scan.
-- `library.db` and `runtime.db` are different files. Checked at load; steps 5 and 6
-  must make it mean something by actually opening one read-only — ADR-009 is the
-  mechanism (`mode=ro` plus `PRAGMA query_only`), and a repository that can write to
-  the library is a bug the driver should now refuse.
-- Timestamps are timezone-aware UTC. Checked at construction; the queue table must
-  not let a naive value into a row, so store ISO 8601 with offset and assert on
-  read.
-
-The first four are tests in `tests/unit/test_architecture_guardrails.py`. The
-last two are only half-enforced until the databases exist — that is this next
-phase's acceptance criteria, not a gap in Phase 1.
+- **`library.db` is never written by the Server.** Checked by construction: the only
+  function that opens it uses `mode=ro` + `PRAGMA query_only=ON`, and the Builder is
+  the only writer of DDL. A new code path that opens `library.db` some other way is
+  a bug, and nothing will catch it but review — the guardrail is one function, not a
+  test per call site.
+- **Repositories contain no business rules.** Now that both sides are real, the
+  check that catches a rule landing in a repository is `test_architecture_guardrails`
+  plus the absence of any import of `encore.domain` services in `repositories/**`.
+- **Runtime timestamps are aware UTC.** `runtime/types.py.UTCDateTime` is the only
+  datetime column type; if you add a timestamp to a model, use it. A naive value
+  read back at 03:00 during a DST change is the failure mode ADR-009 warns about.
+- **Migrations are forward-only and numbered.** `open_runtime_store()` applies them;
+  a model change without a migration fails `test_runtime_migrations`, and a
+  migration that changes an existing revision fails too.
+- **The Builder never modifies user music.** Nothing in `apps/builder/` opens a media
+  file for writing; that is SAPRS 6.8 and it is worth keeping as a review question
+  because no test can check it without a real filesystem watch.
 
 ## Known loose ends
 
-- No tracking issue existed for steps 2–4, so the commit, PR #20 and the CHANGELOG
-  entry are the record of what was done. #19 was the first issue in the sequence
-  `CONTRIBUTING.md` describes — and it is **currently closed in error**, so a session
-  looking for step 5 by browsing open issues will not find it. PR #20's description
-  opened its "Related issue" line with a closing keyword pointing at #19 and then
-  negated it in prose; GitHub read the keyword. Reopen it before starting step 5:
-  `gh issue reopen 19`. Both of its open questions were answered on 2026-10-09 in
-  ADR-009 and ADR-010, and the comment on the issue records that plus two corrections
-  to its own text (an ADR *was* required, and the shape-check requirement is new).
-- The `slots`/`super()` trap deserves a file in `tests/regression/` per AEP 13,
-  but that suite is one file per issue number and this was found while writing
-  code, not reported. The guard is in `tests/unit/test_events.py` and labelled as
-  such; open a `chore` issue and move it if tidiness matters.
-- `examples/config.yaml` is asserted equal to the model defaults on every commit.
-  If you change a default, that file changes in the same commit — the test tells
-  you, the docs will not.
-- **Music cleanup is pending with the operator, not in code**: the 231 unplayable
-  files and the 15 unidentifiable ones listed above. Steps 5 and 6 should be written
-  to handle all of them correctly *anyway*, because the report has to be honest for
-  the next library, not just this one.
-- Human review is still a norm rather than a gate. GitHub will not let a sole
-  maintainer approve their own pull request, so `required_approving_review_count`
-  stays 0 and the reviewer checklist stays unticked until a second developer
-  arrives. Revisit then, with these two ADRs as the first thing that reviewer
-  should read.
+- **No issues exist for AIG steps 7–9.** #19 is one of only three issues ever
+  opened. Open yours before branching (CONTRIBUTING §2).
+- **Where the stores get composed is undecided.** The honest answer is `apps/server/`
+  builds them and hands them to services; `build_core_services` deliberately does not,
+  because opening a database requires files that pure config/domain tests have no
+  business needing. Make it a decision in the server milestone, not by accident in a
+  fixture.
+- **`aac`/`m4a` synthetic media still raises** `SyntheticMediaUnavailableError`. It is
+  asserted rather than skipped (`test_media_generator.py`), so nothing silently stops
+  covering it, but the M4A path in `extraction.py` is therefore only tested against
+  real files. The corpus is ~96% MP3 and the rest FLAC/M4A, so the gap is real but
+  narrow. Closing it needs an encoder dependency or hand-written ADTS frames.
+- **Playback tests will hit the synthetic-media limit soon.** Silent-but-valid
+  containers are not decodable audio. Decide early whether to commit small licensed
+  fixtures, generate them with `ffmpeg` in CI, or skip; if the answer is "commit
+  files", that changes what a clone contains and wants an ADR.
+- **`tests/regression/` is one file per issue**, so this phase's eight fixed defects
+  all live in `test_issue_19_persistence_and_library_builder.py`. Their value is the
+  docstrings saying what each symptom was; a future session that fixes three bugs on
+  one PR will be tempted to make three files. Resist that — the convention is per
+  *issue*.
+- **Coverage of `apps/builder/` plus `encore/repositories/` is 91.9%**, with
+  `musicbrainz.py` at 95% after the HTTP client got a fake opener. SAPRS 14.16 wants
+  90% for the builder, which is met; the misses are mostly `extraction.py` container
+  edge cases and the M4A note above.
+- **Human review is still a norm, not a gate**: `required_approving_review_count` is
+  0 because GitHub will not let a sole maintainer approve their own PR.

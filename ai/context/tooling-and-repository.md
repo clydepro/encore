@@ -27,8 +27,13 @@ scripts/test.sh        # unit + integration
 scripts/test.sh --all  # + performance, party simulation
 scripts/check.sh       # the whole gate; --slow adds long suites
 scripts/run-server.sh  # placeholder until milestone 11
-scripts/run-builder.sh # placeholder until milestone 6
+scripts/run-builder.sh # the Builder; `encore-builder` is the same thing
 ```
+
+`encore-builder` is an installed console script (`[project.scripts]`), so it works
+from any directory and takes `--music-dir`, `--library`, `--artwork-dir` and
+`--temp-dir` as overrides of `paths.*`. It is also the only program that writes
+`library.db` (ADR-010).
 
 ## Style decisions already made
 

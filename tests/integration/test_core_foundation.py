@@ -236,16 +236,25 @@ def test_the_queue_rule_survives_the_whole_stack(
     assert core.config.queue.allow_duplicates is True
 
 
+#: Web frameworks the core foundation must never reach (AIG 4).
+FORBIDDEN_IN_CORE: tuple[str, ...] = ("fastapi", "starlette", "jinja2", "uvicorn")
+
+
 def test_nothing_in_the_core_imports_the_web(appliance: tuple[CoreServices, io.StringIO]) -> None:
     """AIG 4: domain services never import FastAPI.
 
-    Asserted against `sys.modules` after exercising the core rather than by
-    grepping source, because the interesting case is a transitive import; the
-    source-level check lives in `test_architecture_guardrails.py`.
+    Asserted against `sys.modules` after exercising the core rather than by grepping
+    source, because the interesting case is a transitive import; the source-level check
+    lives in `test_architecture_guardrails.py`.
+
+    SQLAlchemy is deliberately *not* in this list. ADR-009 makes it the runtime write
+    store's implementation, so a suite that opens `runtime.db` before this test runs
+    would fail it for a reason the architecture permits — and a test that fails for a
+    legal reason gets deleted rather than fixed. The rule that does hold, that the
+    services reach no ORM of their own, is the source-level one.
     """
 
-    forbidden = ("fastapi", "starlette", "jinja2", "uvicorn", "sqlalchemy")
-    loaded = {name for name in sys.modules if name.split(".")[0] in forbidden}
+    loaded = {name for name in sys.modules if name.split(".")[0] in FORBIDDEN_IN_CORE}
 
     assert not loaded, f"the core foundation pulled in {sorted(loaded)}"
 

@@ -13,12 +13,28 @@ process described in SAPRS Chapter 6 and AIG Chapter 16.
 
 ## Status
 
-Intentionally empty during the bootstrap phase (PBK 1). The builder entry point
-(`apps/builder/main.py`) arrives with milestone 6 (Library Builder) in AIG
-Chapter 21.
+Implemented (AIG 21 step 6, ADR-010). Run it as `encore-builder`, or
+`uv run python -m apps.builder.main`; `scripts/run-builder.sh` is a wrapper that
+takes the music directory as its first argument.
+
+One module per stage, in the order the pipeline calls them: `discovery`,
+`extraction`, `normalization`, `precedence`, `musicbrainz` + `enrichment`,
+`artwork`, `duplicates`, `construction` + `schema` + `search_index`,
+`validation`, `publication`. `pipeline.py` owns the ordering, the accounting and
+the `BuildCompleted` event; `state.py` owns incremental reuse; `report.py` owns
+what the operator reads.
+
+It is the only program that writes `library.db`, and the only place its schema is
+defined. The Server's read side lives in `encore/repositories/library/`, and the
+shared naming that keeps the two honest is `encore/repositories/contract.py`.
 
 ## Rules that bind this application
 
 - It must never import runtime playback components (ADR-001, SAPRS 2.5).
 - It must never touch `runtime.db` (SAPRS 5.1).
 - A partially built database must never replace a published one (SAPRS 5.8).
+- It must never modify, move, rename or delete a media file (SAPRS 6.8). A file it
+  cannot use is reported, not fixed on disk.
+- Only `musicbrainz.py` may open a network connection, and only when enrichment is
+  requested. A stage that needs the internet to finish a build has misunderstood
+  SAPRS 6.6.

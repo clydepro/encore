@@ -41,6 +41,7 @@ from encore.domain.media import Artwork, ArtworkKind, AudioFormat, MusicFile
 from encore.domain.metadata import CANONICAL_TAGS, Metadata
 from encore.domain.playback import (
     ALLOWED_TRANSITIONS,
+    PlaybackOutcome,
     PlaybackProgress,
     PlaybackState,
     can_transition,
@@ -66,6 +67,7 @@ __all__ = [
     "Metadata",
     "MusicFile",
     "MusicFileId",
+    "PlaybackOutcome",
     "PlaybackProgress",
     "PlaybackState",
     "QueueItem",

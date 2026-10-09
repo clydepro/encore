@@ -14,6 +14,39 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Added
 
+- Repositories (AIG 21 step 5, ADR-009) in `encore/repositories/`, split by
+  mutability rather than by table. The library side is raw `sqlite3` over a
+  `mode=ro` URI with `PRAGMA query_only=ON`, one module of SQL
+  (`library/queries.py`) and one of row mapping, with existence checks that
+  cannot be skipped because they share a `SELECT` list with the mappers.
+  The runtime side is SQLAlchemy 2.x over WAL, with ORM models, repository
+  interfaces taking domain `SongId`/`QueueId` rather than integers, and
+  `open_runtime_store()` applying numbered forward-only migrations on open.
+  `contract.py` names every table and column once, so the schema cannot drift
+  silently between the Builder that writes it and the Server that reads it —
+  ADR-010's one named risk, answered with a real SQLite file in
+  `tests/integration/test_library_contract.py`.
+- The Library Builder (AIG 21 step 6, ADR-010) in `apps/builder/`: a linear
+  pipeline of discovery, extraction, normalization, precedence, optional
+  MusicBrainz enrichment, artwork, construction, validation and publication;
+  the sole author of `library.db`'s schema, including the contentless FTS5
+  indexes and the `song_search`/`album_search`/`artist_search` views; per-field
+  provenance with the file's original value beside it; a skip ledger that
+  aggregates unsupported containers by extension and itemises everything it
+  could not read; incremental rebuilds keyed on size, mtime, tag fingerprints
+  and checkpoints, so a rebuild after adding an album re-reads only what
+  changed and re-encodes no artwork; `encore-builder` as a `console_script`;
+  and `BuildCompleted` published on the bus with one number per ledger row.
+- `paths.music_dir` in configuration — the one filesystem path the Builder
+  needed that SAPRS 13.3 did not already define, documented as such.
+- Synthetic media generation in `tests/support/media.py`: real silent MP3 and
+  FLAC containers with valid frames, tags and embedded JPEG covers, with
+  durations set in the container where a probe reads them. `aac`/`m4a` decline
+  rather than fake it. This replaces the milestone-2 placeholder.
+- Shared fixtures `music_tree`, `built_library`, `library_store` and
+  `runtime_store`; `tests/performance/test_builder_scale.py` builds a real
+  1,500-song library and holds search to the 100 ms budget, measuring ~8 ms p95
+  and ~3.7 s of build time on the reference machine.
 - `ai/current-phase.md` and `ai/HANDOFF.md`: what a phase was intended to cover,
   what it delivered, what it deliberately left out, and what the next session
   must decide before writing code. `ai/README.md` and the CONTRIBUTING definition
@@ -96,6 +129,21 @@ The release process moves the section into a dated, bracketed version heading.
   `configure-branch-protection.sh`, `setup-github-repo.sh`.
 
 ### Changed
+
+- The core-foundation guardrail in `tests/integration/test_core_foundation.py`
+  forbids web frameworks rather than `sqlalchemy`. It had been written in
+  milestone 2, when nothing stored anything yet, and ADR-009 makes SQLAlchemy
+  the runtime write store by decision: the test was enforcing a rule no document
+  states, and would have failed the milestone it was protecting. The check that
+  services and domain stay framework-free is unchanged and still passes.
+- `encore/domain/` gained `PlaybackOutcome` (the SAPRS 4.5 vocabulary for how a
+  track ended, which the playback service had been spelling in strings at each
+  call site) and `QueueItem.played_at`, a column SAPRS 4.5 defines that the
+  queue repository needs to write. Both are additive; no existing field, enum
+  member or transition changed.
+- Ruff and mypy now cover `apps/builder/` and `tests/` with the same strictness
+  as the rest of the tree, including `TID251` banned-API rules that make a
+  network call inside Builder stages other than `musicbrainz.py` a lint failure.
 
 - ADR-003 is marked superseded by ADR-009. SQLite remains the storage engine for
   both databases — only the access layer changed — and the record is kept and

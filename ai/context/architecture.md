@@ -38,10 +38,11 @@ Imports point inward only. HTTP concepts stop at `encore/controllers/` and
 | `encore/config/` | implemented | Pydantic models for `examples/config.yaml` + `ConfigurationService` |
 | `encore/services/` | partial | `LoggingService` and `build_core_services()`; the other services arrive with their milestones |
 | `encore/utilities/` | partial | `clock.py` (injectable time), `redaction.py` (log safety) |
-| `encore/repositories/` | placeholder | step 5 |
-| `encore/search/`, `encore/playback/` | placeholder | steps 7-8 |
+| `encore/repositories/` | implemented | ADR-009 split: read-only `sqlite3` for `library.db`, SQLAlchemy 2.x + migrations for `runtime.db`, `contract.py` naming both schemas |
+| `encore/search/`, `encore/playback/` | placeholder | steps 7-8 (search's SQL already exists in the library repository) |
 | `encore/api/`, `encore/controllers/`, `templates/`, `static/` | placeholder | steps 11-14 |
-| `apps/builder/`, `apps/server/` | placeholder | entry points land with steps 6 and 11 |
+| `apps/builder/` | implemented | the `encore-builder` command, sole writer of `library.db` (ADR-010) |
+| `apps/server/` | placeholder | lands with step 11; it is also where the two stores get composed |
 
 ## Runtime services (SAPRS 2.4, AIG 7)
 

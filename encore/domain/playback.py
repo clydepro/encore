@@ -21,7 +21,7 @@ from typing import Final
 
 from encore.domain.identifiers import SongId
 
-__all__ = ["ALLOWED_TRANSITIONS", "PlaybackProgress", "PlaybackState"]
+__all__ = ["ALLOWED_TRANSITIONS", "PlaybackOutcome", "PlaybackProgress", "PlaybackState"]
 
 
 class PlaybackState(StrEnum):
@@ -35,6 +35,34 @@ class PlaybackState(StrEnum):
     FINISHED = "finished"
     ERROR = "error"
     RECOVERING = "recovering"
+
+
+class PlaybackOutcome(StrEnum):
+    """How a track ended, as recorded in playback history (SAPRS 5.7, 7.2, 8.6).
+
+    Distinct from `PlaybackState`, which describes what the engine is doing *now*.
+    An outcome is written once, on the row that history keeps forever, and it is the
+    value the statistics and the admin play log are grouped by. The four members are
+    the four endings SAPRS describes: the song finished, someone skipped it, it was
+    stopped or cleared, or the engine failed.
+    """
+
+    COMPLETED = "completed"
+    SKIPPED = "skipped"
+    STOPPED = "stopped"
+    FAILED = "failed"
+
+    @property
+    def counts_as_played(self) -> bool:
+        """Whether this ending belongs in "songs played" (SAPRS 10.3).
+
+        A skip is not a play. The rule lives on the enum rather than in the statistics
+        service so that every counter in the application answers the same question the
+        same way, and so a new outcome has to be classified here before it can be
+        counted anywhere.
+        """
+
+        return self is not PlaybackOutcome.FAILED
 
 
 #: The SAPRS 7.3 diagram, including its `Error -> Recovering -> Idle/Playing`

@@ -16,14 +16,33 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
+from apps.builder.pipeline import BuildOptions, run
+from apps.builder.report import BuildReport
+from encore.repositories.library import LibraryStore, open_library
+from encore.repositories.runtime import RuntimeStore, open_runtime_store
+from tests.support.media import AlbumSpec, cover_image, generate_albums
 from tests.support.mpv import MockMpv
 from tests.support.sqlite import TempDatabase, fts5_available, temp_database
 
 TESTS_DIR = Path(__file__).resolve().parent
+
+
+@dataclass(frozen=True, slots=True)
+class BuiltLibrary:
+    """A published library, the options that built it, and its report.
+
+    A fixture returning a three-field value rather than a path because almost every
+    test that wants the database also wants to assert on what the Builder said it did.
+    """
+
+    report: BuildReport
+    options: BuildOptions
+
 
 CATEGORIES: dict[str, str] = {
     "unit": "unit",
@@ -124,6 +143,70 @@ def media_dir(encore_home: Path) -> Path:
     directory = encore_home / "music"
     directory.mkdir(parents=True, exist_ok=True)
     return directory
+
+
+@pytest.fixture
+def runtime_store(encore_home: Path) -> Iterator[RuntimeStore]:
+    """A migrated, WAL-verified `runtime.db` store, closed after the test."""
+
+    store = open_runtime_store(encore_home / "var/lib" / "runtime.db")
+    try:
+        yield store
+    finally:
+        store.close()
+
+
+@pytest.fixture
+def music_tree(tmp_path: Path) -> Path:
+    """A small generated corpus in the `<artist>/<album>/` layout ADR-010 reads.
+
+    Its own directory rather than `media_dir`, because `media_dir` is empty by design
+    and several tests need a scan that finds something.
+    """
+
+    root = tmp_path / "music"
+    generate_albums(
+        [
+            AlbumSpec.with_tracks(
+                "The Test Artists", "First Album", count=3, artwork=cover_image()
+            ),
+            AlbumSpec.with_tracks("The Test Artists", "Second Album", count=2, fmt="flac"),
+            AlbumSpec.with_tracks("Someone Else", "Third Album", count=2),
+        ],
+        root,
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+@pytest.fixture
+def built_library(encore_home: Path, music_tree: Path) -> BuiltLibrary:
+    """One real Builder run over `music_tree`, published into the sandbox.
+
+    The fixture is the pipeline rather than a hand-written schema because the thing
+    these tests check is the agreement between the two applications (ADR-010), and an
+    agreement asserted against a copy of one side proves nothing.
+    """
+
+    options = BuildOptions(
+        music_dir=music_tree,
+        library_db=encore_home / "var/lib" / "library.db",
+        artwork_dir=encore_home / "var/cache" / "artwork",
+        temp_dir=encore_home / "var/cache" / "builder",
+        library_version="test",
+    )
+    return BuiltLibrary(report=run(options), options=options)
+
+
+@pytest.fixture
+def library_store(built_library: BuiltLibrary) -> Iterator[LibraryStore]:
+    """The published `library.db`, opened through the read-only store."""
+
+    store = open_library(built_library.options.library_db)
+    try:
+        yield store
+    finally:
+        store.close()
 
 
 @pytest.fixture

@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 import encore
-from tests.support.media import MediaSpec, SyntheticMediaUnavailableError, generate_track
+from tests.support.media import MediaSpec, generate_track
 from tests.support.mpv import MockMpv
 from tests.support.party_profiles import PartyProfile, load_profile
 from tests.support.sqlite import TempDatabase
@@ -78,11 +78,16 @@ def test_party_profile_option_defaults_to_a_real_file(pytestconfig: pytest.Confi
     assert isinstance(load_profile(path), PartyProfile)
 
 
-def test_synthetic_media_hooks_fail_loudly(tmp_path: Path) -> None:
-    """A missing generator must never let a suite pass vacuously."""
+def test_synthetic_media_is_real(tmp_path: Path) -> None:
+    """PBK 16 shipped this as a placeholder that raised; milestone 6 made it produce files.
 
-    with pytest.raises(SyntheticMediaUnavailableError):
-        generate_track(MediaSpec(title="x", artist="y", album="z"), tmp_path)
+    The assertion is that a generated track exists and is non-empty, which is the
+    vacuous-suite failure the placeholder existed to prevent, checked directly.
+    """
+
+    path = generate_track(MediaSpec(title="x", artist="y", album="z"), tmp_path)
+    assert path.is_file()
+    assert path.stat().st_size > 0
 
 
 def test_project_is_installed_editably_and_metadata_agrees() -> None:

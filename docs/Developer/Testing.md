@@ -37,15 +37,29 @@ destination (90% overall, 95% domain/queue/search, 90% playback/builder).
   `library_db.connect(readonly=True)` proves immutability.
 - `mpv` — a `MockMpv` double; drives commands through the same JSON lines the
   real IPC client will send.
-- `media_dir` — a directory for synthetic audio.
+- `media_dir` — an empty directory with the tree structure playback expects.
+  Empty by design: a test that needs a file makes one.
+- `music_tree` — a small generated corpus in `<artist>/<album>/` layout.
+- `built_library` — one real `encore-builder` run over `music_tree`, published
+  into `encore_home`; carries both the report and the options that built it.
+- `library_store` / `runtime_store` — the two databases opened through their
+  repositories.
 - `sqlite_fts5` — skips cleanly when the interpreter's SQLite lacks FTS5.
 
 ## Doubles (`tests/support/`)
 
 - `sqlite.py` — temp databases, read-only connections, FTS5 probe.
 - `mpv.py` — the mock player: commands, properties, events, `crash()`.
-- `media.py` — synthetic media hooks. **Placeholder:** it raises
-  `SyntheticMediaUnavailableError` rather than pretending to work, until milestone 6.
+- `media.py` — synthetic media. Writes real, playable-headed MP3 and FLAC
+  containers with valid frames, tags them through mutagen, and embeds genuine
+  JPEG covers built with Pillow. Duration comes from the container, so a test
+  that asserts "213 seconds" is asserting what a probe would report.
+  The audio is silence, which is enough for metadata, discovery, deduplication
+  and search; it is not enough for decoding, so playback tests still need
+  recorded fixtures.
+  `aac`/`m4a` raise `SyntheticMediaUnavailableError` rather than emitting a file
+  that only looks like one (PBK 16): a builder test that passed against a fake
+  container would be testing the fake.
 - `party_profiles.py` — loader for the load profiles below.
 
 ## What unit tests may not do (SAPRS 14.4)
@@ -92,6 +106,29 @@ Planned seams, using the doubles that already exist:
 `tests/performance/test_performance_targets.py` encodes the SAPRS 1.8 budgets in
 one place. Benchmarks must report p50/p95/p99 and fail on p95 against those
 numbers — measure before optimizing (AEP 14).
+
+`tests/performance/test_builder_scale.py` is the one that measures something
+today: it generates a 1,500-file corpus, builds a real library, and asserts the
+search budget (p95 < 100 ms) and that a second, incremental build does less work
+than the first. Build *throughput* is printed rather than asserted — a wall-clock
+line that fails on a loaded CI runner teaches people to disable the suite, and the
+reuse ratio is the assertion that actually catches a regression. Both run only
+under `--run-slow`.
+
+## Guardrails that are tests, not opinions
+
+`tests/integration/test_library_contract.py` and
+`tests/unit/test_architecture_guardrails.py` exist to fail a pull request that a
+reviewer would approve.
+
+- The first executes every SQL statement in
+  `encore/repositories/library/queries.py` against a `library.db` produced by the
+  real Builder, so the read side cannot drift from `apps/builder/schema.py` in
+  either direction (ADR-009's one mitigation, made automatic).
+- The second asserts the import rules of AIG 4 on source files, and asserts that
+  importing the core services pulls in no web framework at all — the check that
+  keeps "domain services never import FastAPI" true by construction rather than
+  by care.
 
 ## Test-writing conventions
 
