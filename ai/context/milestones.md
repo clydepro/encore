@@ -108,7 +108,7 @@ repositories are finished, tested and unused by a running application.
 - Test infrastructure: fixtures, temp SQLite helpers, mock mpv, Party Simulation
   profiles + loader, a performance target registry whose search budget is measured
   rather than promised, and a synthetic media generator that writes real silent
-  MP3/FLAC containers with valid tags and embedded covers. 703 tests (712 with the
+  MP3/FLAC containers with valid tags and embedded covers. 705 tests (714 with the
   slow suites), 91.8% coverage.
 - Architecture guardrail tests and `tools/check_links.py`.
 
@@ -117,8 +117,8 @@ repositories are finished, tested and unused by a running application.
 - Any HTTP endpoint, template, static asset or SSE stream.
 - Any mpv integration, queue rule, search implementation or running service.
 - **Any application that opens either database.** The Builder writes `library.db`;
-  nothing in a running Server reads it yet. Store composition is a decision for the
-  server milestone, recorded in `ai/HANDOFF.md`.
+  nothing in a running Server reads it yet. Composition is decided — `apps/server/`,
+  not `build_core_services` — and recorded in `apps/server/README.md`.
 - `EventBus` persistence: events are in-process only (SAPRS 11.5). The Builder
   publishes `BuildCompleted` on a bus it creates and discards, because there is no
   server to subscribe to it yet.
