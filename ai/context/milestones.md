@@ -18,10 +18,10 @@ or too early.
 | 8 | Playback | **Done — `encore/playback/`** |
 | 9 | Queue | **Done — `encore/services/queue_service.py`** |
 | 10 | Runtime database | **Done — migrations in step 5** |
-| 11 | FastAPI | Not started ← **next** |
-| 12 | HTMX | Not started |
-| 13 | SSE | Not started |
-| 14 | Administrative interface | Not started |
+| 11 | FastAPI | **Done — `encore/api/`, `apps/server/`** |
+| 12 | HTMX | **Done — `encore/controllers/`, `encore/templates/`, `encore/static/`** |
+| 13 | SSE | **Done — `encore/services/sse_publisher.py`, `/events`** |
+| 14 | Administrative interface | Not started ← **next** |
 | 15 | Installer | Not started |
 | 16 | Party Simulation | Not started |
 | 17 | Documentation | Ongoing |
@@ -35,8 +35,53 @@ start a song is untestable, a player that nothing commands is unexercised, and
 the search service is what makes a guest's request exist at all.
 
 PBK's ten-milestone view groups the same work; both are listed in the README
-roadmap. Steps 2, 3 and 4 are PBK milestone 2 ("Core Framework"), and are
+roadmap. Steps 2, 3 and 4 are PBK milestone 2 (“Core Framework”), and are
 declared complete against its checklist in the section below.
+
+## What steps 11–13 delivered
+
+- `encore/api/` — `create_app()` and nothing else at the top: `app.py` composes
+  the FastAPI app from routers, `deps.py` is the one seam through which every
+  handler reaches the appliance thread (ADR-012), `errors.py` is the single
+  exception→status→code table, `html.py` is the Jinja environment and the
+  cache/no-store policy, `sse.py` is `/events`, `views.py` builds the contexts the
+  templates render, `rows.py` is the batched label read that keeps a page at two
+  statements, and `schemas.py` is the JSON wire contract, Pydantic, versioned
+  under `/api/v1`.
+- `encore/controllers/` — the guest pages (`browse.py`), the HTMX fragments
+  (`panels.py`) and the button (`queue.py`). They contain no SQL, no business
+  logic and no mpv, and a guardrail test says so by importing them.
+- `encore/templates/`, `encore/static/` — a shell with two swap regions,
+  `swap:player` and `swap:alerts`, htmx vendored at
+  `static/vendor/htmx/htmx.min.js`, `encore-live.js` as the SSE bridge, and
+  hand-written CSS in place of Tailwind (a deviation, recorded in ADR-012's
+  consequences: an offline appliance cannot fetch a CDN, and the alternative was
+  vendoring a build step).
+- `encore/services/sse_publisher.py` — one queue per connection, the `snapshot`
+  that makes a late join correct, facts named by their class, region frames
+  rendered once per fact, and a `resync` instead of a replay. Its 32-frame limit
+  is what turns a phone in a lift into a reconnect rather than a memory leak.
+- `apps/server/` — the composition root and the CLI. `build()` is the graph;
+  every integration, e2e and performance test that needs a server calls it, so
+  the shipped wiring is the wiring under test.
+- `encore/utilities/appliance.py` — `ApplianceThread`, the worker ADR-012 argues
+  for, plus `call_async`, which is the whole of the HTTP→core boundary. It reports
+  the identity of the thread that did the work, because a guardrail that cannot
+  say who ran is a comment.
+
+Decisions taken here that later steps must honour:
+
+- A handler reaches a service through `read()`/`call_async` and nothing else. A
+  route that opens a session or an mpv socket is not wrong-looking; it is wrong.
+- Queue insertion is not idempotent (SAPRS 10.4), so no route may deduplicate it,
+  and a test asserts that a double press adds two.
+- The SSE vocabulary is `EVENT_VOCABULARY`, framed by class name. A ninth fact
+  arrives unnamed-but-forwarded with no regions redrawn, which is the state a
+  reviewer should notice, not one a browser should discover.
+- Artwork has two miss answers on purpose: nothing depicted is a placeholder, a
+  file the cache lost is a 404. Collapsing them hides an install fault.
+- The confirmation a guest gets derives from the queue item's status, not from
+  whether the appliance happened to be idle.
 
 ## What steps 2–4 delivered
 

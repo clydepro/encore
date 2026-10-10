@@ -1,0 +1,23 @@
+{#
+The persistent region: what is on the speakers, and what is waiting (SAPRS 9.7, 9.8, 9.9).
+
+The `id` is the contract. `encore/api/fragments.py` names the region `player` and sends
+this markup under the frame `swap:player`; `encore/static/js/encore-live.js` looks the
+region up by that name and replaces this element. When the two disagree a panel stops
+updating — quietly, on one phone in the room — so the name appears in
+`tests/integration/test_htmx_pages.py` rather than only here.
+
+`aria-live="off"` is deliberate. A region that announces itself every second would talk
+over a screen-reader user's own navigation, and SAPRS 9.2's accessibility requirement is
+satisfied by the status region below it, which changes only when the appliance has a
+sentence worth hearing.
+#}
+<section
+  id="player"
+  class="player"
+  aria-label="Now playing and Up Next"
+  {% if oob %}hx-swap-oob="true"{% endif %}
+>
+  {% include "panels/now_playing.html" %}
+  {% include "panels/up_next.html" %}
+</section>

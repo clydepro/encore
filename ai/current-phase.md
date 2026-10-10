@@ -1,19 +1,18 @@
 # Current Phase
 
-**Phase 3 — search, playback, queue (AIG steps 7, 8, 9): implemented on
-`feat/23-search-playback-queue`, open as a pull request against `main`.** Phases 1 and 2 are
-merged: [PR #20](https://github.com/clydepro/encore/pull/20) (domain, bus, configuration) and
-[PR #22](https://github.com/clydepro/encore/pull/22) (repositories and the Library Builder,
-which closed issue #19). This branch therefore sits directly on `main` and needs nothing from
-an unmerged sibling to build — step 7 was only ever blocked on the library database, and that
-landed with #22.
+**Phase 4 — runtime composition, HTTP, HTMX, SSE (AIG steps 11, 12, 13): implemented on
+`feat/25-runtime-server-htmx-sse`, as
+[PR #26](https://github.com/clydepro/encore/pull/26) against `main`, closing issue
+[#25](https://github.com/clydepro/encore/issues/25).** Phases 1–3 are merged:
+[PR #20](https://github.com/clydepro/encore/pull/20) (domain, bus, configuration),
+[PR #22](https://github.com/clydepro/encore/pull/22) (repositories, Builder — closed #19) and
+[PR #24](https://github.com/clydepro/encore/pull/24) (search, playback, queue — closed #23).
+This branch sits on `main` at `4d30b42` and needs nothing from an unmerged sibling.
 
-**Status of [PR #24](https://github.com/clydepro/encore/pull/24): ready to merge.** The one open
-carry-over from the previous session — "nothing here has met a real mpv" — is closed: mpv is
-installed here (0.35.1) and the stack has been run against it, which found five defects and took
-four commits to fix (`3c1bf1f`, `c200b69`, `f043452`, `5e63dd3`). See *Loose ends* below and
-`ai/HANDOFF.md`'s "Known loose ends" for what that produced; nothing is waiting on a binary, a
-hardware check, or a decision.
+There is now something to start. `scripts/run-server.sh` brings up an appliance that serves
+pages, fragments, a JSON API and a live stream over the real graph, and 40 phones can watch it
+at once. What is *not* here: the administrative interface, login, statistics screens, log tail
+and QR (milestone 14), the installer (15), and the Party Simulation driver (16).
 
 Read this page first in a new session, then [`context/milestones.md`](context/milestones.md)
 for what exists and what is scaffolding. Neither is authoritative: precedence is
@@ -23,165 +22,113 @@ task request → SAPRS → AIG → ADRs → AEP (AEP 2).
 
 | AIG 21 | Delivered as | Spec |
 | ------ | ------------ | ---- |
-| 7 — Search | `encore/search/` | ADR-009, SAPRS Ch. 6, 9.2 |
-| 8 — Playback | `encore/playback/` | ADR-005, ADR-011, SAPRS Ch. 7 |
-| 9 — Queue | `encore/services/queue_service.py` | ADR-011, SAPRS Ch. 8 |
+| 11 — FastAPI | `encore/api/`, `apps/server/` | SAPRS Ch. 10, ADR-012 |
+| 12 — HTMX | `encore/controllers/`, `encore/templates/`, `encore/static/` | SAPRS Ch. 9, ADR-002 |
+| 13 — SSE | `encore/services/sse_publisher.py`, `encore/api/sse.py` | SAPRS 9.10, 10.5 |
 
-The appliance's centre now exists: a guest's text becomes a set of songs, a song becomes a
-queue item, a queue item becomes sound from mpv, and the end of that sound becomes the next
-item. All three are exercised against both real databases.
+Steps 10 (runtime database) and the runtime half of the AIG's list were already done in phase 2
+and 3 respectively; this phase's job was to make them *reachable*.
 
-**Search** is `parse()` + `SearchService`. The parser is where the value is: it turns
-`AC/DC: Thunderstruck` into `"ac"* "dc"* "thunderstruck"*` — word runs, prefix only for
-tokens of two characters or more, eight tokens maximum, deduplicated in order — and it does
-that by building quoted phrases out of ordinary characters rather than escaping, so SQLite's
-own operators (`AND`, `OR`, `NEAR`, `"`, `*`, brackets) cannot arrive from a text field. The
-service holds no SQL: every statement stays in `repositories/library/queries.py`, and a
-guardrail test parses string literals to keep it that way. `SearchUnavailable` is distinct
-from an empty result set (SAPRS 11.2), because "nobody matches" and "search cannot happen"
-are different things to tell a guest.
+**Composition** is `apps/server/appliance.py::build()`: it opens both stores, wires the bus,
+the queue, the player, the supervisor, health, search and the publisher into one object, and
+starts them in the order the facts require — subscriptions before the queue's re-adoption, the
+queue before mpv, the player before the tick loop. `stop()` unwinds it. Every test that needs a
+server calls this through `tests/support/appliances.py::composed_appliance()` with a fake
+launcher, so the shipped wiring is the wiring under test rather than a parallel copy of it.
 
-**Playback** is five modules with one responsibility each — `ipc.py` (socket, framing,
-process), `player.py` (mpv properties → `EngineObservation`), `service.py` (SAPRS 7.3's
-machine and its events), `supervisor.py` (the process monitor), `transition.py` (gapless and
-crossfade policy). The engine is observed by `tick()` at ~1 Hz rather than by subscribing to
-mpv events, which is deterministic, survives a socket that missed a line, and is what makes
-`MockMpv` a faithful double instead of a lucky one.
+**The thread boundary** is one function: `encore/api/deps.py::read()` awaits
+`encore/utilities/appliance.py::call_async()`, which hands a closure to the appliance thread and
+raises `ApplianceNotRunning` or `WrongThreadError` if the arrangement is broken. ADR-012 argued
+for it; this phase is where it stopped being theoretical. `ApplianceThread.worker_ident` exists
+because a guardrail that cannot name the thread that answered a request is a comment — the
+integration assertion asks a served response which thread did the work.
 
-**The queue** is `QueueService`: strict FIFO, duplicates allowed, the ceiling enforced inside
-the transaction that would otherwise break it, and settlement by outcome —
+**The HTTP layer** splits the way the AIG asks: `api/` (app, deps, errors, html, schemas,
+views, rows, sse, fragments) holds mechanisms, `controllers/` (browse, panels, queue) holds
+routes. `errors.py` is a single table from exception to status to code, so a failure says the
+same kind of word wherever it happens; `rows.py` is the batched label read that keeps a page at
+two statements rather than `3 × rows`, which is what the 100 ms search budget leans on;
+`views.py` builds contexts and nothing else. Templates contain presentation only, and the one
+piece of client JavaScript is the SSE bridge.
 
-| `FinishedReason` | Queue item becomes | Plays on? |
-| ---------------- | ---------------- | --------- |
-| `COMPLETED` | `FINISHED` | yes |
-| `SKIPPED` | `SKIPPED` | no |
-| `FAILED` | `REMOVED` | no |
-| `STOPPED` | back to `PENDING`, at the head | no |
+**The UI** is a shell with two named swap regions — `swap:player` and `swap:alerts` — htmx
+vendored at `static/vendor/htmx/htmx.min.js`, hand-written CSS, and `POST /queue` answering with
+the new Up Next rather than a redirect. A guest's second press says "Added at 2" when a song is
+already playing, and the wording comes from the queue item's status rather than from what the
+player happened to be doing, which is SAPRS 9.7 and was a bug before it was a sentence.
 
-It commands the player directly through a `Player` protocol it declares itself, and learns
-what happened through `SongFinished` and `PlaybackRecovered`. That asymmetry is ADR-011,
-which is the phase's one architectural decision and is now written.
+**SSE** is `SSEPublisher`: one bounded queue (32 frames) per connection, a `snapshot` frame
+first so a late join needs no replay, facts named by their class so the wire vocabulary cannot
+drift from `EVENT_VOCABULARY`, `progress` once a second, `resync` when a stream stalls, and
+region HTML rendered *once per fact* for every screen rather than once per screen. A fact and a
+region are separate frames on purpose: a JSON client should not parse HTML, and a screen should
+not wait on a database it cannot see.
 
-## Verification state
+## Numbers
 
-- `scripts/check.sh` — all gates pass: ruff (lint + format), yamllint, markdownlint, secret
-  scan, mypy strict, **925 tests**, 93.4% coverage.
-- `scripts/check.sh --slow` — **955 pass, 3 skip** on this machine, which has mpv. On one that
-  does not, the same run is 946 pass and 12 skip: the three permanent skips are HTMX and SSE
-  budgets whose subsystems do not exist, and the other nine are `test_real_mpv.py`. The slow
-  run passes `--no-cov`: coverage tracing inflates
-  SQLite-heavy work by ~3× and would fail the queue's budget for a reason unrelated to the
-  code (see `docs/Developer/Testing.md`).
-- Measured, untraced, on the reference machine: enqueue **~11 ms** p95, removal **~23 ms**,
-  queue advance **~43 ms** against a 50 ms budget (thin, and said so in the test), playback
-  start **~18 ms** for Encore's share of the 250 ms. Search is still ~8 ms p95 over 1,500
-  songs from phase 2. Three of SAPRS 1.8's five budgets are numbers now; two are skips that
-  name their milestone.
-- Package coverage: `encore/search/` 98.6%, `encore/playback/` 93.0%,
-  `encore/services/` 98.3% (`queue_service.py` 97.4%), `encore/domain/queue.py` and
-  `repositories/runtime/queue.py` 100%. SAPRS 14.16 wants 95% for queue and search and 90%
-  for playback; the lowest module is `ipc.py` at 90.0%, whose misses are the socket-wait and
-  kill-escalation branches that only a real, slow mpv exercises — and which are the same lines
-  whether or not the binary is installed, because `test_real_mpv.py` is marked `slow` and so is
-  not in the gate these numbers come from.
-- New tests: 225 of them across 13 files — see `tests/unit/test_search_*.py`,
-  `test_playback_*.py`, `test_mpv_player.py`, `test_queue_service.py`,
-  `tests/integration/test_queue_playback_and_search.py`,
-  `tests/integration/test_real_mpv.py`,
-  `tests/regression/test_issue_23_search_playback_queue.py`,
-  `tests/performance/test_runtime_latency.py` and
-  `tests/party_simulation/test_queue_and_playback.py`.
-- **The mutation checks that mattered this phase**: make `SETTLEMENT[STOPPED]` advance the
-  queue and `test_a_stop_leaves_the_song_at_the_head_and_starts_nothing` fails; mark an item
-  `PLAYING` after the load instead of before and the twenty-broken-files test hangs its own
-  loop and fails; publish `PlaybackRecovered` before `SongFinished` and the crash-order
-  regression fails; stop clearing `eof-reached` in `MockMpv._loadfile` and a party of 200
-  advances in one tick, which `test_mpv_mock.py` now catches first. The real-mpv fixes were
-  checked the same way rather than trusted: delete the `0700` chmod on the run directory and
-  both `test_the_socket_directory_is_private_before_mpv_is_asked_for_it` (no binary needed) and
-  `test_the_socket_is_ours_alone` (with one) go red; unwrap the `socket_path_for` call in
-  `MpvLauncher.launch` and the new launch-failure test raises `NotADirectoryError` through the
-  place the supervisor watches for `MpvGoneError`. Ignore mpv's `end-file` verdict and
-  `test_a_refusal_mpv_names_is_a_failure_without_waiting_for_the_grace` fails; keep the verdict
-  out of `_awaiting_load`, so that it is drained and lost while the appliance waits, and both it
-  and `test_a_track_shorter_than_one_poll_is_a_completion_not_a_failure` fail — one in each
-  direction, which is the point of having both.
+1109 tests pass in the standard gate (`scripts/check.sh`), 1146 with the slow suites
+untraced;
+9 skip for want of `--run-slow`, 1 for the missing Party Simulation driver. Coverage of
+`encore/` is **92.7%**; `fail_under` remains 0 as it was set at bootstrap and the raising of it
+is a decision for milestone 15's PR rather than a side effect of this one.
 
-## Explicitly not in this phase
+Reference p95s from the development machine (ARM64, untraced), all inside SAPRS 1.8's budgets:
 
-No HTTP, no templates, no SSE, no admin UI, no installer, and **no composition root**:
-`build_core_services()` still builds config and logging only. Nothing in this phase has ever
-run inside a process that also serves a request — the integration tests wire the graph by
-hand, and `tests/integration/test_queue_playback_and_search.py` is the pattern
-`apps/server/` should copy rather than reinvent.
+| Budget | Target | Measured |
+| ------ | ------ | -------- |
+| Search page | 100 ms | 13.6 ms |
+| Queue mutation | 50 ms | 34.6 ms |
+| Navigation fragment | 200 ms | 9.5 ms |
+| SSE propagation, one fact → 40 screens | 1 s | 8.7 ms wall, 1.3 ms per screen |
 
-No ninth event. `SongFinished` grew a `completion` field instead, which is why
-`tests/unit/test_events.py`'s "exactly eight" assertion still passes and why ADR-004 needed
-no amendment.
+The last row improved 10× during this phase, and not because of a faster machine: the fan-out
+moved off the appliance thread onto the event loop, which is ADR-012's argument working as
+designed. `tests/performance/test_performance_targets.py`'s `UNIMPLEMENTED` list is now empty —
+every named budget has a measurement or an explicit skip reason.
 
-`HealthService` and `StatisticsService` are still absent (AIG 7 lists them): the supervisor
-has a `health()` that returns `ComponentHealth`, and nothing publishes `HealthChanged` from
-a running application yet. Wiring those is a milestone-11/14 job with a rule attached — the
-service that owns a fact publishes it, and the queue must not.
+## Ten defects, and what they were only visible in
 
-`LibraryService` likewise: the queue reads through `LibraryStore` and `SongLookup` directly,
-which is honest for now and the first thing to revisit if a second reader appears.
+All eleven are in `tests/regression/test_issue_25_http_runtime.py` with the table in its
+docstring. The pattern is worth naming for the next phase: nine of them passed every unit test that
+existed, and all ten were found by asking *the running appliance* for something rather than
+asking a component about itself. Three were disagreements between two modules about a name
+(`entry.item` versus `item.status`), which no single-module test can see; one was a library's
+behaviour rather than ours (`request.is_disconnected()` competing with `sse-starlette`'s own
+listener for the single `http.disconnect` message); one was a probe reading two attributes that
+do not exist, found by starting the composition root against a real database.
 
-## Next
+The eleventh is different in kind: `hx-swap="find .row-status"`, found while documenting the
+vendored htmx, in a template no test had ever parsed. `tests/unit/test_templates.py` is the
+guard — a text check, because the suite has no browser and cannot execute 50 kB of
+minified htmx to find out whether a swap style is real. The front end’s contract is now
+written down in [`docs/Developer/Frontend.md`](../docs/Developer/Frontend.md).
 
-**AIG steps 10–13: the runtime database is already done, so step 11 (FastAPI) is next**, with
-`apps/server/` as the composition root that this phase's tests describe. There is no issue for
-it; per CONTRIBUTING §2, open one before branching.
+## Deviations, stated plainly
 
-What is already decided that the next session can lean on:
+- **No Tailwind.** AIG 13 lists it; Encore ships 540 lines of hand-written CSS. An offline
+  appliance cannot fetch a CDN, and a build step between a tarball and a running jukebox is a
+  step that can be missing. Reversible without touching template structure. Recorded in
+  ADR-012's consequences.
+- **htmx's SSE extension is not used.** `encore-live.js` owns the one `EventSource`, so there is
+  one reconnect policy and one resync path rather than one per region attribute.
+- **`sse-starlette` is a dependency** for the response plumbing and disconnect detection only;
+  the frames are ours.
 
-- The graph to build is in `tests/integration/test_queue_playback_and_search.py`'s `Rig`:
-  open both stores, build `SearchService`, `MpvPlayer(supervisor.channel)`,
-  `PlaybackService(recovery=supervisor)`, `supervisor.bind(playback)`,
-  `QueueService(store, library, player=playback, events)`, then `queue.start()`. Close in the
-  opposite order. Do not invent a second wiring path in the server.
-- `queue.start()` restores a `PLAYING` row from a dead process to `PENDING` and does **not**
-  start audio (SAPRS 8.6: a restart preserves the queue, it does not resume a party).
-- Playback's `tick()` needs a home. It belongs to a background task in the server, not to a
-  request handler; nothing about a guest's HTTP request should wait on mpv.
-- `EventBus` is synchronous (ADR-004), so `enqueue()` returning "you are playing now" is
-  true rather than optimistic. An async bus would make ADR-011's command/notify split wrong,
-  and that is the change to argue about in an ADR before writing.
-- Search's page size and the `/api/v1/search` shape are undecided; `SearchService` takes
-  `limit` per call and `page_size` at construction.
+## What the next phase inherits
 
-## Loose ends
-
-- **This PR closes [#23](https://github.com/clydepro/encore/issues/23)**, deliberately, in the
-  sense phase 2 meant it: the issue's acceptance criteria are all implemented. Steps 10–17
-  still have no issues.
-- **`encore/playback/` has been run against a real mpv** (0.35.1 here, 0.37.0 on the nightly
-  CI runner, both `--ao=null`, headless), in
-  `tests/integration/test_real_mpv.py`, which skips wherever the binary is absent. It found
-  four defects that every mocked test passed over — see ADR-005's new `Implementation notes`
-  and the regression file — and fixed them: an unsupported launch option that made mpv exit
-  before opening a socket, an accepted-but-not-yet-open `loadfile` being read as a finished
-  track, a socket leaked per engine restart, and a refusal that only mpv's `end-file` event can
-  tell apart from a track that ended between two polls (the third one made this file's own suite
-  flaky three passes in four until the fourth fix landed). A fifth came from tidying up after
-  that run rather than from mpv: a `paths.temp_dir` the appliance cannot prepare raised a bare
-  `OSError` out of `MpvLauncher.launch()`, which the supervisor does not catch, so a typo in one
-  config key was a traceback from a timer instead of the named launch failure the other paths
-  raise. Still unproven against hardware: the actual audio path (ALSA device names, USB DACs),
-  which is milestone 15's bring-up.
-- **The advance benchmark has a 7 ms margin.** ~43 ms p95 against 50 ms, with WAL checkpoints
-  as the spikes. If it goes red on CI, the answer is fewer writes per advance, not a bigger
-  number (AEP 14, and SAPRS 1.8 owns the budget).
-- **`_MAX_WALK`'s error log is unreachable by design**: 1,000 consecutive items that all fail
-  to start. It is not tested, and it should not be — the test would be a fixture that fakes
-  the one situation the guard exists for.
-- **Crossfade is a fade, not a mix.** One engine, ramped down at the end of one track and up
-  at the start of the next. SAPRS 7.8 says "configurable crossfade", `audio.crossfade_seconds`
-  says more than the code does, and `transition.py`'s docstring is the authority. A second
-  deck is 1.2's work (SAPRS 16.4) and its own ADR.
-- **`QueueService` does not publish `QueueAdvanced` for pause and resume**, and no test
-  asserts that it should: SAPRS 8.9 lists the events, and a pause is not an advance. If the
-  UI needs a "paused" fact, that is a `SongStarted`-shaped decision and belongs in an ADR
-  with the eighth event's vocabulary, not in a handler.
-- **Human review is still a norm, not a gate** — `required_approving_review_count` is 0
-  because GitHub will not let a sole maintainer approve their own PR.
+1. **Admin (milestone 14)** — login, dashboard, playback controls, queue management, statistics,
+   log tail, configuration summary, library info, plus `DELETE /api/v1/queue/{id}` and
+   `POST /admin/library/reload`. The controls exist as services (`PlaybackService.pause/resume/
+   skip/stop`, `QueueService.remove`) and are reachable only through the appliance thread; the
+   routes are the new part, and they need the session machinery SAPRS 10.6 describes.
+2. **`/api/v1/stats`** — `StatisticsService` is in the AIG's core list and is not implemented.
+   The playback history it reads is already written (`runtime.db`).
+3. **QR (`/qr`)** — deferred by decision, so that the poster encodes the URL the installer
+   actually configured.
+4. **Coverage floor** — raise `fail_under` deliberately, with the number in `docs/Developer/
+   Testing.md`, rather than letting it drift up as a side effect.
+5. **Shared regions in admin pages.** There is no `hx-boost` anywhere — every swap is an
+   explicit attribute, which is worth keeping because a boosted link changes what the fragment
+   behind it has to be. Admin will want the same two regions; the temptation to add a third
+   `alerts`-shaped region rather than reuse `swap:alerts` should be resisted, since the fan-out
+   is per region and the frame budget is the party's.

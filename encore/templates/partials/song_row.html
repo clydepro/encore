@@ -1,0 +1,28 @@
+{#
+One row, in Up Next and everywhere a track is listed (SAPRS 9.6, 9.7).
+
+The form is a form so that a phone whose JavaScript never loaded can still ask for a song:
+`hx-post` is painted over `action`, and the appliance answers both (SAPRS 13.2's "no single
+point of failure" reaches the front end too). The target says where the answer lands — the
+`.row-status` beside the button, reached by walking up from the button and back down, so the
+row stays put and only its one line of feedback moves.
+#}
+<div class="song-row" id="{{ row.key }}">
+  <span class="song-row__position" aria-hidden="true">{{ row.position or "" }}</span>
+  <img class="song-row__art" src="{{ row.artwork_url }}" alt="" width="40" height="40" loading="lazy">
+  <span class="song-row__text">
+    <span class="song-row__title">{{ row.title }}</span>
+    <span class="song-row__subtitle">{{ row.subtitle }}</span>
+  </span>
+  <span class="song-row__length">{{ (row.song.duration if row.song else none) | clock }}</span>
+  <form class="song-row__form" method="post" action="/queue"
+        hx-post="/queue?panels=1"
+        hx-target="find .row-status"
+        hx-swap="innerHTML">
+    <input type="hidden" name="song_id" value="{{ row.song.id if row.song else "" }}">
+    <button class="song-row__add" type="submit"{% if not row.available %} disabled{% endif %}>
+      Ask
+    </button>
+    <span class="row-status" aria-live="polite"></span>
+  </form>
+</div>

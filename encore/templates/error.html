@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ failure.status }} · Encore</title>
+<link rel="stylesheet" href="/static/css/encore.css">
+<body class="shell shell--error">
+  <main class="shell__main">
+    <h1 class="error__heading">{{ failure.message }}</h1>
+    <p class="error__code">{{ failure.code }} · {{ failure.status }}</p>
+    {% include "partials/error.html" %}
+    <p><a class="button" href="/">Back to the jukebox</a></p>
+  </main>
+</body>
+</html>

@@ -329,6 +329,18 @@ class QueueService:
         with self._store.unit_of_work() as work:
             return len(work.queue.active())
 
+    @property
+    def max_items(self) -> int:
+        """The ceiling in force (`queue.max_items`).
+
+        Exposed because SAPRS 8.4 permits a maximum only if it is "explicit and
+        user-visible", and a screen is where it becomes visible. A refusal already
+        names the number; this is what lets a queue at 180 of 200 say so before anyone
+        is turned away.
+        """
+
+        return self._config.max_items
+
     def active(self) -> list[QueueItem]:
         with self._store.unit_of_work() as work:
             return work.queue.active()

@@ -28,6 +28,7 @@ their original wording and formatting are never rewritten by a tool.
 | Getting started | Contributors | [`Developer/Getting-Started.md`](Developer/Getting-Started.md) |
 | Developer handbook | Contributors | [`Developer/README.md`](Developer/README.md) |
 | Testing guide | Contributors | [`Developer/Testing.md`](Developer/Testing.md) |
+| Front end | Contributors | [`Developer/Frontend.md`](Developer/Frontend.md) |
 | CI and quality gates | Contributors | [`Developer/Continuous-Integration.md`](Developer/Continuous-Integration.md) |
 | Repository administration | Maintainers | [`Developer/Repository-Administration.md`](Developer/Repository-Administration.md) |
 | Release process | Maintainers | [`Developer/Release-Process.md`](Developer/Release-Process.md) |
