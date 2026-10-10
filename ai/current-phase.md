@@ -1,7 +1,8 @@
 # Current Phase
 
 **Phase 4 — runtime composition, HTTP, HTMX, SSE (AIG steps 11, 12, 13): implemented on
-`feat/25-runtime-server-htmx-sse`, open as a pull request against `main` for issue
+`feat/25-runtime-server-htmx-sse`, as
+[PR #26](https://github.com/clydepro/encore/pull/26) against `main`, closing issue
 [#25](https://github.com/clydepro/encore/issues/25).** Phases 1–3 are merged:
 [PR #20](https://github.com/clydepro/encore/pull/20) (domain, bus, configuration),
 [PR #22](https://github.com/clydepro/encore/pull/22) (repositories, Builder — closed #19) and

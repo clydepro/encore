@@ -7,7 +7,8 @@ task request → SAPRS → AIG → ADRs → AEP (AEP 2). This page is a pointer,
 and it will be wrong faster than the SAPRS is.
 
 State as of this writing: **Phases 1–3 are merged (#20, #22, #24); this branch is the fourth**
-and sits on `main` at `4d30b42` as `feat/25-runtime-server-htmx-sse`, for issue
+and sits on `main` at `4d30b42` as `feat/25-runtime-server-htmx-sse`, as
+[PR #26](https://github.com/clydepro/encore/pull/26), for issue
 [#25](https://github.com/clydepro/encore/issues/25). The appliance runs: it serves pages,
 fragments, a versioned JSON API and an SSE stream over the composed graph, against real
 databases and a fake mpv. 1109 tests pass in the standard gate, 1146 with the slow
