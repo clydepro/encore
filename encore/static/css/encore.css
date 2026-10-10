@@ -1,0 +1,540 @@
+/* Encore's stylesheet: one file, no build step, no framework.
+
+   Three reasons this is hand-written rather than Tailwind-from-a-CDN, in the order they
+   mattered:
+
+   * SAPRS 12.3 puts the appliance on a network with no uplink. A stylesheet fetched from a
+     CDN is a room full of unstyled phones the moment the broadband drops, and the drop is
+     not an outage — for most of the party it is the normal state of a Pi on a shop network.
+   * A utility framework is a build tool or a 300 kB JIT in the browser. This file is about
+     8 kB uncompressed and it is *all* used.
+   * The constraints that matter here are physical: a 44 px touch target (SAPRS 9.2), text
+     readable at a metre in a dark room, and a layout that survives a 320 px phone. Those
+     are nine declarations, not a dependency.
+
+   The AIG lists Tailwind in the stack. This is a deliberate deviation, recorded in
+   ADR-012's consequences and in docs/Developer/Frontend.md rather than discovered here.
+*/
+
+:root {
+  --bg: #0b0d10;
+  --surface: #15181e;
+  --surface-2: #1d2128;
+  --line: #2a2f38;
+  --text: #e8eaed;
+  --muted: #9aa2ad;
+  --accent: #f2b84b;
+  --ok: #4ade80;
+  --warn: #facc15;
+  --bad: #f87171;
+  --radius: 12px;
+  --tap: 44px; /* SAPRS 9.2: the smallest thing a thumb may have to hit */
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f6f7f9;
+    --surface: #fff;
+    --surface-2: #eef0f3;
+    --line: #d6dae0;
+    --text: #14171a;
+    --muted: #5b636e;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* A phone three rooms from the access point renders this before it fetches anything
+     else; the layout must not depend on a script. */
+  -webkit-text-size-adjust: 100%;
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin: 0.5rem 0;
+}
+
+h2 {
+  font-size: 1.05rem;
+  margin: 1.25rem 0 0.5rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+a {
+  color: inherit;
+}
+
+img {
+  display: block;
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+/* -- shell ------------------------------------------------------------- */
+
+.shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.shell__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(6px);
+  z-index: 1;
+}
+
+.shell__brand {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.shell__mark {
+  color: var(--accent);
+  font-size: 1.2rem;
+}
+
+.shell__nav {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.shell__nav a {
+  min-height: var(--tap);
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.7rem;
+  border-radius: 999px;
+  text-decoration: none;
+  color: var(--muted);
+}
+
+.shell__nav a[aria-current="page"],
+.shell__nav a:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.shell__main {
+  flex: 1;
+  padding: 0.9rem;
+  max-width: 46rem;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.shell__foot {
+  padding: 1rem 0.9rem 2rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.shell__dot {
+  margin: 0 0.35rem;
+}
+
+/* -- the alert strip (SAPRS 1.5, 11.9) --------------------------------- */
+
+.alerts {
+  min-height: 0;
+}
+
+.alerts--degraded,
+.alerts--unavailable {
+  border-bottom: 1px solid var(--line);
+  padding: 0.5rem 0.9rem;
+  background: color-mix(in srgb, var(--warn) 16%, var(--surface));
+}
+
+.alerts--unavailable {
+  background: color-mix(in srgb, var(--bad) 18%, var(--surface));
+}
+
+.alerts__line {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+/* -- Now Playing (SAPRS 9.7, 9.8) --------------------------------------- */
+
+.player {
+  display: block;
+}
+
+.now-playing {
+  display: flex;
+  gap: 0.9rem;
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.9rem;
+  margin-bottom: 1rem;
+  min-height: 6.5rem;
+}
+
+.now-playing__art {
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  flex: none;
+}
+
+.now-playing__text {
+  min-width: 0;
+  flex: 1;
+}
+
+.now-playing__label {
+  margin: 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.now-playing__title {
+  margin: 0.15rem 0;
+  font-size: 1.15rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.now-playing__subtitle {
+  margin: 0 0 0.5rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.now-playing--empty {
+  display: block;
+}
+
+.progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.progress__bar {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.9s linear;
+}
+
+.progress__times {
+  display: flex;
+  justify-content: space-between;
+  margin: 0.3rem 0 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+/* -- Up Next and every track list (SAPRS 9.6, 9.9) --------------------- */
+
+.up-next,
+.row-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.up-next__empty {
+  color: var(--muted);
+  padding: 0.5rem 0;
+}
+
+.up-next__more {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.song-row {
+  display: grid;
+  grid-template-columns: 1.6rem 40px 1fr auto auto;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.song-row__position {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+}
+
+.song-row__text {
+  min-width: 0;
+  display: block;
+}
+
+.song-row__title,
+.song-row__subtitle {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.song-row__title {
+  font-size: 0.98rem;
+}
+
+.song-row__subtitle {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.song-row__length {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+}
+
+.song-row__form {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.row-status {
+  font-size: 0.78rem;
+  color: var(--ok);
+}
+
+.added {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.button,
+.song-row__add {
+  min-height: var(--tap);
+  min-width: var(--tap);
+  padding: 0 0.9rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.button:hover,
+.song-row__add:hover {
+  border-color: var(--accent);
+}
+
+.button:active,
+.song-row__add:active {
+  transform: translateY(1px);
+}
+
+:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* -- browse ------------------------------------------------------------ */
+
+.card-list {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: 0.9rem;
+  padding: 0;
+  margin: 0;
+}
+
+.card a {
+  display: block;
+  text-decoration: none;
+}
+
+.card img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  margin-bottom: 0.4rem;
+}
+
+.link-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0;
+  columns: 2;
+  column-gap: 1.5rem;
+}
+
+.link-list li {
+  break-inside: avoid;
+}
+
+.link-list a {
+  display: inline-flex;
+  min-height: var(--tap);
+  align-items: center;
+  text-decoration: none;
+}
+
+.entity__head {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.entity__art {
+  width: 120px;
+  height: 120px;
+  object-fit: cover;
+  flex: none;
+}
+
+.search__form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.field {
+  flex: 1;
+  min-width: 12rem;
+  display: block;
+}
+
+.field__label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.25rem;
+}
+
+.field__input {
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0 0.8rem;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.field__input:focus-visible,
+.button:focus-visible,
+.song-row__add:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.results__group + .results__group {
+  margin-top: 1.25rem;
+}
+
+.search__hint,
+.muted {
+  color: var(--muted);
+}
+
+.pager {
+  display: flex;
+  justify-content: space-between;
+  margin: 1rem 0;
+}
+
+/* -- errors (SAPRS 10.8) ----------------------------------------------- */
+
+.error {
+  border: 1px solid var(--bad);
+  border-radius: var(--radius);
+  padding: 0.8rem;
+  background: color-mix(in srgb, var(--bad) 12%, var(--surface));
+}
+
+.error__line {
+  margin: 0;
+  font-weight: 600;
+}
+
+.error__hint {
+  margin: 0.4rem 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.shell--error .shell__main {
+  padding-top: 2rem;
+}
+
+.error__heading {
+  font-size: 1.3rem;
+  margin: 0 0 0.75rem;
+}
+
+.error__code {
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+}
+
+/* A request that is still on the wire should look busy rather than broken. htmx sets this
+   on the element it triggered; the rule is four lines and it is the difference between
+   "tapped" and "nothing happened" on a slow radio. */
+.htmx-request .song-row__add,
+.htmx-request.button {
+  opacity: 0.6;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress__bar {
+    transition: none;
+  }
+}
+
+/* SAPRS 9.7's two outcomes, distinguishable without reading the words: the song that
+   started is the one the room can hear, and the one that waits is a promise. */
+.added--playing {
+  background: rgba(74, 222, 128, 0.16);
+  color: var(--ok);
+}
+
+.added--queued {
+  background: var(--surface-2);
+  color: var(--muted);
+}

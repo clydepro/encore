@@ -1,0 +1,60 @@
+{#
+Three lists, in SAPRS 9.6's order: artists, albums, tracks.
+
+Each is headed rather than merged into one ranked list, because the ranking that would
+justify a merge is the search service's and it does not claim one across kinds — an artist
+hit and a track hit are different questions answered.
+
+A track row here carries the artist and the album for the same reason: "Song Titles" is a
+list nobody can choose from, and this is the page where choosing happens.
+#}
+{% if not query %}
+  <p class="search__hint">Type at least a few characters.</p>
+{% elif results is none %}
+  <p class="search__hint">Nothing found for “{{ query }}”.</p>
+{% else %}
+  <div class="results">
+    {% if artists %}
+      <section class="results__group">
+        <h2>Artists</h2>
+        <ul class="link-list">
+          {% for artist in artists %}
+            <li><a href="/artists/{{ artist.id }}">{{ artist.name }}</a>
+              <span class="muted">{{ artist.sort_name and "" }}</span></li>
+          {% endfor %}
+        </ul>
+      </section>
+    {% endif %}
+
+    {% if albums %}
+      <section class="results__group">
+        <h2>Albums</h2>
+        <ul class="card-list">
+          {% for album in albums %}
+            <li class="card">
+              <a href="/albums/{{ album.id }}">
+                <img src="/artwork/album/{{ album.id }}" alt="" width="72" height="72" loading="lazy">
+                <span>{{ album.title }}</span>
+              </a>
+            </li>
+          {% endfor %}
+        </ul>
+      </section>
+    {% endif %}
+
+    {% if songs %}
+      <section class="results__group">
+        <h2>Tracks</h2>
+        <ul class="row-list">
+          {% for row in songs %}
+            <li>{% include "partials/song_row.html" %}</li>
+          {% endfor %}
+        </ul>
+      </section>
+    {% endif %}
+
+    {% if not artists and not albums and not songs %}
+      <p class="search__hint">Nothing found for “{{ query }}”. Try fewer words.</p>
+    {% endif %}
+  </div>
+{% endif %}

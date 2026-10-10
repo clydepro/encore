@@ -19,13 +19,15 @@ ci:
 repos:
   # Hygiene: whitespace, EOF, encodings, conflict markers, oversized files.
   # Vendored planning documents keep their exact bytes; a formatter must not
-  # rewrite an upstream specification (see docs/README.md).
+  # rewrite an upstream specification (see docs/README.md), and it must not touch a
+  # third-party asset whose checksum is recorded in encore/static/vendor/NOTICE.md: a
+  # trailing newline is a different file, and the hash is there to be recomputed.
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]
-        exclude: &vendored '^(AGENTS\.md|docs/(SAPRS|AIG|AEP)/.*|docs/ProjectBootstrapKit_PBK\.md)$'
+        exclude: &vendored '^(AGENTS\.md|docs/(SAPRS|AIG|AEP|ProjectBootstrapKit_PBK).*|encore/static/vendor/htmx/.*)$'
       - id: end-of-file-fixer
         exclude: *vendored
       - id: mixed-line-ending

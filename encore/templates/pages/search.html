@@ -1,0 +1,31 @@
+{% extends "shell.html" %}
+{% block title %}Search{% endblock %}
+{% set nav = "search" %}
+{% block main %}
+  <section class="search">
+    <form class="search__form" method="get" action="/search">
+      <label class="field">
+        <span class="field__label">Find a song, artist or album</span>
+        <input
+          class="field__input"
+          type="search"
+          name="q"
+          value="{{ query }}"
+          maxlength="200"
+          autocomplete="off"
+          placeholder="artist, album or track"
+          hx-get="/fragments/search"
+          hx-trigger="keyup changed delay:300ms, search"
+          hx-target="#results"
+          hx-swap="innerHTML"
+          hx-params="q"
+        >
+      </label>
+      <button class="button" type="submit">Search</button>
+    </form>
+
+    <div id="results">
+      {% include "panels/search.html" %}
+    </div>
+  </section>
+{% endblock %}

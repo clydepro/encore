@@ -14,7 +14,9 @@ from __future__ import annotations
 import io
 import json
 import logging
+import subprocess
 import sys
+import textwrap
 from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
@@ -236,27 +238,71 @@ def test_the_queue_rule_survives_the_whole_stack(
     assert core.config.queue.allow_duplicates is True
 
 
-#: Web frameworks the core foundation must never reach (AIG 4).
-FORBIDDEN_IN_CORE: tuple[str, ...] = ("fastapi", "starlette", "jinja2", "uvicorn")
+#: Web frameworks the core foundation must never reach (AIG 4). `sse_starlette` is on the list
+#: beside the others because `SSEPublisher` is a service: the day it learns to import the
+#: library that writes its frames, the runtime's fan-out and the HTTP adapter become the same
+#: module, and ADR-012's one-thread rule loses the seam that makes it checkable.
+FORBIDDEN_IN_CORE: tuple[str, ...] = (
+    "fastapi",
+    "starlette",
+    "jinja2",
+    "uvicorn",
+    "sse_starlette",
+)
 
 
-def test_nothing_in_the_core_imports_the_web(appliance: tuple[CoreServices, io.StringIO]) -> None:
-    """AIG 4: domain services never import FastAPI.
+def test_nothing_in_the_core_imports_the_web() -> None:
+    """AIG 4: domain services never import FastAPI, in a process that ran only the core.
 
-    Asserted against `sys.modules` after exercising the core rather than by grepping
-    source, because the interesting case is a transitive import; the source-level check
-    lives in `test_architecture_guardrails.py`.
+    This used to read the current process's `sys.modules`, which was sound while the suite
+    contained no web tests and became a false alarm the day it did — milestone 11's HTTP tests
+    import Starlette, and a check that fails because of a *legal* import order is a check that
+    gets deleted rather than fixed. It is the same reasoning that already keeps SQLAlchemy out
+    of the list above.
 
-    SQLAlchemy is deliberately *not* in this list. ADR-009 makes it the runtime write
-    store's implementation, so a suite that opens `runtime.db` before this test runs
-    would fail it for a reason the architecture permits — and a test that fails for a
-    legal reason gets deleted rather than fixed. The rule that does hold, that the
-    services reach no ORM of their own, is the source-level one.
+    So the question is asked where it can be answered: a child interpreter imports the core,
+    publishes a fact so that nothing lazy is left un-probed, and reports which forbidden names
+    it reached. Nothing outside that process can put a web framework in its modules, and a
+    transitive import anywhere in the dependency graph still surfaces here. The source-level
+    version of the same rule is in `test_architecture_guardrails.py`.
     """
 
-    loaded = {name for name in sys.modules if name.split(".")[0] in FORBIDDEN_IN_CORE}
+    script = textwrap.dedent(
+        f"""
+        import json, sys
+        sys.path.insert(0, {str(REPO_ROOT)!r})
+        from encore.domain import QueueItemId, SongId
+        from encore.events import EventBus, SongQueued
+        from encore.services import build_core_services
 
-    assert not loaded, f"the core foundation pulled in {sorted(loaded)}"
+        core = build_core_services(path={str(CONFIG)!r})
+        core.logging.remove()
+        core.events.publish(
+            SongQueued(
+                song_id=SongId(1),
+                queue_item_id=QueueItemId(1),
+                position=1,
+                queue_length=1,
+            )
+        )
+        EventBus()
+        forbidden = set({str(list(FORBIDDEN_IN_CORE))!r})
+        reached = {{name.split(".")[0] for name in sys.modules}}
+        print(json.dumps(sorted(reached & forbidden)))
+        """
+    )
+
+    finished = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=REPO_ROOT,
+    )
+
+    assert finished.returncode == 0, finished.stderr
+    reached = json.loads(finished.stdout.strip())
+    assert reached == [], f"the core foundation reached {reached}"
 
 
 def test_the_process_can_be_shut_down_and_started_again(

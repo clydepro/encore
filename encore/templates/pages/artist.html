@@ -1,0 +1,39 @@
+{% extends "shell.html" %}
+{% block title %}{{ artist.name }}{% endblock %}
+{% set nav = "artist" %}
+{% block main %}
+  <section class="entity">
+    <header class="entity__head">
+      <img class="entity__art" src="/artwork/artist/{{ artist.id }}" alt="" width="120" height="120" loading="lazy">
+      <div>
+        <h1>{{ artist.name }}</h1>
+        {% if artist.sort_name and artist.sort_name != artist.name %}
+          <p class="muted">listed as {{ artist.sort_name }}</p>
+        {% endif %}
+      </div>
+    </header>
+
+    {% if albums %}
+      <h2>Albums</h2>
+      <ul class="card-list">
+        {% for album in albums %}
+          <li class="card">
+            <a href="/albums/{{ album.id }}">
+              <img src="/artwork/album/{{ album.id }}" alt="" width="96" height="96" loading="lazy">
+              <span>{{ album.title }}</span>
+                          </a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+
+    {% if tracks %}
+      <h2>Tracks</h2>
+      <ul class="row-list">
+        {% for row in tracks %}
+          <li>{% include "partials/song_row.html" %}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </section>
+{% endblock %}

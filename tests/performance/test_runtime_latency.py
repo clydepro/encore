@@ -21,10 +21,8 @@ Run with `--run-slow`. Percentiles are nearest-rank, not interpolated: with 200 
 from __future__ import annotations
 
 import logging
-import sys
 import time
 from collections.abc import Callable, Iterator
-from typing import Final
 
 import pytest
 
@@ -36,22 +34,17 @@ from encore.repositories.library import LibraryStore
 from encore.repositories.runtime import RuntimeStore
 from encore.search import SearchService
 from encore.services.queue_service import QueueService
+from tests.support.latency import OPERATIONS, require_untraced, timed
+from tests.support.latency import p95 as latency_p95
 from tests.support.mpv import MockMpv
 
 pytestmark = [pytest.mark.slow, pytest.mark.performance]
 
 
-def _traced() -> bool:
-    """Whether something is stepping through every line we execute.
+def _p95(samples: list[float]) -> float:
+    """`tests.support.latency.p95`, under the name the assertions below read with."""
 
-    Coverage tracing is not a small overhead on this file: the queue's work is SQLite writes,
-    and traced, the same 200 advances measure 141 ms p95 instead of 43 ms. A budget test that
-    fails because the runner is instrumenting it teaches people to delete budget tests, so the
-    suite says honestly that it is not measuring and lets the run continue. `scripts/check.sh
-    --slow` and the scheduled workflow are where these numbers are enforced, untraced.
-    """
-
-    return sys.gettrace() is not None or "coverage" in sys.modules
+    return latency_p95(samples)
 
 
 def _require_untraced() -> None:
@@ -61,21 +54,13 @@ def _require_untraced() -> None:
     instrumented by this call.
     """
 
-    if _traced():
-        pytest.skip("wall-clock budgets are meaningless under a coverage tracer (AEP 14)")
+    require_untraced()
 
 
-#: Operations per sample set. 200 is `queue.max_items` on the shipped default, so the last
-#: enqueue is measured against a nearly full queue rather than an empty one — the expensive
-#: end, and the end a party spends most of its time at.
-OPERATIONS: Final = 200
+def _samples(operation: Callable[[], object], *, repeats: int = OPERATIONS) -> list[float]:
+    """Time `operation` `repeats` times, dropping the first as warm-up."""
 
-
-def _p95(samples: list[float]) -> float:
-    """The nearest-rank 95th percentile, in milliseconds."""
-
-    ordered = sorted(samples)
-    return ordered[min(len(ordered) - 1, int(0.95 * (len(ordered) - 1)))]
+    return timed(operation, repeats=repeats)
 
 
 class Rig:
@@ -136,19 +121,6 @@ def rig(library_store: LibraryStore, runtime_store: RuntimeStore) -> Iterator[Ri
         yield made
     finally:
         made.close()
-
-
-def _samples(operation: Callable[[], object], *, repeats: int = OPERATIONS) -> list[float]:
-    """Time `operation` `repeats` times, dropping the first as warm-up."""
-
-    _require_untraced()
-    operation()
-    timings: list[float] = []
-    for _ in range(repeats):
-        started = time.perf_counter()
-        operation()
-        timings.append((time.perf_counter() - started) * 1_000.0)
-    return timings
 
 
 # -- queue: p95 < 50 ms (SAPRS 1.8, AIG 19) ------------------------------

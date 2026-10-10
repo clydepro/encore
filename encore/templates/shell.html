@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  {#
+  The one shell every guest page is drawn in (SAPRS 9.3).
+
+  Two things are true of this file and worth stating where they are:
+
+  * Everything a guest needs is server-rendered. No JavaScript has to run for the queue,
+    the search results or an album to be readable — the `htmx.min.js` and `encore-live.js`
+    at the bottom make it *live*, not *functional*. That is ADR-002's argument in markup,
+    and on a phone with a bad signal it is the difference between a jukebox and a spinner.
+  * Both live regions have stable `id`s and no other element owns them. `encore-live.js`
+    and `encore/controllers/panels.py` are the same list seen from two sides; when they
+    disagree a panel stops updating, quietly, which is why the ids appear in
+    `tests/integration/test_htmx_pages.py` as well as here.
+  #}
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>{% block title %}Encore{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/encore.css">
+    <link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+  </head>
+  <body class="shell">
+    <header class="shell__bar">
+      <a class="shell__brand" href="/">
+        <span class="shell__mark" aria-hidden="true">♪</span>
+        <span class="shell__brand-name">Encore</span>
+      </a>
+      <nav class="shell__nav" aria-label="Library">
+        <a href="/"{% if nav == "home" %} aria-current="page"{% endif %}>Now</a>
+        <a href="/search"{% if nav == "search" %} aria-current="page"{% endif %}>Search</a>
+        <a href="/artists"{% if nav in ("artists", "artist") %} aria-current="page"{% endif %}>Artists</a>
+      </nav>
+    </header>
+
+    {% include "panels/alerts.html" %}
+
+    <main class="shell__main">
+      {% block main %}{% endblock %}
+    </main>
+
+    <footer class="shell__foot">
+      <p>
+        <span>Encore {{ version }}</span>
+        <span class="shell__dot" aria-hidden="true">·</span>
+        <span>{{ domain }}</span>
+        <span class="shell__dot" aria-hidden="true">·</span>
+        <a href="/docs">API</a>
+      </p>
+    </footer>
+
+    <script src="/static/vendor/htmx/htmx.min.js" defer></script>
+    <script src="/static/js/encore-live.js" defer></script>
+  </body>
+</html>
