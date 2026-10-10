@@ -58,9 +58,9 @@ which is the phase's one architectural decision and is now written.
 ## Verification state
 
 - `scripts/check.sh` — all gates pass: ruff (lint + format), yamllint, markdownlint, secret
-  scan, mypy strict, **917 tests**, 93.3% coverage.
-- `scripts/check.sh --slow` — **947 pass, 3 skip** on this machine, which has mpv. On one that
-  does not, the same run is 938 pass and 12 skip: the three permanent skips are HTMX and SSE
+  scan, mypy strict, **925 tests**, 93.4% coverage.
+- `scripts/check.sh --slow` — **955 pass, 3 skip** on this machine, which has mpv. On one that
+  does not, the same run is 946 pass and 12 skip: the three permanent skips are HTMX and SSE
   budgets whose subsystems do not exist, and the other nine are `test_real_mpv.py`. The slow
   run passes `--no-cov`: coverage tracing inflates
   SQLite-heavy work by ~3× and would fail the queue's budget for a reason unrelated to the
@@ -77,7 +77,7 @@ which is the phase's one architectural decision and is now written.
   kill-escalation branches that only a real, slow mpv exercises — and which are the same lines
   whether or not the binary is installed, because `test_real_mpv.py` is marked `slow` and so is
   not in the gate these numbers come from.
-- New tests: 208 of them across 13 files — see `tests/unit/test_search_*.py`,
+- New tests: 225 of them across 13 files — see `tests/unit/test_search_*.py`,
   `test_playback_*.py`, `test_mpv_player.py`, `test_queue_service.py`,
   `tests/integration/test_queue_playback_and_search.py`,
   `tests/integration/test_real_mpv.py`,
@@ -89,7 +89,16 @@ which is the phase's one architectural decision and is now written.
   `PLAYING` after the load instead of before and the twenty-broken-files test hangs its own
   loop and fails; publish `PlaybackRecovered` before `SongFinished` and the crash-order
   regression fails; stop clearing `eof-reached` in `MockMpv._loadfile` and a party of 200
-  advances in one tick, which `test_mpv_mock.py` now catches first.
+  advances in one tick, which `test_mpv_mock.py` now catches first. The real-mpv fixes were
+  checked the same way rather than trusted: delete the `0700` chmod on the run directory and
+  both `test_the_socket_directory_is_private_before_mpv_is_asked_for_it` (no binary needed) and
+  `test_the_socket_is_ours_alone` (with one) go red; unwrap the `socket_path_for` call in
+  `MpvLauncher.launch` and the new launch-failure test raises `NotADirectoryError` through the
+  place the supervisor watches for `MpvGoneError`. Ignore mpv's `end-file` verdict and
+  `test_a_refusal_mpv_names_is_a_failure_without_waiting_for_the_grace` fails; keep the verdict
+  out of `_awaiting_load`, so that it is drained and lost while the appliance waits, and both it
+  and `test_a_track_shorter_than_one_poll_is_a_completion_not_a_failure` fail — one in each
+  direction, which is the point of having both.
 
 ## Explicitly not in this phase
 
@@ -141,15 +150,17 @@ What is already decided that the next session can lean on:
   still have no issues.
 - **`encore/playback/` has been run against a real mpv** (0.35.1, `--ao=null`, headless), in
   `tests/integration/test_real_mpv.py`, which skips wherever the binary is absent. It found
-  three defects that every mocked test passed over — see ADR-005's new `Implementation notes`
+  four defects that every mocked test passed over — see ADR-005's new `Implementation notes`
   and the regression file — and fixed them: an unsupported launch option that made mpv exit
   before opening a socket, an accepted-but-not-yet-open `loadfile` being read as a finished
-  track, and a socket leaked per engine restart. A fourth came from tidying up after that run
-  rather than from mpv: a `paths.temp_dir` the appliance cannot prepare raised a bare `OSError`
-  out of `MpvLauncher.launch()`, which the supervisor does not catch, so a typo in one config
-  key was a traceback from a timer instead of the named launch failure the other paths raise.
-  Still unproven against hardware: the actual audio path (ALSA device names, USB DACs), which
-  is milestone 15's bring-up.
+  track, a socket leaked per engine restart, and a refusal that only mpv's `end-file` event can
+  tell apart from a track that ended between two polls (the third one made this file's own suite
+  flaky three passes in four until the fourth fix landed). A fifth came from tidying up after
+  that run rather than from mpv: a `paths.temp_dir` the appliance cannot prepare raised a bare
+  `OSError` out of `MpvLauncher.launch()`, which the supervisor does not catch, so a typo in one
+  config key was a traceback from a timer instead of the named launch failure the other paths
+  raise. Still unproven against hardware: the actual audio path (ALSA device names, USB DACs),
+  which is milestone 15's bring-up.
 - **The advance benchmark has a 7 ms margin.** ~43 ms p95 against 50 ms, with WAL checkpoints
   as the spikes. If it goes red on CI, the answer is fewer writes per advance, not a bigger
   number (AEP 14, and SAPRS 1.8 owns the budget).

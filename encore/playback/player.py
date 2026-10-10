@@ -64,12 +64,19 @@ class EngineObservation:
         duration: The file's length, zero when mpv has not decoded a header yet.
         filename: The loaded file, empty when idle. Compared against what the service
             asked for, which is how a load that silently did nothing is caught.
+        end_verdict: mpv's own account of the file it last let go of, from its `end-file`
+            event: `"error"` when it could not open it, `"eof"` when it reached the end.
+            None when the engine has said nothing of the kind — which is what a double says,
+            and what a real mpv says while it is still holding a file.
+        end_detail: mpv's `file_error` text behind an `"error"` verdict, for the log.
     """
 
     state: PlaybackState = PlaybackState.IDLE
     position: timedelta = timedelta(0)
     duration: timedelta = timedelta(0)
     filename: str = ""
+    end_verdict: str | None = None
+    end_detail: str | None = None
 
     @property
     def has_file(self) -> bool:
@@ -78,6 +85,10 @@ class EngineObservation:
     @property
     def finished(self) -> bool:
         return self.state is PlaybackState.FINISHED
+
+    @property
+    def refused(self) -> bool:
+        return self.end_verdict == "error"
 
 
 class MpvPlayer:
@@ -149,11 +160,14 @@ class MpvPlayer:
         filename = _text(channel, "filename")
         position = _seconds(channel, "time-pos")
         duration = _seconds(channel, "duration")
+        verdict, detail = _end_verdict(channel)
         return EngineObservation(
             state=_derive(idle=idle, paused=paused, eof=eof, has_file=bool(filename)),
             position=position,
             duration=duration,
             filename=filename,
+            end_verdict=verdict,
+            end_detail=detail,
         )
 
     def properties(self) -> dict[str, Any]:
@@ -194,6 +208,47 @@ def _read(channel: CommandChannel, name: str) -> Any:
 
 def _flag(channel: CommandChannel, name: str) -> bool:
     return bool(_read(channel, name))
+
+
+def _end_verdict(channel: CommandChannel) -> tuple[str | None, str | None]:
+    """What mpv said about the file it last released, and why, if it said why.
+
+    `end-file` is the only place the engine distinguishes the two endings the polled
+    properties cannot: a file it played to the end inside one polling interval, and a file it
+    could not demux at all. Both leave it idle with no filename and no position — measured on
+    mpv 0.35.1, where the readings are identical and only the event differs, `reason: "eof"`
+    against `reason: "error"` with a `file_error` string.
+
+    This does not make playback event-driven; ADR-005's ~1 Hz observation stands, and the
+    properties still decide everything that is still in progress. The events are a by-product
+    of the property reads, which `JsonIpc` keeps rather than dropping for exactly this reason,
+    consulted once per reading. Only `"eof"` and `"error"` are verdicts: mpv also reports
+    `"stop"` (we asked) and `"redirect"` (its own retry of the same entry), which say nothing
+    about a track Encore is waiting to hear the end of.
+
+    A drained queue is seen once, so a caller that ignores a verdict loses it; that is why
+    `PlaybackService` looks for one before choosing to keep waiting.
+    """
+
+    poll = getattr(channel, "poll_events", None)
+    if not callable(poll):
+        return None, None
+    events: list[Any] = poll()
+    verdict: str | None = None
+    detail: str | None = None
+    for event in events:
+        if not isinstance(event, dict) or event.get("event") != "end-file":
+            continue
+        reason = str(event.get("reason", ""))
+        if reason in ("eof", "error"):
+            verdict = reason
+            error = event.get("file_error")
+            # mpv 0.35 carries the reason for a refusal as a string in `file_error`; other
+            # builds use a boolean flag and put the text in the log instead.
+            detail = error if isinstance(error, str) and error else None
+            if reason == "error" and detail is None:
+                detail = "mpv gave no reason"
+    return verdict, detail
 
 
 def _text(channel: CommandChannel, name: str) -> str:

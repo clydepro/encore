@@ -94,6 +94,16 @@ directory, `0600` on the socket once it appears, which is also the least-privile
 answer (AEP 17). No minimum mpv version is pinned here; that is the installer's
 decision (SAPRS 7.7), and the code is written so that no version floor is needed.
 
+**Poll the engine; believe its events.** Progress is sampled at ~1 Hz rather than subscribed
+to, as above — but the reads leave `end-file` events sitting in the socket, and one of them is
+worth more than any property. A file the engine refused and a file that played out between two
+polls produce identical readings: idle, no filename, no position. Only `end-file`'s `reason`
+says which, and an appliance that guesses gets to choose between calling a corrupt file a listen
+and calling a 400 ms track a failure. So Encore polls for what is happening and reads the
+engine's own account of what ended, which is not the same thing as becoming event-driven: the
+verdict is drained once per reading, and a build that never emits one is handled by the grace
+period instead.
+
 **A channel owns a descriptor.** Whoever created the socket must be the one that
 closes it, and a restart replaces a channel, so recovering by installing a new one
 without closing the old leaks a descriptor per attempt. Nothing observable is wrong

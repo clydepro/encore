@@ -266,7 +266,7 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Fixed
 
-- Four more defects in the launch path, three of them found by running the finished playback
+- Five more defects in the launch path, four of them found by running the finished playback
   stack against a real mpv rather than against `MockMpv`, and fixed where a mock could not hide
   them again: the unsupported launch option and the leaked socket described above, and a load
   that mpv had accepted but not yet completed being read as an ended track — which answered a
@@ -274,6 +274,15 @@ The release process moves the section into a dated, bracketed version heading.
   a silent appliance. `Loading` is now a state that can last, bounded by a five-second grace
   after which a file mpv never opened is reported as `FAILED`
   (`tests/regression/test_issue_23_search_playback_queue.py`).
+  The fix that grace made necessary was the fifth: a file mpv refuses and a file that finishes
+  between two polls read identically — idle, no filename, no position — so the appliance had no
+  way to tell a corrupt track from a 400 ms one, and whichever rule it picked was wrong half the
+  time. On the real engine the symptom was a test that passed three runs in four. Encore now
+  reads mpv's own `end-file` verdict, which the IPC client had been collecting and discarding:
+  `"error"` ends the wait with `FAILED` in one tick instead of five seconds, `"eof"` is counted
+  as a listen and announced even when the announcement is late, and a build that says nothing
+  falls back to the grace as before. Polling still decides everything in progress; this is the
+  one fact the engine is asked about rather than watched for (ADR-005).
   The fourth came from reading what that run put in front of us rather than from mpv itself: a
   `paths.temp_dir` that cannot be created or tightened raised a bare `OSError` out of
   `MpvLauncher.launch()`, which the supervisor does not catch — so a misconfigured directory

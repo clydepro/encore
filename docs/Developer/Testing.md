@@ -40,7 +40,9 @@ destination (90% overall, 95% domain/queue/search, 90% playback/builder).
 - `library_db` / `runtime_db` — disposable SQLite files;
   `library_db.connect(readonly=True)` proves immutability.
 - `mpv` — a `MockMpv` double; drives commands through the same JSON lines the
-  real IPC client will send.
+  real IPC client will send. It queues events and, like the real transport, *drains*
+  them when the player reads: a test that emits one and then expects `next_event` to
+  still have it will be surprised. Assert through `observe()`, or emit after the read.
 - `media_dir` — an empty directory with the tree structure playback expects.
   Empty by design: a test that needs a file makes one.
 - `music_tree` — a small generated corpus in `<artist>/<album>/` layout.
@@ -101,10 +103,13 @@ cheating because it accepts the same command objects the real client serialises 
 mismatch in the command vocabulary still fails.
 - **Tested again, against the real binary** (`tests/integration/test_real_mpv.py`,
 skipped where mpv is not installed). A mock that answers `loadfile` by setting the
-properties in the same call flatters the design in three specific ways, all of which
+properties in the same call flatters the design in four specific ways, all of which
 were bugs: an unsupported option is fatal at parse time, so the launch never happened;
-a load takes ~150 ms to become visible, so `idle-active=True` is not "finished"; and a
-channel owns a file descriptor, so a restart that replaces one leaks one. Anything that
+a load takes ~150 ms to become visible, so `idle-active=True` is not "finished"; a
+channel owns a file descriptor, so a restart that replaces one leaks one; and a file the
+engine refused is indistinguishable, by polled properties, from a file that played out
+between two reads — only mpv's `end-file` event says which, and a mock that never pushes
+one cannot show that either. Anything that
 asserts a property of *mpv* rather than of Encore belongs here, and where both can prove
 it, both do.
 - **Skipped, with a reason.** Anything whose assertion is about sound arriving: gapless

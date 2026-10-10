@@ -116,8 +116,8 @@ repositories are finished, tested and unused by a running application.
   real databases, including a crash mid-set, a file that cannot be opened, a song that
   left the library, and a process restart.
 - `tests/integration/test_real_mpv.py` — the same stack against the actual mpv binary, for
-  the three ways a synchronous mock flatters the design (launch options, the asynchronous
-  load window, and who closes the socket).
+  the ways a synchronous mock flatters the design (launch options, the asynchronous load
+  window, who closes the socket, and the one question the polled properties cannot answer).
 - `tests/performance/test_runtime_latency.py` and a bounded party in
   `tests/party_simulation/test_queue_and_playback.py`.
 

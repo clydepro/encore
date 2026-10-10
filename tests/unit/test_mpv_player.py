@@ -225,3 +225,103 @@ def test_a_source_that_raises_gone_is_not_swallowed_by_the_flag_helpers(
 
     with pytest.raises(MpvGoneError):
         player.observe()
+
+
+def test_mpvs_verdict_on_a_file_it_refused_arrives_with_the_reading(
+    player: MpvPlayer, mpv: MockMpv
+) -> None:
+    """The properties cannot tell a refused file from a finished one; `end-file` can.
+
+    Measured on mpv 0.35.1: a file whose demux fails leaves the engine idle, with no filename
+    and no position — the same reading a 400 ms track leaves when it ends between two polls.
+    The verdict is the only difference, and it travels with the properties rather than
+    replacing them, because the rest of the design still reads at ~1 Hz (ADR-005).
+    """
+
+    mpv.refuse_file("unrecognized file format")
+
+    observation = player.observe()
+
+    assert observation.end_verdict == "error"
+    assert observation.refused
+    assert observation.end_detail == "unrecognized file format"
+    assert observation.state is PlaybackState.IDLE, (
+        "the verdict adds a fact about the file; it does not hide what the engine is doing"
+    )
+
+
+def test_a_verdict_is_read_once_because_a_socket_drains(player: MpvPlayer, mpv: MockMpv) -> None:
+    """The second reading has nothing to say, which is why the service must act on the first."""
+
+    mpv.refuse_file()
+
+    assert player.observe().refused
+    assert player.observe().end_verdict is None
+
+
+def test_an_engine_that_asks_for_the_file_again_has_not_given_a_verdict(
+    player: MpvPlayer, mpv: MockMpv
+) -> None:
+    """`redirect` and `stop` are mpv's own business.
+
+    A demuxer redirecting to a second entry is a retry of the same request, and a `stop` is a
+    command Encore sent: reporting either as an ending would answer a skip with a fact the
+    queue has already acted on.
+    """
+
+    mpv.emit("end-file", {"reason": "redirect"})
+    mpv.emit("end-file", {"reason": "stop"})
+
+    assert player.observe().end_verdict is None
+
+
+def test_the_last_verdict_in_a_batch_is_the_one_that_counts(
+    player: MpvPlayer, mpv: MockMpv
+) -> None:
+    """Several `end-file` lines can arrive between two readings; the newest describes now."""
+
+    mpv.emit("end-file", {"reason": "eof"})
+    mpv.refuse_file("file not found")
+
+    observation = player.observe()
+
+    assert observation.end_verdict == "error"
+    assert observation.end_detail == "file not found"
+
+
+def test_a_transport_with_no_events_has_no_verdict() -> None:
+    """`CommandChannel` does not require an event surface, so neither does this.
+
+    Keeping `poll_events` off the protocol is the argument ADR-011 makes about `Player`: a
+    double that models commands should not have to model a connection. The cost is that "the
+    engine said nothing" has to be a real answer rather than an `AttributeError`, and this is
+    where that is pinned.
+    """
+
+    class CommandsOnly:
+        def send_command(self, name: str, *args: object) -> Any:  # noqa: ARG002
+            values = {"idle-active": True, "pause": False, "eof-reached": False}
+            return values.get(str(args[0]))
+
+    channel = CommandsOnly()
+    observation = MpvPlayer(lambda: channel).observe()
+
+    assert observation.state is PlaybackState.IDLE
+    assert observation.end_verdict is None
+
+
+def test_a_refusal_without_a_reason_still_names_the_verdict(
+    player: MpvPlayer, mpv: MockMpv
+) -> None:
+    """Some builds flag the failure in `file_error` as a boolean and log the text elsewhere.
+
+    The verdict is the fact Encore acts on; the detail only helps an operator, and "mpv gave no
+    reason" is a truer log line than an absent one.
+    """
+
+    mpv.emit("end-file", {"reason": "error", "file_error": True})
+
+    observation = player.observe()
+
+    assert observation.refused
+    assert observation.end_detail == "mpv gave no reason"

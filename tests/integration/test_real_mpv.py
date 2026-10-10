@@ -13,6 +13,11 @@ around to it some milliseconds later. Three things this suite found that no mock
 * For ~150 ms after a successful `loadfile`, `idle-active` is still `True`. A state machine
   that reads that as "nothing playing" publishes `SongFinished(COMPLETED)` in answer to a
   guest's request, and the queue walks itself to empty against a silent appliance.
+* A file mpv refuses and a file that plays out inside one polling interval produce the *same*
+  property reading — idle, no filename, no position — so a rule built from the properties alone
+  cannot tell a corrupt track from a 400 ms one. Only `end-file` says which, and the suite was
+  flaky in the direction that mattered until it was read (the fourth fix, `LOAD_GRACE_SECONDS`'s
+  companion).
 * A file mpv refuses outright never becomes idle-with-a-track; it has to time out, which is
   what `LOAD_GRACE_SECONDS` exists for.
 
@@ -400,12 +405,22 @@ def test_paused_makes_no_progress_and_resuming_does(appliance: Appliance, tmp_pa
 def test_a_file_mpv_cannot_open_is_reported_not_left_loading(
     appliance: Appliance, tmp_path: Path
 ) -> None:
-    """The grace deadline, on the engine's own behaviour rather than on ours.
+    """A file mpv refuses, named by mpv rather than inferred by us.
 
-    mpv accepts `loadfile` for a file it then fails to demux, and sits idle. Without a
-    deadline the appliance would hold the queue item `Playing` and the party would wait for a
-    song that does not exist; with one, the failure is a fact like any other and the queue
-    moves on (SAPRS 11.9).
+    mpv accepts `loadfile` for a file it then fails to demux, sits idle for ~50 ms and pushes
+    `end-file reason=error`. Two readings of that would have been wrong:
+
+    * Reading the idle wait as a finished track, which answered a guest with
+      `SongFinished(COMPLETED)`. The properties cannot tell a refused file from a real one that
+      ended inside a single polling interval — a 400 ms track looks exactly like broken bytes —
+      so the event is the only honest discriminator, and it is what fails this fast.
+    * Holding the queue item `Playing` until something gives up. `LOAD_GRACE_SECONDS` is the
+      fallback for an engine that never says anything (an older build, a lost line); on this one
+      the verdict arrives in a tick and the party moves on (SAPRS 11.9).
+
+    This test was flaky before the verdict was read, and flaky in the interesting direction:
+    sometimes the refused file was reported as completed, depending on whether a `tick()` landed
+    inside mpv's fifty-millisecond attempt.
     """
 
     broken = tmp_path / "garbage.mp3"

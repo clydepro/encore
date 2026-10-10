@@ -174,6 +174,30 @@ class MockMpv:
 
         self.events.append(MpvEvent(name=name, data=dict(data or {})))
 
+    def poll_events(self) -> list[dict[str, Any]]:
+        """Drain the queue in mpv's line shape, as `JsonIpc.poll_events` does.
+
+        Present because the real transport has this surface and `MpvPlayer.observe()` consults
+        it for the `end-file` verdict the polled properties cannot express. A double without it
+        would silently make that code path untestable without the binary — and note that
+        draining means an event read here is not also there for `next_event`, which is what a
+        real socket does to a test that expected to pop one (SAPRS 14.4's trade, paid here).
+        """
+
+        drained, self.events = list(self.events), deque()
+        return [{"event": event.name, **event.data} for event in drained]
+
+    def refuse_file(self, reason: str = "unrecognized file format") -> None:
+        """Say what mpv says about a file it opened and could not demux.
+
+        The command is accepted, the properties never appear, and an `end-file` arrives with
+        `reason: "error"` — measured on 0.35.1. This is how a test without the binary can tell
+        the appliance "that one failed" rather than leaving it to infer it from a timeout.
+        """
+
+        self.properties.update(DEFAULT_PROPERTIES)
+        self.emit("end-file", {"reason": "error", "file_error": reason})
+
     def crash(self) -> None:
         """Simulate an unexpected mpv death (SAPRS 7.6, SAPRS 14.10)."""
 
