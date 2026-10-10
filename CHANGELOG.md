@@ -194,7 +194,9 @@ The release process moves the section into a dated, bracketed version heading.
   which is what makes `tests/integration/test_real_mpv.py` a check rather than a claim: the file
   skips without a binary and is `slow` with one, so before this it ran nowhere in CI and only on
   whoever's machine remembered it. The job is informative, not required, so a runner without the
-  package — or an `apt` mirror having a bad night — cannot gate a pull request (#23).
+  package — or an `apt` mirror having a bad night — cannot gate a pull request (#23). The first
+  nightly run says the suite passes against mpv 0.37.0 as well as the 0.35.1 it was written
+  against, which is a wider version span than any single machine gives it.
 - The playback launch line no longer passes `--input-ipc-run=0600`, and socket permissions are
   set by Encore instead: the directory holding the socket is `0700` and the socket is
   `chmod`-ed to `0600` once it appears. That mpv option arrived in 0.36 and an unknown option

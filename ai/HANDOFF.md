@@ -136,7 +136,8 @@ Then `tests/integration/test_queue_playback_and_search.py`, which wires all of i
 
 ## Known loose ends
 
-- **This phase has met a real mpv (0.35.1), and it found four bugs.** `MockMpv` answers
+- **This phase has met a real mpv — 0.35.1 here, 0.37.0 on the nightly runner — and it found
+  four bugs.** `MockMpv` answers
   `loadfile` by setting the properties the next read will return; a real mpv answers by
   *promising* and loading asynchronously. Running the stack against the binary produced
   `tests/integration/test_real_mpv.py` plus four fixes. Each is also covered by a mocked
