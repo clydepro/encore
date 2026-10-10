@@ -34,6 +34,12 @@ Each ADR contains, in this order:
 6. **Consequences** — trade-offs, both directions
 7. **Alternatives considered** — what was rejected and why
 
+Those seven are the record, in that order, and are what "immutable" applies to. A
+trailing section that is not one of them — `Verification`, `Implementation notes`,
+`Related` — may be added by the pull request that implements the decision, because
+what an implementation learns is not what it was deciding. It never restates or
+widens the Decision; ADR-011 and ADR-005 are the examples to copy.
+
 ## Working with ADRs
 
 - ADRs are numbered sequentially and never reused.
@@ -45,6 +51,8 @@ Each ADR contains, in this order:
   ADR.
 - The mandatory guardrails in SAPRS 11.10 are enforced in code by
   `tests/unit/test_architecture_guardrails.py`.
+- Adding an `Implementation notes` section is not an amendment and needs no
+  superseding ADR. Discovering that the Decision was wrong does.
 
 ## Writing a new ADR
 

@@ -371,7 +371,7 @@ class PlaybackSupervisor:
                 detail=f"{self._last_reason}; retrying in {delay:g}s",
             )
             return None
-        self._channel = channel
+        self._replace_channel(channel)
         self._attempts = 0
         self._retry_at = None
         self._restart_count += 1
@@ -408,10 +408,31 @@ class PlaybackSupervisor:
             self._retry_at = self._clock.now() + timedelta(seconds=self._delay())
             self._report(HealthStatus.UNAVAILABLE, detail=str(error))
             raise EngineUnavailableError(str(error), attempts=self._attempts) from error
-        self._channel = channel
+        self._replace_channel(channel)
         self._attempts = 0
         self._retry_at = None
         return channel
+
+    def _replace_channel(self, channel: CommandChannel) -> None:
+        """Install `channel`, closing the one it replaces.
+
+        The launcher reaps the old *process*; nothing else closed the old *socket*, so every
+        recovery leaked a file descriptor. Once a night is nothing; a machine that loses mpv
+        every few seconds for an hour is a process with hundreds of dead sockets and no way to
+        explain why it stopped answering. Failure to close is not worth a crash: the descriptor
+        is gone either way when the process exits, and a recovery that aborted because its
+        predecessor's socket was already shut would be worse than the leak.
+        """
+
+        previous, self._channel = self._channel, channel
+        close = getattr(previous, "close", None)
+        if previous is not None and callable(close):
+            try:
+                close()
+            except Exception as error:  # a leak is bad; a failed recovery is worse
+                self._logger.debug(
+                    "the previous mpv channel was already closed", extra={"detail": str(error)}
+                )
 
     def _restore(self) -> PlaybackState:
         """Bring the service's state in line with the new process (SAPRS 7.6 step 6).

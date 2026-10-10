@@ -41,12 +41,15 @@ class MpvCommandError(PlaybackError):
 
 
 class MpvGoneError(PlaybackError):
-    """The command could not be sent because mpv is not there any more (SAPRS 7.6).
+    """The command could not be sent because mpv is not there (SAPRS 7.6).
 
-    This is the signal the supervisor watches for. It says nothing about *why* mpv
-    died, which is deliberate: the diagnosis is the restart's `reason` and the log's
-    `diagnostics`, and a crash that reads like a filesystem error sends an operator to
-    the wrong page of the guide.
+    This is the signal the supervisor watches for. It covers an engine that died as well
+    as one that never started — `MpvProcess.start()` raises it for an unexecutable binary,
+    and `MpvLauncher.launch()` for a `paths.temp_dir` it cannot prepare — because the
+    recovery is the same and the diagnosis is not this type's job: it is the message, the
+    restart's `reason` and the log's `diagnostics`. A crash that reads like a filesystem
+    error sends an operator to the wrong page of the guide, which is why the string names
+    the path rather than the exception class carrying it.
     """
 
 

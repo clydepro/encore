@@ -115,6 +115,9 @@ repositories are finished, tested and unused by a running application.
 - `tests/integration/test_queue_playback_and_search.py` — the three together over both
   real databases, including a crash mid-set, a file that cannot be opened, a song that
   left the library, and a process restart.
+- `tests/integration/test_real_mpv.py` — the same stack against the actual mpv binary, for
+  the three ways a synchronous mock flatters the design (launch options, the asynchronous
+  load window, and who closes the socket).
 - `tests/performance/test_runtime_latency.py` and a bounded party in
   `tests/party_simulation/test_queue_and_playback.py`.
 
@@ -151,8 +154,10 @@ them (`container.py` still builds config and logging only — the wiring belongs
 ## Explicitly not implemented
 
 - Any HTTP endpoint, template, static asset or SSE stream.
-- Any *running* service: `encore/playback/` is exercised by tests against `MockMpv` and
-  has never been started against a real mpv on this machine (it is not installed here).
+- Any *running* service. `encore/playback/` has driven a real mpv (0.35.1, `--ao=null`) in
+  `tests/integration/test_real_mpv.py`, which skips where the binary is absent, and nothing
+  else. What no test proves is that sound reaches a speaker — ALSA device names, USB DACs,
+  the socket under the `encore` service account — which is milestone 15's bring-up.
 - **Any application that opens either database.** The Builder writes `library.db`;
   nothing in a running Server reads it yet. Composition is decided — `apps/server/`,
   not `build_core_services` — and recorded in `apps/server/README.md`.

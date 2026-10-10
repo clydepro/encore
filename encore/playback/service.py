@@ -56,7 +56,7 @@ from encore.playback.errors import (
     MpvGoneError,
     MpvTimeoutError,
 )
-from encore.playback.player import MpvPlayer
+from encore.playback.player import EngineObservation, MpvPlayer
 from encore.playback.transition import TransitionPolicy
 from encore.utilities.clock import Clock, SystemClock, ensure_aware
 
@@ -71,6 +71,15 @@ COMPLETION_CEILING = 1.0
 #: the distinction that matters is a refused command against an absent engine, and every
 #: handler in this module has to make it the same way.
 _ENGINE_FAILURE = (MpvCommandError, MpvGoneError, MpvTimeoutError)
+
+#: How long a load mpv has merely accepted may stay invisible before it is called a failure.
+#: `loadfile` returns as soon as the command is parsed; the demuxer runs after that, so a real
+#: engine reports `idle-active=True` for a moment *after* a successful load — measured at about
+#: 150 ms on mpv 0.35 for a local file, longer for a distant or slow one. `LOADING` is the
+#: state that covers the gap, and this is its deadline: a file that is merely slow is still
+#: playing well inside one track's intro, and a file that is undecodable is reported rather
+#: than leaving the appliance stuck.
+LOAD_GRACE_SECONDS = 5.0
 
 
 class EngineRecovery(Protocol):
@@ -357,22 +366,17 @@ class PlaybackService:
         from a load mpv has merely accepted, because a caller is standing there.
         """
 
-        try:
-            observation = self._player.observe()
-        except MpvGoneError as error:
-            self.engine_lost(f"{type(error).__name__}: {error}")
-            return self._progress
-        except MpvTimeoutError as error:
-            self._logger.warning("mpv did not answer", extra={"detail": str(error)})
-            return self._progress
-        except MpvCommandError as error:  # pragma: no cover - a refused property read
-            self._logger.debug("mpv refused a property read", extra={"detail": str(error)})
+        observation = self._read()
+        if observation is None:
             return self._progress
 
         if self._current is None:
             # Nothing was asked for, so nothing can have ended. mpv sitting idle with no
             # file is the appliance between requests, not a fact worth publishing.
             self._progress = self._snapshot()
+            return self._progress
+
+        if self._awaiting_load(observation):
             return self._progress
 
         if observation.finished or observation.state is PlaybackState.IDLE:
@@ -443,6 +447,67 @@ class PlaybackService:
                 occurred_at=self._clock.now(),
             )
         )
+
+    def _load_is_overdue(self) -> bool:
+        """Whether a `Loading` state has outlasted a plausible file open.
+
+        Measured on the injected clock, so the grace is asserted rather than slept through:
+        the test advances time, the service decides, and no suite waits five seconds.
+        """
+
+        current = self._current
+        if current is None:
+            return True
+        return self._clock.now() - current.started_at >= timedelta(seconds=LOAD_GRACE_SECONDS)
+
+    def _read(self) -> EngineObservation | None:
+        """One engine reading, or `None` when there is nothing to conclude from.
+
+        The three failures are different and matter differently: an absent engine is a fact
+        (`engine_lost` publishes it), an engine that did not answer is a retry, and a refused
+        property read is normal between two tracks. What they share is that none of them is
+        evidence about the current track, so the caller keeps the last known state.
+        """
+
+        try:
+            return self._player.observe()
+        except MpvGoneError as error:
+            self.engine_lost(f"{type(error).__name__}: {error}")
+            return None
+        except MpvTimeoutError as error:
+            self._logger.warning("mpv did not answer", extra={"detail": str(error)})
+            return None
+        except MpvCommandError as error:  # pragma: no cover - a refused property read
+            self._logger.debug("mpv refused a property read", extra={"detail": str(error)})
+            return None
+
+    def _awaiting_load(self, observation: EngineObservation) -> bool:
+        """Handle the one window a mock cannot show, and say whether it was this reading.
+
+        `loadfile` returns as soon as mpv has parsed it, so a real engine still reports
+        `idle-active=True` for a moment after a successful load. Nothing has ended and nothing
+        has started, so nothing may be published: the first version of this code read that
+        `True` as a finished track and answered a guest's request with
+        `SongFinished(COMPLETED)`, which let the queue walk itself to empty against a silent
+        appliance. `Loading` is the state that covers the gap; `LOAD_GRACE_SECONDS` is how long
+        it may last before the file is called unreadable rather than merely slow.
+        """
+
+        current = self._current
+        if (
+            current is None
+            or observation.state is not PlaybackState.IDLE
+            or self._state is not PlaybackState.LOADING
+        ):
+            return False
+        if not self._load_is_overdue():
+            return True
+        self._logger.warning(
+            "mpv never took the file",
+            extra={"song_id": int(current.song_id), "file": str(current.song.file_path)},
+        )
+        self._end(FinishedReason.FAILED, completion=0.0)
+        return True
 
     def _completion(self) -> float:
         """How much of the current track was heard, from the last observation.

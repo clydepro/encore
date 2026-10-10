@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import errno
 import json
+import logging
 import os
 import socket
 import subprocess
@@ -73,6 +74,13 @@ class CommandChannel(Protocol):
     Kept to one method on purpose: it is the whole of what the playback layer needs from
     a transport, and it is already the shape of `MockMpv.send_command`, so the double in
     `tests/support/mpv.py` is a faithful one with no adapter and no subclassing.
+
+    Closing is deliberately *not* part of it. A channel owns a file descriptor, and whoever
+    created it is the one that must be able to let it go (`MpvLauncher` keeps a `JsonIpc` for
+    exactly that); a protocol that made `close` mandatory would force every double in the
+    suite to model a lifecycle it has no opinion about, and ADR-011's argument that `Player`
+    and `CommandChannel` stay small depends on not doing that. Callers that hold a
+    `CommandChannel` from an `EngineLauncher` close it only if it can be closed.
     """
 
     def send_command(self, name: str, *args: Any) -> Any: ...
@@ -367,9 +375,35 @@ class MpvProcess:
                     f"mpv exited with code {self.exit_code} before opening {self._socket_path}"
                 )
             if self._socket_path.exists():
+                _restrict_socket(self._socket_path)
                 return
             time.sleep(self._poll_interval)
         raise MpvGoneError(f"mpv did not open {self._socket_path} within {self._ready_timeout:g}s")
+
+
+def _restrict_socket(path: Path) -> None:
+    """Make the IPC socket owner-only, whatever mode mpv happened to create it with.
+
+    mpv inherits the process umask for the socket it binds, and the option that would have
+    set this explicitly (`--input-ipc-run`) does not exist before 0.36. Doing it here costs
+    one `chmod`, works on every version, and keeps the boundary that matters: this socket
+    accepts `loadfile`, so a guest-accessible one is a queue anyone on the LAN could drive
+    without the appliance's knowledge (AEP 17, least privilege).
+
+    A `FileNotFoundError` means mpv died between the existence check and here, which the
+    caller's next read discovers anyway; any other refusal is worth seeing, so it is logged
+    rather than swallowed silently.
+    """
+
+    try:
+        path.chmod(0o600)
+    except FileNotFoundError:  # pragma: no cover - a death in the gap between two syscalls
+        return
+    except OSError as error:  # pragma: no cover - needs a filesystem that will not chmod
+        logging.getLogger("encore.playback.ipc").warning(
+            "cannot restrict the mpv socket's permissions",
+            extra={"path": str(path), "error": str(error)},
+        )
 
 
 class MpvLauncher:
@@ -393,6 +427,7 @@ class MpvLauncher:
         self._temp_dir = Path(temp_dir)
         self._ready_timeout = ready_timeout
         self._process: MpvProcess | None = None
+        self._channel: JsonIpc | None = None
 
     def argv(self, socket_path: Path) -> list[str]:
         """The command line for one mpv instance.
@@ -415,24 +450,51 @@ class MpvLauncher:
             f"--volume={self._audio.volume}",
             gapless,
             f"--input-ipc-server={socket_path}",
-            "--input-ipc-run=0600",
+            # No `--input-ipc-run` here, and the reason is a real mpv. That option arrived in
+            # 0.36; on 0.35 it fails at option parse time — "Error parsing option input-ipc-run
+            # (option not found)", then exit 1 — before a socket exists, which is an appliance
+            # that "will not start" as far as anyone can see. Permissions are ours to set
+            # instead: see `MpvProcess._restrict_socket` and `socket_path_for`, which work on
+            # every version and keep the code from needing a version floor at all.
         ]
 
     def launch(self) -> CommandChannel:
-        """Start a new mpv, replacing any current one, and return its channel."""
+        """Start a new mpv, replacing any current one, and return its channel.
+
+        Raises:
+            MpvGoneError: No place to put the socket, or an mpv that exited before opening
+                one. A failure to *prepare* is reported the same way as a failure to *spawn*
+                deliberately: `PlaybackSupervisor` already backs off and re-reports
+                `MpvGoneError`, and an `OSError` escaping here instead would surface as a
+                traceback from `tick()` on the one path (a misconfigured `paths.temp_dir`) where
+                an appliance most needs a named cause in its health detail.
+        """
 
         self.terminate()
-        path = socket_path_for(self._temp_dir)
+        try:
+            path = socket_path_for(self._temp_dir)
+        except OSError as error:
+            raise MpvGoneError(
+                f"cannot prepare {self._temp_dir} for mpv: {error.strerror or error}"
+            ) from error
         process = MpvProcess(self.argv(path), socket_path=path, ready_timeout=self._ready_timeout)
         self._process = process
         try:
-            return process.start()
+            channel = process.start()
         except MpvGoneError:
             self._process = None
             raise
+        # Retained so that this object, which created the socket, is also the one that
+        # guarantees it is closed. A caller that hands the channel on and forgets it should not
+        # be the reason an appliance runs out of descriptors after a night of restarts.
+        self._channel = channel
+        return channel
 
     def terminate(self) -> None:
         process, self._process = self._process, None
+        channel, self._channel = self._channel, None
+        if channel is not None:
+            channel.close()
         if process is not None:
             process.stop()
 
@@ -454,6 +516,9 @@ def socket_path_for(temp_dir: Path, *, suffix: str = "") -> Path:
 
     directory = Path(temp_dir)
     directory.mkdir(parents=True, exist_ok=True)
+    # 0700, not the umask's default: whoever else can name this directory can name the socket
+    # in it, and an mpv IPC socket is "change what the appliance plays" to anyone local.
+    directory.chmod(0o700)
     name = f"mpv-{os.getpid()}{suffix}.sock"
     path = directory / name
     if len(str(path)) > UNIX_PATH_LIMIT:

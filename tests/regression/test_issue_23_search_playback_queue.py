@@ -45,11 +45,12 @@ from encore.domain import (
     Song,
     SongId,
 )
-from encore.events import EventBus, PlaybackRecovered, SongFinished
+from encore.events import EventBus, PlaybackRecovered, SongFinished, SongStarted
 from encore.events.playback import FinishedReason
 from encore.playback import MpvPlayer, PlaybackService, PlaybackSupervisor
 from encore.playback.errors import MpvCommandError, MpvGoneError
 from encore.playback.ipc import JsonIpc
+from encore.playback.service import LOAD_GRACE_SECONDS
 from encore.repositories.runtime import RuntimeStore
 from encore.services.queue_service import QueueService
 from tests.support.mpv import MockMpv
@@ -75,6 +76,18 @@ def _state_of(service: PlaybackService) -> PlaybackState:
     """A call, so the type checker cannot narrow a property across the line that changed it."""
 
     return service.state
+
+
+def _closed(channel: MockMpv) -> bool:
+    """The same trick as `_state_of`, for an attribute the test expects to change.
+
+    `assert first.closed is False` tells mypy the attribute *is* False for the rest of the
+    block — it does not invalidate member narrowing across `supervisor.tick()` — and then the
+    assertion that is the whole point of the test, `closed is True`, becomes impossible and
+    everything after it "unreachable".
+    """
+
+    return channel.closed
 
 
 def _song(id_: int) -> Song:
@@ -398,6 +411,7 @@ class RecordingLauncher:
         self.alive = True
         self.launches = 0
         self.failures = 0
+        self.channels: list[MockMpv] = []
 
     def launch(self) -> MockMpv:
         self.launches += 1
@@ -407,6 +421,7 @@ class RecordingLauncher:
         if self.launches > 1:
             self.mpv = MockMpv()
         self.alive = True
+        self.channels.append(self.mpv)
         return self.mpv
 
     def terminate(self) -> None:
@@ -541,3 +556,200 @@ def test_json_encoding_of_a_command_never_carries_a_stray_newline() -> None:
     line = json.dumps({"command": ["loadfile", "/music/a\nb.mp3"], "request_id": 1})
 
     assert "\n" not in line
+
+
+# -- found by running a real mpv, and so guarded without one ---------------
+
+
+class SlowLoadChannel:
+    """A transport that behaves like mpv rather than like a mock.
+
+    `loadfile` is answered *before* the file is open: the next few reads report an idle engine
+    with no filename, then the properties appear. `MockMpv` flips `idle-active` inside its
+    `loadfile` handler, which is the one respect in which it is unlike the real thing, and the
+    reason every test written against it passed while a real appliance published
+    `SongFinished(COMPLETED)` in answer to a guest's request.
+    """
+
+    def __init__(self, *, ticks_until_file: int = 2) -> None:
+        # Counted in `idle-active` reads rather than in property reads, because `observe()`
+        # makes six of the latter per tick and a tick is what the service counts in.
+        self._reads = ticks_until_file
+        self._stuck = False
+        self.command_log: list[str] = []
+
+    def never_loads(self) -> None:
+        """A file mpv accepted and will never manage to open."""
+
+        self._stuck = True
+
+    @property
+    def loaded(self) -> bool:
+        """Whether the engine has finished opening the file it already accepted."""
+
+        return not self._stuck and self._reads <= 0
+
+    def send_command(self, name: str, *args: object) -> object:
+        self.command_log.append(name)
+        match name:
+            case "loadfile":
+                # Command accepted, file not yet open. Exactly what mpv does and what
+                # `MockMpv` cannot: its loadfile sets the properties in the same call, so a
+                # test written against it never sees a load in progress.
+                if not self.loaded:
+                    self.command_log.append("loadfile:accepted")
+                return None
+            case "stop" | "quit":
+                self._reads = 0
+                return None
+            case "set_property":
+                return None
+            case "get_property":
+                return self._property(str(args[0]))
+        raise MpvCommandError(name, "unsupported command")
+
+    def _property(self, name: str) -> object:
+        """What the engine reports about itself, one reading closer to having the file open."""
+
+        if name == "idle-active":
+            self._reads -= 1
+        if not self.loaded:
+            match name:
+                case "idle-active":
+                    return True
+                case "pause" | "eof-reached":
+                    return False
+                case "filename":
+                    return None
+            raise MpvCommandError("get_property", "property unavailable")
+        values: dict[str, object] = {
+            "idle-active": False,
+            "pause": False,
+            "eof-reached": False,
+            "filename": "/music/track-1.mp3",
+            "time-pos": 0.5,
+            "duration": 180.0,
+        }
+        if name in values:
+            return values[name]
+        raise MpvCommandError("get_property", f"unknown property {name!r}")
+
+    def close(self) -> None:
+        self.command_log.append("closed")
+
+
+def _slow_load_service(
+    clock: Clock, *, ticks_until_file: int = 2
+) -> tuple[PlaybackService, EventBus, SlowLoadChannel]:
+    """A service whose engine answers `loadfile` before the file is open, which is honest."""
+
+    events = EventBus(logger=logging.getLogger("encore.test.regression.slowload"))
+    channel = SlowLoadChannel(ticks_until_file=ticks_until_file)
+    service = PlaybackService(
+        player=MpvPlayer(lambda: channel, volume=85.0), events=events, clock=clock
+    )
+    return service, events, channel
+
+
+class FactTap:
+    """Every fact of the types that matter, from the moment it was attached.
+
+    Attached before the action under test: a subscriber added afterwards can only report what
+    it has not yet missed, which is how an assertion on "one SongStarted" ends up asserting on
+    nothing at all.
+    """
+
+    def __init__(self, events: EventBus) -> None:
+        self.started: list[SongStarted] = []
+        self.finished: list[SongFinished] = []
+        events.subscribe(SongStarted, self.started.append, name="tap-started")
+        events.subscribe(SongFinished, self.finished.append, name="tap-finished")
+
+
+def test_an_idle_answer_during_a_load_is_not_an_ended_track() -> None:
+    """The window `loadfile` opens and a mock closes instantly.
+
+    Reading `idle-active=True` as "finished" while the machine is `Loading` published
+    `SongFinished(COMPLETED)` for a track that had not started, and the queue advanced past a
+    song nobody heard. `Loading` has to be a state that can last, because the engine decides
+    how long.
+    """
+
+    clock = Clock()
+    service, events, channel = _slow_load_service(clock, ticks_until_file=2)
+    tap = FactTap(events)
+
+    assert service.play(_song(1), queue_item_id=QueueItemId(1)) is True
+
+    assert _state_of(service) in {PlaybackState.LOADING, PlaybackState.PLAYING}, (
+        "how long a load takes is the engine's business; what may not happen is either extreme"
+    )
+    assert tap.finished == [], "nothing may end before it began"
+
+    service.tick()
+    assert tap.finished == [], "a second idle answer is still not an ending"
+
+    service.tick()
+
+    assert _state_of(service) is PlaybackState.PLAYING
+    assert len(tap.started) == 1, "one start, when sound actually starts"
+    assert tap.finished == []
+    assert channel.loaded
+
+
+def test_a_load_that_never_lands_becomes_a_failure_at_the_grace_limit() -> None:
+    """`Loading` may not last forever, or the queue waits on a file that will not open.
+
+    mpv accepts `loadfile` for a file it then cannot demux and stays idle — it never refuses
+    the command, so the only honest report is a timeout. Before this, the appliance held the
+    item `Playing` and the party stopped; now the refusal is `SongFinished(FAILED)`, which is
+    the fact the queue already knows how to act on (SAPRS 11.9).
+    """
+
+    clock = Clock()
+    service, events, channel = _slow_load_service(clock)
+    channel.never_loads()
+    tap = FactTap(events)
+    service.play(_song(1), queue_item_id=QueueItemId(1))
+
+    for _ in range(3):
+        service.tick()
+    assert tap.finished == [], "three seconds in, it is still fair to wait"
+
+    clock.at += timedelta(seconds=LOAD_GRACE_SECONDS + 0.1)
+    service.tick()
+
+    assert len(tap.finished) == 1, "the wait became a fact rather than a hang"
+    assert tap.finished[0].reason is FinishedReason.FAILED
+    assert _state_of(service) is PlaybackState.IDLE
+    assert channel.loaded is False, "the engine never took the file; the service stopped waiting"
+
+
+def test_a_restart_lets_go_of_the_socket_it_replaced() -> None:
+    """A recovery that replaces a channel must close it.
+
+    The monitor reaps mpv's *process* and installed the new channel over the old one, so every
+    restart leaked the descriptor of the socket it had just stopped being able to use. A night
+    of crash loops is an appliance that stops answering with no crash left to find, and no test
+    that asserted on commands could see it because nothing was ever *wrong* until the
+    descriptors ran out.
+    """
+
+    events = EventBus(logger=logging.getLogger("encore.test.regression.restart"))
+    launcher = RecordingLauncher()
+    supervisor = PlaybackSupervisor(
+        launcher=launcher,
+        events=events,
+        config=PlaybackConfig(restart_backoff_seconds=[0.1]),
+        clock=Clock(),
+    )
+    supervisor.channel()
+    first = launcher.channels[0]
+    assert _closed(first) is False
+
+    launcher.alive = False
+    supervisor.tick()
+
+    assert _closed(first) is True, "the replaced channel was closed, not abandoned"
+    assert _closed(launcher.channels[1]) is False, "the live one is still open"
+    assert supervisor.channel() is launcher.channels[1]

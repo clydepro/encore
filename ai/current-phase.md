@@ -58,9 +58,11 @@ which is the phase's one architectural decision and is now written.
 ## Verification state
 
 - `scripts/check.sh` — all gates pass: ruff (lint + format), yamllint, markdownlint, secret
-  scan, mypy strict, **912 tests**, 93.1% coverage.
-- `scripts/check.sh --slow` — **933 pass, 3 skip**. The three skips are HTMX and SSE budgets
-  whose subsystems do not exist. The slow run passes `--no-cov`: coverage tracing inflates
+  scan, mypy strict, **917 tests**, 93.3% coverage.
+- `scripts/check.sh --slow` — **947 pass, 3 skip** on this machine, which has mpv. On one that
+  does not, the same run is 938 pass and 12 skip: the three permanent skips are HTMX and SSE
+  budgets whose subsystems do not exist, and the other nine are `test_real_mpv.py`. The slow
+  run passes `--no-cov`: coverage tracing inflates
   SQLite-heavy work by ~3× and would fail the queue's budget for a reason unrelated to the
   code (see `docs/Developer/Testing.md`).
 - Measured, untraced, on the reference machine: enqueue **~11 ms** p95, removal **~23 ms**,
@@ -68,14 +70,17 @@ which is the phase's one architectural decision and is now written.
   start **~18 ms** for Encore's share of the 250 ms. Search is still ~8 ms p95 over 1,500
   songs from phase 2. Three of SAPRS 1.8's five budgets are numbers now; two are skips that
   name their milestone.
-- Package coverage: `encore/search/` 98.4%, `encore/playback/` 93.6%,
-  `encore/services/` 99.1% (`queue_service.py` 97.4%), `encore/domain/queue.py` and
+- Package coverage: `encore/search/` 98.6%, `encore/playback/` 93.0%,
+  `encore/services/` 98.3% (`queue_service.py` 97.4%), `encore/domain/queue.py` and
   `repositories/runtime/queue.py` 100%. SAPRS 14.16 wants 95% for queue and search and 90%
-  for playback; the lowest module is `ipc.py` at 88.5%, whose misses are the socket-wait and
-  kill-escalation branches that only a real, slow mpv exercises.
-- New tests: 190 of them across 12 files — see `tests/unit/test_search_*.py`,
+  for playback; the lowest module is `ipc.py` at 90.0%, whose misses are the socket-wait and
+  kill-escalation branches that only a real, slow mpv exercises — and which are the same lines
+  whether or not the binary is installed, because `test_real_mpv.py` is marked `slow` and so is
+  not in the gate these numbers come from.
+- New tests: 208 of them across 13 files — see `tests/unit/test_search_*.py`,
   `test_playback_*.py`, `test_mpv_player.py`, `test_queue_service.py`,
   `tests/integration/test_queue_playback_and_search.py`,
+  `tests/integration/test_real_mpv.py`,
   `tests/regression/test_issue_23_search_playback_queue.py`,
   `tests/performance/test_runtime_latency.py` and
   `tests/party_simulation/test_queue_and_playback.py`.
@@ -134,10 +139,17 @@ What is already decided that the next session can lean on:
 - **This PR closes [#23](https://github.com/clydepro/encore/issues/23)**, deliberately, in the
   sense phase 2 meant it: the issue's acceptance criteria are all implemented. Steps 10–17
   still have no issues.
-- **`mpv` is not installed on this machine.** Everything in `encore/playback/` has been run
-  against `MockMpv` and against fake sockets, and the IPC vocabulary was checked against the
-  mpv docs rather than against a process. The first real run of `apps/server` against a
-  speaker is a hardware test and is the phase's largest unproven claim.
+- **`encore/playback/` has been run against a real mpv** (0.35.1, `--ao=null`, headless), in
+  `tests/integration/test_real_mpv.py`, which skips wherever the binary is absent. It found
+  three defects that every mocked test passed over — see ADR-005's new `Implementation notes`
+  and the regression file — and fixed them: an unsupported launch option that made mpv exit
+  before opening a socket, an accepted-but-not-yet-open `loadfile` being read as a finished
+  track, and a socket leaked per engine restart. A fourth came from tidying up after that run
+  rather than from mpv: a `paths.temp_dir` the appliance cannot prepare raised a bare `OSError`
+  out of `MpvLauncher.launch()`, which the supervisor does not catch, so a typo in one config
+  key was a traceback from a timer instead of the named launch failure the other paths raise.
+  Still unproven against hardware: the actual audio path (ALSA device names, USB DACs), which
+  is milestone 15's bring-up.
 - **The advance benchmark has a 7 ms margin.** ~43 ms p95 against 50 ms, with WAL checkpoints
   as the spikes. If it goes red on CI, the answer is fewer writes per advance, not a bigger
   number (AEP 14, and SAPRS 1.8 owns the budget).

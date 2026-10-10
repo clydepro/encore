@@ -135,18 +135,40 @@ Then `tests/integration/test_queue_playback_and_search.py`, which wires all of i
 
 ## Known loose ends
 
-- **Nothing here has met a real mpv.** This machine has no mpv installed. The IPC vocabulary
-  was written against the documentation and exercised against `MockMpv` and fake sockets, so
-  the first `apps/server` run on hardware will be the first end-to-end proof. Two specific
-  things to re-check there: whether `--input-ipc-run=0600` and the socket path length guard
-  behave on a real `/run/encore`, and whether property polling at 1 Hz is what a real engine
-  answers or whether `observe_property` becomes necessary.
+- **This phase has met a real mpv (0.35.1), and it found three bugs.** `MockMpv` answers
+  `loadfile` by setting the properties the next read will return; a real mpv answers by
+  *promising* and loading asynchronously. Running the stack against the binary produced
+  `tests/integration/test_real_mpv.py` plus three fixes. Each fix is also covered by a mocked
+  regression test in `tests/regression/test_issue_23_search_playback_queue.py`, so CI without
+  mpv still guards all three, and ADR-005 carries the rules they taught under
+  `Implementation notes` — read that before touching `encore/playback/` again. `--input-ipc-run` does not exist before mpv 0.36, and an unknown
+  option is fatal at parse time: every launch died with "Error parsing option input-ipc-run
+  (option not found)" and exit code 1. Permissions are ours to set instead — 0700 on the
+  directory, `chmod 0600` on the socket — and the half that needs no mpv is checked by
+  `test_the_socket_directory_is_private_before_mpv_is_asked_for_it`. `idle-active=True` for
+  ~150 ms after an accepted load was read as a finished track, which published
+  `SongFinished(COMPLETED)` in answer to a guest's request. And each engine restart abandoned
+  the socket it replaced, leaking a descriptor per recovery.
+- **A fourth bug was in the same code and not found by mpv.** A `paths.temp_dir` the process
+  cannot create or tighten raised `NotADirectoryError`/`PermissionError` out of
+  `MpvLauncher.launch()`, and the supervisor catches only `MpvGoneError` and
+  `EngineUnavailableError` — so one mistyped config key made `tick()` raise from a timer while
+  every other launch failure reported itself. Read the exception lists on a restart path if you
+  touch this again; they are the whole design of that code, and no mock exercises them.
+- **What a real mpv run still cannot show:** that sound reaches a speaker. Every one of those
+  tests uses `--ao=null`, so the audio path — ALSA device names, a USB DAC, what a Pi's
+  `/run/encore` socket permissions look like under the `encore` service account — is
+  milestone 15's bring-up checklist, not this suite's claim.
 - **`_MAX_WALK`'s error path is untested by design** (a thousand consecutive failed starts is
   a fixture that fakes the situation the guard exists for). The same is true of `ipc.py`'s
-  socket-wait and kill-escalation branches — 88.5% is what "no mpv process here" costs.
+  socket-wait and kill-escalation branches; `test_real_mpv.py` now walks some of them on any
+  machine that has mpv, and only there.
 - **`aac`/`m4a` synthetic media still raises** `SyntheticMediaUnavailableError`, asserted in
-  `test_media_generator.py`. It mattered less this phase (nothing decoded audio) and will
-  matter more the day a playback test wants a real file.
+  `test_media_generator.py`. The real-mpv pass corrected what the suite claims about the rest:
+  MP3 containers *do* decode (mpv reports a length and a running position), so the earlier
+  note that they are "not enough for decoding" was pessimistic; FLAC does not — a STREAMINFO
+  with no frames is refused. Both halves are now asserted in
+  `test_the_synthetic_corpus_is_what_we_claim_it_is` so the sentence cannot rot again.
 - **The queue's `up_next()` batch-reads songs but does no pagination.** The service takes
   `page_size` at construction; the UI's "Up Next" list is unbounded today. Fix it when the
   fragment exists, so the shape is chosen with the screen in view.
