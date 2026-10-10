@@ -25,6 +25,10 @@ What is deliberately *not* asserted: that sound came out of a speaker. `--ao=nul
 these run on a headless machine and on CI's containers, which have no audio device — the claim
 under test is the IPC contract and the state machine, not the amplifier.
 
+They are also not the only place they are asserted: the nightly `Test / long-running` job
+installs mpv and runs `tests/integration --run-slow`, which is where CI owns a binary (0.37.0
+there, against 0.35.1 locally — a wider span than any single machine gives the suite).
+
 The module skips when there is no mpv. It is marked `slow` even on machines that have one, so
 the per-commit gate stays a few seconds rather than a few dozen, and it waits on real time
 rather than an injected clock: a test that faked the clock would prove the state machine's

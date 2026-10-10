@@ -148,7 +148,8 @@ What is already decided that the next session can lean on:
 - **This PR closes [#23](https://github.com/clydepro/encore/issues/23)**, deliberately, in the
   sense phase 2 meant it: the issue's acceptance criteria are all implemented. Steps 10–17
   still have no issues.
-- **`encore/playback/` has been run against a real mpv** (0.35.1, `--ao=null`, headless), in
+- **`encore/playback/` has been run against a real mpv** (0.35.1 here, 0.37.0 on the nightly
+  CI runner, both `--ao=null`, headless), in
   `tests/integration/test_real_mpv.py`, which skips wherever the binary is absent. It found
   four defects that every mocked test passed over — see ADR-005's new `Implementation notes`
   and the regression file — and fixed them: an unsupported launch option that made mpv exit

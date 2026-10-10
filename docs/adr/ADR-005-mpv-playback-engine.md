@@ -92,7 +92,10 @@ socket's mode, is not recognised before 0.36, and passing it to 0.35.1 ended the
 process. Socket permissions are Encore's to set instead — `0700` on the run
 directory, `0600` on the socket once it appears, which is also the least-privilege
 answer (AEP 17). No minimum mpv version is pinned here; that is the installer's
-decision (SAPRS 7.7), and the code is written so that no version floor is needed.
+decision (SAPRS 7.7), and the code is written so that no version floor is needed —
+the nightly suite has since passed against 0.37.0 as well as 0.35.1, which is the
+evidence that the two paths (an engine that reports `end-file`, and one that stays
+quiet and meets the grace deadline) both work.
 
 **Poll the engine; believe its events.** Progress is sampled at ~1 Hz rather than subscribed
 to, as above — but the reads leave `end-file` events sitting in the socket, and one of them is
