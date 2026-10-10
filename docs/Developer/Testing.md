@@ -14,7 +14,10 @@ SAPRS Chapter 14 is the policy; this file is the mechanics.
 
 One integration file, `test_real_mpv.py`, drives the real binary and is marked `slow` as
 well: it skips wherever mpv is not installed, and it is kept out of the per-commit gate so
-that a machine with mpv behaves like one without.
+that a machine with mpv behaves like one without. It is not decoration — the nightly
+`Test / long-running` job installs mpv and runs `tests/integration --run-slow`, which is
+where CI owns a player and therefore the only place those tests run without someone's
+laptop. A suite that only ever passes locally is a claim, not a check.
 
 Markers are applied automatically from the directory by
 `tests/conftest.py`, so a new file needs no decorator to land in the right suite.

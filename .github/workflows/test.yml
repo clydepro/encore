@@ -68,6 +68,14 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen --all-groups
+      # `tests/integration/test_real_mpv.py` skips wherever there is no player and is marked
+      # `slow` even where there is one, so this is the only place in CI that owns a binary and
+      # the only place those nine tests ever run. Without the step the file would be a claim
+      # rather than a check — and the four defects it found are the reason it exists.
+      - name: Install mpv for the real-engine suite (SAPRS 14.4's exception)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mpv
+      - name: Integration suites, including a real mpv
+        run: uv run pytest tests/integration --run-slow --no-cov
       - name: Baseline party (SAPRS 14.11)
         run: >
           uv run pytest tests/performance tests/party_simulation --run-slow --no-cov
