@@ -58,8 +58,9 @@ same rule that keeps the appliance dependable.
 
 ## Screenshots
 
-Not yet — the interface ships with milestones 11–12 (FastAPI + HTMX). Images will
-land in [`docs/images/`](docs/images/) and be referenced from the
+Not yet — the interface exists (milestones 11–13, `encore/templates/`), but no
+screenshots of it have been taken. Images will land in
+[`docs/images/`](docs/images/) and be referenced from the
 [User Guide](docs/User-Guide.md).
 
 ## Features
@@ -193,13 +194,12 @@ Quality gates are enforced locally on commit and again in CI
 Documentation, Security, Release.
 
 The core is in place — domain model, Event Bus, configuration, both databases,
-the Library Builder, and now search, playback and the queue — so `scripts/check.sh`
-runs 925 tests against real code rather than an empty skeleton (955 with the
-scheduled performance and Party Simulation suites, on a machine that has mpv
-installed; 946 without it). There is still nothing to
-start: `apps/server/` is a placeholder, because the HTTP interface arrives with
-milestone 11. The player and the stores exist, the player has driven a real mpv,
-and neither is exercised by a running application yet.
+the Library Builder, search, playback, the queue — and there is now something to
+start: `scripts/run-server.sh` serves the guest pages, the JSON API and the SSE
+stream over the composed graph, so `scripts/check.sh` runs 1109 tests against
+real code (1146 with the scheduled performance and Party Simulation suites, on a
+machine that has mpv installed). The administrative interface is the remaining
+half of the HTTP surface, and arrives with milestone 14.
 
 Layout:
 
@@ -250,10 +250,10 @@ the same work into ten milestones.
 8. **Playback. Done** — `encore/playback/`, mpv IPC, supervisor, recovery.
 9. **Queue. Done** — `encore/services/queue_service.py`, strict FIFO on `runtime.db`.
 10. **Runtime database. Done** — migrations and repositories in step 5.
-11. FastAPI. ← next
-12. HTMX.
-13. SSE.
-14. Administrative interface.
+11. **FastAPI. Done** — `encore/api/`, `apps/server/`, versioned JSON API.
+12. **HTMX. Done** — `encore/controllers/`, `encore/templates/`, server-rendered fragments.
+13. **SSE. Done** — `/events`, `encore/services/sse_publisher.py`.
+14. Administrative interface. ← next
 15. Installer.
 16. Party Simulation.
 17. Documentation → `1.0.0`.

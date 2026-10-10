@@ -1,0 +1,41 @@
+{#
+Now Playing (SAPRS 9.7, 9.8).
+
+The progress bar is a `role="progressbar"` with the numbers spelled out in text next to
+it, because a bar conveys "most of the way through" to an eye and nothing to a screen
+reader, and SAPRS 9.2 asks for the second group too. It is also honest about the case the
+engine cannot report: no duration yet, no bar, just the track's name.
+#}
+<div class="now-playing" data-state="{{ state.value }}">
+  {% if now %}
+    <img class="now-playing__art" src="{{ now.artwork_url }}" alt="" width="96" height="96" loading="lazy">
+    <div class="now-playing__text">
+      <p class="now-playing__label">
+        {% if audible %}Now playing{% elif state.value == "paused" %}Paused{% elif state.value == "loading" %}Starting{% else %}Stopped{% endif %}
+      </p>
+      <h2 class="now-playing__title">{{ now.title }}</h2>
+      <p class="now-playing__subtitle">{{ now.subtitle }}</p>
+      <div
+        class="progress"
+        role="progressbar"
+        aria-valuemin="0"
+        aria-valuemax="{{ duration.total_seconds() | int }}"
+        aria-valuenow="{{ position.total_seconds() | int }}"
+        aria-valuetext="{{ position | clock }} of {{ duration | clock }}"
+      >
+        <div class="progress__bar" style="width: {{ (fraction * 100) | round(1) }}%"></div>
+      </div>
+      <p class="progress__times">
+        <span>{{ position | clock }}</span>
+        <span>{{ duration | clock }}</span>
+      </p>
+    </div>
+  {% else %}
+    <div class="now-playing now-playing--empty">
+      <p class="now-playing__label">Nothing playing</p>
+      <p class="now-playing__subtitle">
+        {% if length %}{{ length }} {{ "song" if length == 1 else "songs" }} waiting.{% else %}Ask for a song and it starts now.{% endif %}
+      </p>
+    </div>
+  {% endif %}
+</div>

@@ -1,0 +1,18 @@
+{#
+The answer to the guest who tapped, in the row they tapped it in (SAPRS 9.7).
+
+Wording is the whole of this file. "Added to Up Next at position 4" and "Playing now" are
+the two sentences SAPRS 9.7 asks the appliance to distinguish, and a guest standing in a
+different room from the speakers cannot tell by listening which one happened.
+#}
+<span class="row-status" aria-live="polite">
+  <span class="added added--{{ queue_state }}"{% if wait and wait.total_seconds() > 0 %} title="about {{ wait | clock }} until it starts"{% endif %}>
+  {% if queue_state == "playing" %}
+    Playing now
+  {% elif queue_state == "queued" %}
+    Added{% if row.position %} at {{ row.position }}{% endif %}{% if wait and wait.total_seconds() > 0 %} — about {{ wait | clock }} in{% endif %}
+  {% else %}
+    Queued
+  {% endif %}
+  </span>
+</span>

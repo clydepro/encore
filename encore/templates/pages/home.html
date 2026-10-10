@@ -1,0 +1,16 @@
+{#
+A page is the shell with one region filled in (SAPRS 9.3, ADR-002).
+
+Nothing here reaches for data. The context is assembled once, on the appliance thread, in
+`encore/api/views.py`, and what a template may do with it is present it — which is the
+guardrail AIG 4 states as "templates contain presentation only" and the import test in
+`tests/unit/test_architecture_guardrails.py` keeps honest. The visible consequence is that
+a page's row count and a JSON response's row count are the same number read once, rather
+than two queries that can disagree during a song change.
+#}
+{% extends "shell.html" %}
+{% block title %}Now playing{% endblock %}
+{% set nav = "home" %}
+{% block main %}
+  {% include "panels/player.html" %}
+{% endblock %}

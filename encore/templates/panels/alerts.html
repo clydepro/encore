@@ -1,0 +1,20 @@
+{#
+The strip a guest is told things in (SAPRS 1.5, 9.8, 11.9).
+
+Kept out of the player panel so a degraded mpv does not look like a changed song, and
+`role="status"` rather than `alert` because a jukebox problem is information rather than an
+interruption — it should not steal a screen reader's focus from a track list mid-tap.
+
+The domain is printed as text, not as a QR image: the code that would render one is a
+dependency and a tenth of a second of a phone's battery, and milestone 5's admin screen is
+where issue #25 files that decision.
+#}
+<div id="alerts" class="alerts{% if not health.status.is_healthy %} alerts--{{ health.status.value }}{% endif %}"
+     role="status"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% if fact %}
+    <p class="alerts__line">{{ fact | alert_text }}</p>
+  {% elif not health.status.is_healthy %}
+    <p class="alerts__line">{{ health.detail or "This jukebox is running with a problem." }}</p>
+  {% endif %}
+  {% block alerts_after %}{% endblock %}
+</div>

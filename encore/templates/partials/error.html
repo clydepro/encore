@@ -1,0 +1,20 @@
+{#
+A failure, as HTMX can swap it (SAPRS 10.6, 10.8).
+
+`partials/` rather than a status page because a fragment request deserves a fragment answer;
+the whole-shell variant is `error.html` beside this one, and `encore/api/errors.py` chooses
+between them by one header. The text says what to do next — "the queue is full" is a fact,
+"ask again in a minute" is an instruction, and SAPRS 10.8's rule is that an error a guest
+cannot act on is a defect.
+#}
+<div class="error error--{{ failure.code }}">
+  <p class="error__line">{{ failure.message }}</p>
+  {% if details.limit %}
+    <p class="error__hint">The queue holds {{ details.limit }} songs. Ask again once some have played.</p>
+  {% elif details.song_id %}
+    <p class="error__hint">Song {{ details.song_id }} is not in this library. Try searching for it instead.</p>
+  {% endif %}
+  {% for field in details.fields or [] %}
+    <p class="error__hint">{{ field.location }}: {{ field.message }}</p>
+  {% endfor %}
+</div>

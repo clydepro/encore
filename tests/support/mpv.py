@@ -239,3 +239,47 @@ class MockMpv:
         event = self.next_event()
         assert event.name == name, f"expected event {name!r}, got {event.name!r}"
         return event
+
+
+class FakeEngine:
+    """An `EngineLauncher` over `MockMpv`, for a test that needs a whole appliance.
+
+    `apps/server/appliance.py:build` takes a launcher rather than a channel, because the
+    supervisor starts and stops the process it is talking to; a test that handed it a
+    ready-made socket could not exercise a restart at all. Each `launch()` after the first
+    returns a *new* double, which is what makes "did the player pick up the new channel?" a
+    question with an answer in the test rather than a claim in a docstring.
+
+    `alive` is the property the supervisor polls (SAPRS 7.6's detection path), so it follows
+    the mock's process state rather than being a flag nobody had to keep honest.
+    """
+
+    def __init__(self) -> None:
+        self.mpv = MockMpv()
+        self.launches = 0
+        self.terminations = 0
+
+    def launch(self) -> MockMpv:
+        self.launches += 1
+        if self.launches > 1:
+            self.mpv = MockMpv()
+        return self.mpv
+
+    def terminate(self) -> None:
+        self.terminations += 1
+        self.mpv.crash()
+
+    @property
+    def alive(self) -> bool:
+        return self.mpv.running
+
+    def diagnostics(self) -> str:
+        return f"mock mpv ({self.launches} launch{'es' if self.launches != 1 else ''})"
+
+    def command_names(self) -> list[str]:
+        """Every command this engine's channels have been given, oldest first."""
+
+        return self.mpv.command_names()
+
+    def count(self, name: str) -> int:
+        return self.command_names().count(name)

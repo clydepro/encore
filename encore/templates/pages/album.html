@@ -1,0 +1,22 @@
+{% extends "shell.html" %}
+{% block title %}{{ album.title }}{% endblock %}
+{% set nav = "album" %}
+{% block main %}
+  <section class="entity">
+    <header class="entity__head">
+      <img class="entity__art" src="/artwork/album/{{ album.id }}" alt="" width="140" height="140" loading="lazy">
+      <div>
+        <h1>{{ album.title }}</h1>
+        <p><a href="/artists/{{ album.artist_id }}">{{ artist.name if artist else "Unknown artist" }}</a></p>
+        <p class="muted">
+          {{ tracks | length }} tracks
+        </p>
+      </div>
+    </header>
+    <ul class="row-list">
+      {% for row in tracks %}
+        <li>{% include "partials/song_row.html" %}</li>
+      {% endfor %}
+    </ul>
+  </section>
+{% endblock %}

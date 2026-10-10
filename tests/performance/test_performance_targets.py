@@ -3,11 +3,11 @@
 The numbers live in one place so a later benchmark can never "re-tune" a target
 to make a slow feature pass. Each entry says which milestone makes it real.
 
-A skipped target here is a commitment with a date, not a green box: the reason
-`search` is measured rather than skipped is that the search layer exists, and the
-reason the others are not is that they do not. When you implement a subsystem,
-replace its skip with the benchmark — leaving the skip in place after the code
-lands is how a budget quietly stops being enforced.
+A skipped target here is a commitment with a date, not a green box. There are none
+left, which is the point: every budget SAPRS 1.8 states is measured somewhere in this
+directory, and `test_registry_accounts_for_every_target` below is what keeps it that
+way. When a subsystem lands, its benchmark lands with it; a placeholder that survives
+its own subsystem is how a budget quietly stops being enforced.
 
 The `search` budget is measured in `test_builder_scale.py`, against a library of
 1,500 songs built by the real Builder rather than against a hand-written fixture:
@@ -16,8 +16,6 @@ proves only that 20 rows are fast.
 """
 
 from __future__ import annotations
-
-import pytest
 
 #: p95 latency budget per operation, in milliseconds.
 TARGETS_MS: dict[str, float] = {
@@ -32,35 +30,19 @@ TARGETS_MS: dict[str, float] = {
 OWNING_MILESTONE: dict[str, str] = {
     "search": "5/6 — measured in test_builder_scale.py",
     "queue_operation": "9 (Queue) — measured in test_runtime_latency.py",
-    "htmx_navigation": "12 (HTMX)",
+    "htmx_navigation": "11-12 — measured in test_http_latency.py",
     "playback_start": "8 (Playback) — measured in test_runtime_latency.py",
-    "sse_propagation": "13 (SSE)",
+    "sse_propagation": "13 — measured in test_http_latency.py",
 }
 
 #: Operations with no code to measure yet. Everything else must have a benchmark.
 #:
-#: `queue_operation` and `playback_start` left this list with milestone 3 (AIG 21 steps 8-9)
-#: and are measured in `test_runtime_latency.py`. Only the two that need a request and a
-#: browser remain: HTMX navigation and SSE propagation, which cannot be measured before
-#: milestones 11 and 13 put an HTTP server in front of them.
-UNIMPLEMENTED = ("htmx_navigation", "sse_propagation")
-
-
-@pytest.mark.parametrize("operation", sorted(UNIMPLEMENTED))
-@pytest.mark.slow
-def test_latency_budget_is_not_forgotten(operation: str) -> None:
-    """A placeholder that outlives its subsystem is a lying placeholder.
-
-    This exists so that adding a service without adding its benchmark fails here:
-    the check is whether the operation is still listed as unimplemented, and
-    `test_registry_accounts_for_every_target` below keeps the two lists honest.
-    """
-
-    assert operation in OWNING_MILESTONE
-    pytest.skip(
-        f"{operation} benchmark lands with milestone {OWNING_MILESTONE[operation]}; "
-        f"budget is p95 < {TARGETS_MS[operation]:g} ms"
-    )
+#: Empty, and it should stay that way. `queue_operation` and `playback_start` left this list
+#: with milestone 3 (AIG 21 steps 8-9) and are measured in `test_runtime_latency.py`;
+#: navigation and propagation left it with milestone 11, when the server, the templates and
+#: the live channel arrived, and are measured in `test_http_latency.py`. A target with no
+#: benchmark is a target nobody is late for.
+UNIMPLEMENTED: tuple[str, ...] = ()
 
 
 def test_registry_accounts_for_every_target() -> None:
@@ -74,6 +56,4 @@ def test_registry_accounts_for_every_target() -> None:
     assert set(TARGETS_MS) == set(OWNING_MILESTONE)
     assert set(UNIMPLEMENTED) <= set(TARGETS_MS)
     measured = set(TARGETS_MS) - set(UNIMPLEMENTED)
-    assert measured == {"search", "queue_operation", "playback_start"}, (
-        "a subsystem that landed needs its benchmark written"
-    )
+    assert measured == set(TARGETS_MS), "a subsystem that landed needs its benchmark written"

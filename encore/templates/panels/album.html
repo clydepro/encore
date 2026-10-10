@@ -1,0 +1,6 @@
+{# The album's tracks, as a fragment for `hx-get` from an album page's lazy section. #}
+<ul class="row-list">
+  {% for row in tracks %}
+    <li>{% include "partials/song_row.html" %}</li>
+  {% endfor %}
+</ul>

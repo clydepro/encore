@@ -14,6 +14,65 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Added
 
+- The HTTP runtime, the guest interface and the live stream (AIG 21 steps 11, 12
+  and 13, #25), which is the first thing in this repository that can be started:
+  `scripts/run-server.sh`, or `uv run python -m apps.server.main --config …`.
+- `encore/api/` — `create_app()`, whose only job is to compose routers, and
+  `read()`, which is the whole of the HTTP-to-core boundary: every handler awaits
+  the appliance thread through that one function (ADR-012). `errors.py` is a
+  single exception→status→code table so a failure says the same kind of word
+  wherever it happens; `schemas.py` is the Pydantic wire contract under `/api/v1`;
+  `views.py` builds template contexts and nothing else; `rows.py` labels a page of
+  songs in two statements instead of `3 × rows`, which is what the 100 ms search
+  budget actually depends on.
+- The versioned JSON API: search, artists, albums, one song, the queue, Now
+  Playing, health and an `/info` that states the appliance's version and limits —
+  so a script can do everything a phone can, and OpenAPI is generated from the
+  same routes rather than maintained beside them.
+- `encore/controllers/` and `encore/templates/` — the HTMX surface: pages for a
+  reload and fragments for a swap, one shell with two named regions
+  (`swap:player`, `swap:alerts`), and a queue button whose response *is* the new
+  Up Next rather than a redirect, because a guest on a bad connection should not
+  need a second round trip to find out what happened. Vendored htmx, hand-written
+  CSS, nothing fetched from a CDN at runtime (SAPRS 13: the party is offline).
+- `encore/services/sse_publisher.py` and `GET /events` — one bounded queue per
+  connection, a `snapshot` frame first so a late join is correct without replay,
+  facts named by their class so the wire vocabulary cannot drift from
+  `EVENT_VOCABULARY`, `progress` once a second, `resync` when a stream stalls, and
+  region HTML rendered once per fact for every screen rather than once per screen.
+- `apps/server/appliance.py` — the composition root that opens both stores,
+  wires the bus, starts the queue before the player so the first fact has a
+  listener, and unwinds in reverse on shutdown. `build()` takes a launcher, which
+  is what lets a test run the shipped graph against a fake mpv instead of a
+  copy of the wiring.
+- `encore/utilities/appliance.py::ApplianceThread` — the worker ADR-012 argues
+  for, with `worker_ident` for the guardrail that has to say which thread answered.
+- `LibraryService` and `HealthService` in `encore/services/`: the read side that
+  keeps artwork references inside the cache directory (a path from `library.db` is
+  data, not a path to trust), and the aggregate that turns four component answers
+  into one honest status without asking mpv a question on the readiness path.
+- Test support worth having in one place: `tests/support/http.py` (an ASGI driver
+  that can hold an SSE response open — `httpx`'s `ASGITransport` buffers the body
+  and cannot), `tests/support/appliances.py` (the real `build()` with a fake
+  engine, so no test re-implements composition), and
+  `tests/support/latency.py` (nearest-rank percentiles, and the refusal to measure
+  under a tracer).
+- A first end-to-end suite, `tests/e2e/test_guest_journey.py`, marked `e2e`: one
+  long walk through browse → search → queue → redraw → natural end of a track, and
+  a reboot that restores the list and stays silent.
+- Two performance budgets, closing the last gaps in
+  `tests/performance/test_performance_targets.py`: `htmx_navigation` (< 200 ms) and
+  `sse_propagation` (< 1 s), measured over the composed app rather than over
+  services.
+- Regression coverage for #25 in `tests/regression/test_issue_25_http_runtime.py`:
+  eleven defects, each demonstrated in the shape it had when found, then the
+  behaviour that replaced it.
+- `tests/unit/test_templates.py`, which reads the templates as text: every `hx-*`
+  attribute is a word htmx knows (`hx-swap="find …"` was not), no template or
+  script points off the appliance, and the regions the live layer names are the
+  ids the panels declare. A suite with no browser cannot run htmx, so it checks
+  the vocabulary instead.
+
 - Search (AIG 21 step 7) in `encore/search/`: a query parser that turns a guest's
   typing into a safe FTS5 `MATCH` expression (word runs, prefix only for tokens of two
   characters or more, eight tokens maximum, SQLite's own operators and quotes stripped
@@ -262,6 +321,32 @@ The release process moves the section into a dated, bracketed version heading.
   one group, so dependency pull requests change `uv.lock` — what CI actually
   installs — instead of only raising the `>=` floors in `pyproject.toml`. See
   `docs/Developer/Repository-Administration.md` and #11.
+
+- Error responses now carry `Cache-Control: no-store`. SAPRS 10.10's rule is about
+  mutable state and has no exception for failures; a cached "queue full" is the
+  same fault as a cached queue.
+- `Accept: */*` is treated as a tool rather than a browser, and gets JSON. A
+  browser names `text/html` because it is about to render it, so the previous
+  behaviour — any `Accept` at all yielding the page — made `curl https://…/queue`
+  return markup. `docs/api/README.md` states the rule.
+- Artwork that cannot be shown is now two answers instead of one: nothing
+  depicted is a `200` placeholder, a library row naming a file the cache has lost
+  is a `404`. The split is the diagnosis.
+- `scripts/test.sh` and `scripts/check.sh` now include `tests/e2e` in the default
+  gate. Three seconds of the suite that drives the product the way a guest does is
+  cheaper than a milestone in which nobody ran it, and neither script's slow path
+  changed.
+- `.pre-commit-config.yaml`'s `vendored` exclusion, which existed so a hygiene hook
+  could not rewrite an upstream planning document, now also covers
+  `encore/static/vendor/htmx/`: a minified third-party file whose sha256 is recorded in
+  `NOTICE.md` has to stay byte-identical, and a trailing newline is a different file.
+- `pytest` runs with `--timeout=60` (`pytest-timeout`, dev dependency). An SSE
+  response that never ends is the feature, so a suite that can hang is a suite
+  that reports nothing; the stream helper gives each read its own shorter deadline.
+- `tests/performance/test_runtime_latency.py` and
+  `tests/performance/test_http_latency.py` share their sampling and percentile code
+  in `tests/support/latency.py` rather than each keeping a copy that could disagree
+  about what "p95" means.
 
 ### Deprecated
 

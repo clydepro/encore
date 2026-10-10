@@ -1,0 +1,10 @@
+{% extends "shell.html" %}
+{% block title %}Up Next{% endblock %}
+{% set nav = "queue" %}
+{% block main %}
+  <section class="browse">
+    <h1>Up Next</h1>
+    <p class="muted">{{ length }} of a possible {{ max_items }}.</p>
+    <ul class="row-list">{% for row in rows %}<li>{% include "partials/song_row.html" %}</li>{% endfor %}</ul>
+  </section>
+{% endblock %}

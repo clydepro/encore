@@ -1,0 +1,25 @@
+{% extends "shell.html" %}
+{% block title %}Artists{% endblock %}
+{% set nav = "artists" %}
+{% block main %}
+  <section class="browse">
+    <h1>Artists</h1>
+    <p class="muted">
+      {{ listing.total }} artists, {{ listing.items | length }} shown from {{ listing.offset }}.
+    </p>
+    <ul class="link-list link-list--columns">
+      {% for artist in listing.items %}
+        <li><a href="/artists/{{ artist.id }}">{{ artist.name }}</a></li>
+      {% endfor %}
+    </ul>
+    <nav class="pager" aria-label="More artists">
+      {% if listing.offset %}
+        <a class="button" href="/artists?offset={{ listing.offset - listing.limit }}">Previous</a>
+      {% endif %}
+      {% if listing.has_more %}
+        <a class="button" href="/artists?offset={{ listing.next_offset }}">Next</a>
+      {% endif %}
+    </nav>
+    {% include "panels/player.html" %}
+  </section>
+{% endblock %}

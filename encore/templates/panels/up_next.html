@@ -1,0 +1,22 @@
+{#
+Up Next (SAPRS 9.9): the position, the track, who is waiting.
+
+The list is capped at `views.UP_NEXT_VISIBLE` and the remainder is counted rather than
+hidden, because "show the queue" and "do not ship forty rows to a phone on a hotspot" are
+both in SAPRS 9.9's brief and a count is the only answer that keeps them both true.
+#}
+<ol class="up-next" aria-label="Up next">
+  {% for row in up_next %}
+    <li class="up-next__item">
+      {% include "partials/song_row.html" %}
+    </li>
+  {% else %}
+    <li class="up-next__empty">Nothing waiting.</li>
+  {% endfor %}
+</ol>
+{% if more_waiting %}
+  <p class="up-next__more">
+    and {{ more_waiting }} more after these
+    <a href="/queue">see the whole list</a>
+  </p>
+{% endif %}

@@ -32,16 +32,16 @@ if [[ "$SLOW" == "1" ]]; then
   # SQLite-heavy work by several times. So the slow suites run untraced, and coverage comes
   # from the same command the standard gate uses. One command that did both would either
   # report a false failure or silently skip the numbers it exists to check.
-  echo "==> Coverage (unit + integration + regression)"
-  uv run pytest tests/unit tests/integration tests/regression \
+  echo "==> Coverage (unit + integration + regression + e2e)"
+  uv run pytest tests/unit tests/integration tests/regression tests/e2e \
     --cov=encore --cov-report=term-missing
 
   echo "==> Everything, including slow suites (untraced, so the budgets mean something)"
   exec uv run pytest --run-slow --no-cov
 fi
 
-echo "==> Tests (unit + integration + regression) with coverage"
-uv run pytest tests/unit tests/integration tests/regression \
+echo "==> Tests (unit + integration + regression + e2e) with coverage"
+uv run pytest tests/unit tests/integration tests/regression tests/e2e \
   --cov=encore --cov-report=term-missing
 
 echo

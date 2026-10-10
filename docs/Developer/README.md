@@ -6,6 +6,8 @@ yet.
 
 - [Getting started](Getting-Started.md) — clone, install, first check run.
 - [Testing](Testing.md) — suites, fixtures, doubles, Party Simulation.
+- [Front end](Frontend.md) — the two swap regions, the htmx vocabulary, and what
+  the live layer is allowed to do on its own.
 - [Continuous integration](Continuous-Integration.md) — the five workflows and
   what each gate means.
 - [Repository administration](Repository-Administration.md) — branch protection,
