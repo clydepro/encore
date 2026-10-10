@@ -6,8 +6,10 @@ a function call rather than from a socket. Everything that can go wrong between
 correlates a reply with the command that caused it, an event arriving beside an answer —
 is covered here instead, against a fake socket that replays prepared bytes.
 
-The launcher half covers the two startup failures an operator can otherwise never tell
-apart: mpv that never opens its socket, and mpv that exits first.
+The launcher half covers the startup failures an operator can otherwise never tell apart:
+mpv that never opens its socket, mpv that exits first, and a `paths.temp_dir` the appliance
+cannot prepare — which must be a named launch failure like the other two, because it is the
+one of them that arrives from `tick()` during recovery.
 """
 
 from __future__ import annotations
@@ -296,8 +298,12 @@ def test_the_command_line_carries_the_configuration_not_assumptions() -> None:
     assert "--volume=63" in argv
     assert "--gapless-audio=no" in argv
     assert "--input-ipc-server=/tmp/mpv-1.sock" in argv
-    assert "--input-ipc-run=0600" in argv, (
-        "a world-readable socket lets another user control the volume"
+    assert not any(arg.startswith("--input-ipc-run") for arg in argv), (
+        "that option does not exist before mpv 0.36, and mpv treats an unknown option as "
+        "fatal at parse time (measured on 0.35.1: 'option not found', exit 1) — so passing it "
+        "means the appliance starts no player at all on an older engine. Socket permissions "
+        "are set in "
+        "`MpvProcess._restrict_socket` instead, which works on every version."
     )
     assert "--no-video" in argv
 
@@ -542,3 +548,44 @@ def test_a_temp_dir_too_deep_for_a_unix_socket_says_so_at_startup(tmp_path: Path
 
     with pytest.raises(ValueError, match="too deep"):
         socket_path_for(deep)
+
+
+def test_the_socket_directory_is_private_before_mpv_is_asked_for_it(tmp_path: Path) -> None:
+    """0700, and not left to the umask.
+
+    Whoever can name the socket can send `loadfile`, which is "change what this room hears"
+    with no authentication by design. The mode is asserted here rather than only in
+    `test_real_mpv.py` because setting it needs no mpv, and the machine that has one is the
+    machine that would otherwise be the only one to check.
+    """
+
+    run = tmp_path / "run"
+
+    path = socket_path_for(run)
+
+    assert path.parent == run
+    assert (run.stat().st_mode & 0o777) == 0o700
+
+
+def test_a_temp_dir_that_cannot_be_prepared_is_a_named_launch_failure(tmp_path: Path) -> None:
+    """`OSError` from a misconfigured `paths.temp_dir` would escape `tick()`.
+
+    The supervisor backs off on `MpvGoneError` and reports health on it; it does not catch a
+    bare `PermissionError` or `NotADirectoryError`, so an appliance pointed at a directory it
+    cannot create would raise from a timer rather than say "mpv cannot start, trying again in
+    Ns" — the same difference in kind as the two failures above, and reachable from
+    configuration alone.
+    """
+
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("")
+    launcher = MpvLauncher(
+        playback=PlaybackConfig(mpv_path=Path("/usr/bin/mpv")),
+        audio=AudioConfig(output="null", device="none"),
+        temp_dir=blocker / "run",
+    )
+
+    with pytest.raises(MpvGoneError, match="cannot prepare"):
+        launcher.launch()
+
+    assert launcher.alive is False, "a failed launch leaves nothing to reap"

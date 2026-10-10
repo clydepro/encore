@@ -190,6 +190,25 @@ The release process moves the section into a dated, bracketed version heading.
   report a party that heard three songs as having heard thirty. The domain type landed
   in phase 1 with the wrong rule and nothing could notice until there was a caller
   (#23).
+- The playback launch line no longer passes `--input-ipc-run=0600`, and socket permissions are
+  set by Encore instead: the directory holding the socket is `0700` and the socket is
+  `chmod`-ed to `0600` once it appears. That mpv option arrived in 0.36 and an unknown option
+  is fatal at parse time, so on mpv 0.35.1 every engine start failed with "mpv exited with
+  code 1" before a socket existed — a launch bug every mocked test passed, because a mock
+  never parses a command line (`tests/integration/test_real_mpv.py`, found by running a real
+  mpv). Encore claims no version floor for this and does not need one: pinning a minimum is
+  the installer's decision (SAPRS 7.7). Encore therefore needs no version floor for this, and
+  does not claim one: the installer decides that (SAPRS 7.7).
+- `MpvLauncher` keeps the channel it created and closes it in `terminate()`, and
+  `PlaybackSupervisor` closes the channel a restart replaces. Each recovery had been
+  abandoning a connected socket, so an hour of mpv crash loops left an appliance holding one
+  descriptor per attempt with nothing in the logs to explain it.
+- `CommandChannel` documents why closing is *not* part of the protocol: making it mandatory
+  would force every transport double to model a lifecycle it has no opinion about, which is
+  the argument ADR-011 makes about `Player` in the first place.
+- `tests/support/media.py`'s MP3 containers are now described accurately: a real mpv decodes
+  them (length and running position reported), which the suite had been claiming it could
+  not. FLAC remains refused, as its container carries no audio frames.
 - `MockMpv` now clears `eof-reached` and `pause` when a file is loaded, as mpv does. The
   double had been carrying the previous track's end-of-file onto the next one, which
   made a queue advance appear to walk the entire list in a single tick — and let a
@@ -247,6 +266,19 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Fixed
 
+- Four more defects in the launch path, three of them found by running the finished playback
+  stack against a real mpv rather than against `MockMpv`, and fixed where a mock could not hide
+  them again: the unsupported launch option and the leaked socket described above, and a load
+  that mpv had accepted but not yet completed being read as an ended track — which answered a
+  guest's request with `SongFinished(COMPLETED)` and let the queue walk itself to empty against
+  a silent appliance. `Loading` is now a state that can last, bounded by a five-second grace
+  after which a file mpv never opened is reported as `FAILED`
+  (`tests/regression/test_issue_23_search_playback_queue.py`).
+  The fourth came from reading what that run put in front of us rather than from mpv itself: a
+  `paths.temp_dir` that cannot be created or tightened raised a bare `OSError` out of
+  `MpvLauncher.launch()`, which the supervisor does not catch — so a misconfigured directory
+  was a traceback from a timer where the other launch failures are a named cause and a backoff.
+  It is `MpvGoneError` now, like the failure to spawn (`tests/unit/test_playback_ipc.py`).
 - Eight defects found while building AIG steps 7–9, each now guarded by
   `tests/regression/test_issue_23_search_playback_queue.py`, which carries the table of
   symptoms. Four of them were only findable by running the new code: an item was marked

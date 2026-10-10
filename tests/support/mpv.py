@@ -85,6 +85,7 @@ class MockMpv:
     def __init__(self, *, name: str = "mock-mpv") -> None:
         self.name = name
         self.running = True
+        self.closed = False
         self.properties: dict[str, Any] = dict(DEFAULT_PROPERTIES)
         self.commands: list[MpvCommand] = []
         self.events: deque[MpvEvent] = deque()
@@ -178,6 +179,17 @@ class MockMpv:
 
         self.running = False
         self.emit("log", {"level": "error", "message": "mpv terminated unexpectedly"})
+
+    def close(self) -> None:
+        """Let go of the connection, as `JsonIpc` does.
+
+        Part of the surface a caller of a channel may use, so that "did the replacement path
+        close the socket it replaced?" is answerable in a test without a real descriptor. It
+        does not stop the engine: closing a connection and killing a process are different
+        things, and the supervisor does both on purpose.
+        """
+
+        self.closed = True
 
     def command_names(self) -> list[str]:
         return [command.name for command in self.commands]

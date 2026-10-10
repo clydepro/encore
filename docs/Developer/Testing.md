@@ -7,10 +7,14 @@ SAPRS Chapter 14 is the policy; this file is the mechanics.
 | Directory | Marker | Runs in | Requires |
 | --------- | ------ | ------- | -------- |
 | `tests/unit/` | `unit` | Validate workflow, every commit | nothing |
-| `tests/integration/` | `integration` | Test workflow, PR gate | nothing |
+| `tests/integration/` | `integration` | Test workflow, PR gate | nothing (mpv optional) |
 | `tests/regression/` | `regression` | Test workflow + `scripts/check.sh`, every commit | nothing |
 | `tests/performance/` | `performance`, `slow` | Scheduled + release | `--run-slow` |
 | `tests/party_simulation/` | `party_simulation`, `slow` | Scheduled + release | `--run-slow`, a profile |
+
+One integration file, `test_real_mpv.py`, drives the real binary and is marked `slow` as
+well: it skips wherever mpv is not installed, and it is kept out of the per-commit gate so
+that a machine with mpv behaves like one without.
 
 Markers are applied automatically from the directory by
 `tests/conftest.py`, so a new file needs no decorator to land in the right suite.
@@ -59,9 +63,11 @@ destination (90% overall, 95% domain/queue/search, 90% playback/builder).
   containers with valid frames, tags them through mutagen, and embeds genuine
   JPEG covers built with Pillow. Duration comes from the container, so a test
   that asserts "213 seconds" is asserting what a probe would report.
-  The audio is silence, which is enough for metadata, discovery, deduplication
-  and search; it is not enough for decoding, so playback tests still need
-  recorded fixtures.
+  The audio is silence. Measured against a real mpv (0.35.1) rather than assumed: MP3
+  containers *do* decode — the engine reports a length and a running position, which is
+  enough for the IPC-and-state-machine tests in `test_real_mpv.py` — while FLAC does not,
+  because a STREAMINFO with no frames is refused. Nothing in the suite needs a recorded
+  fixture, and nothing should claim to test sound.
   `aac`/`m4a` raise `SyntheticMediaUnavailableError` rather than emitting a file
   that only looks like one (PBK 16): a builder test that passed against a fake
   container would be testing the fake.
@@ -81,21 +87,31 @@ destination (90% overall, 95% domain/queue/search, 90% playback/builder).
 `tests/support/media.py` writes valid MP3 and FLAC containers — correct frames,
 real durations, tags, embedded JPEG covers — containing silence. That is enough
 for everything that reads a file's *structure*: metadata extraction, discovery,
-deduplication, search, artwork. It is not enough for anything that needs to hear
-something.
+deduplication, search, artwork. Measured against a real mpv rather than assumed,
+it is also more enough than this file used to claim: MP3 containers decode, with a
+length and a running position, so a state machine can be tested against the actual
+engine. FLAC is the exception — a STREAMINFO with no frames is refused.
 
-So playback tests divide in two, and the division is deliberate rather than an
+So playback tests divide in three, and the division is deliberate rather than an
 accident of what was convenient:
 
-- **Tested.** mpv's JSON IPC contract, the Supervisor's state machine, gapless and
-crossfade *commands*, recovery from a crash. These run against `MockMpv`, and the
-mock is not cheating because it accepts the same command objects the real client
-serialises — a mismatch in the command vocabulary still fails.
-- **Skipped, with a reason.** Anything whose assertion is about sound arriving:
-gapless *audibility*, crossfade curve shape, decoder behaviour on odd samples,
-true gapless frame boundaries. A test asserting those against silent containers
-would be testing the fixture, and a green suite that quietly means nothing is worse
-than an honest skip.
+- **Tested, against `MockMpv`.** mpv's JSON IPC contract, the Supervisor's state
+machine, gapless and crossfade *commands*, recovery from a crash. The mock is not
+cheating because it accepts the same command objects the real client serialises — a
+mismatch in the command vocabulary still fails.
+- **Tested again, against the real binary** (`tests/integration/test_real_mpv.py`,
+skipped where mpv is not installed). A mock that answers `loadfile` by setting the
+properties in the same call flatters the design in three specific ways, all of which
+were bugs: an unsupported option is fatal at parse time, so the launch never happened;
+a load takes ~150 ms to become visible, so `idle-active=True` is not "finished"; and a
+channel owns a file descriptor, so a restart that replaces one leaks one. Anything that
+asserts a property of *mpv* rather than of Encore belongs here, and where both can prove
+it, both do.
+- **Skipped, with a reason.** Anything whose assertion is about sound arriving: gapless
+*audibility*, crossfade curve shape, decoder behaviour on odd samples, true gapless frame
+boundaries, and the whole ALSA/DAC path (`--ao=null` is what these tests use). A test
+asserting those against silent containers would be testing the fixture, and a green suite
+that quietly means nothing is worse than an honest skip.
 
 If the skips ever start hiding real regressions — a playback bug shipped past a
 test that skipped rather than caught it — the policy is wrong and should be
