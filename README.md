@@ -142,11 +142,11 @@ superseded by
 
 ## Installation
 
-> Not installable yet. Steps 1–4 (repository, domain model, Event Bus,
-> configuration) are implemented; the server starts at step 11 and the Builder at
-> step 6. The commands below are the contract the installer will honour
-> (SAPRS 13.2 — the manual path is authoritative; `encore-install` automates
-> exactly it).
+> Not installable yet — the one-command `encore-install` is step 15. Everything it
+> would run exists: the Builder produces a library, and the server starts and
+> serves guests, an API and the live stream (steps 1–13). The commands below are
+> the manual path, which is authoritative (SAPRS 13.2) and is what the installer
+> will automate.
 
 Target: Raspberry Pi 4, Raspberry Pi OS 64-bit (Debian 12 and Ubuntu 24.04 also
 supported).
