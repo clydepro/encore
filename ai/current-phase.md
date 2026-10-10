@@ -8,6 +8,13 @@ which closed issue #19). This branch therefore sits directly on `main` and needs
 an unmerged sibling to build — step 7 was only ever blocked on the library database, and that
 landed with #22.
 
+**Status of [PR #24](https://github.com/clydepro/encore/pull/24): ready to merge.** The one open
+carry-over from the previous session — "nothing here has met a real mpv" — is closed: mpv is
+installed here (0.35.1) and the stack has been run against it, which found five defects and took
+four commits to fix (`3c1bf1f`, `c200b69`, `f043452`, `5e63dd3`). See *Loose ends* below and
+`ai/HANDOFF.md`'s "Known loose ends" for what that produced; nothing is waiting on a binary, a
+hardware check, or a decision.
+
 Read this page first in a new session, then [`context/milestones.md`](context/milestones.md)
 for what exists and what is scaffolding. Neither is authoritative: precedence is
 task request → SAPRS → AIG → ADRs → AEP (AEP 2).
