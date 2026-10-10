@@ -13,8 +13,10 @@ to do when it disagrees with you.
 
 Three checks run without being required: `Test / arm64 smoke` (informative — the
 real target is a Raspberry Pi, this is emulation), `Test / long-running` (nightly
-and manual only, so it can never gate a PR), and the `CodeQL` analysis check the
-tool itself creates. Adding one to the required list is a tax on every future
+and manual only, so it can never gate a PR — and the only CI job that installs
+mpv, which makes it the place `tests/integration/test_real_mpv.py` actually runs;
+everywhere else that file skips), and the `CodeQL` analysis check the tool itself
+creates. Adding one to the required list is a tax on every future
 contribution, so it needs a stated reason; see
 [Repository administration](Repository-Administration.md#required-checks).
 
