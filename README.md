@@ -194,11 +194,12 @@ Documentation, Security, Release.
 
 The core is in place — domain model, Event Bus, configuration, both databases,
 the Library Builder, and now search, playback and the queue — so `scripts/check.sh`
-runs 912 tests against real code rather than an empty skeleton (933 with the
-scheduled performance and Party Simulation suites). There is still nothing to
+runs 925 tests against real code rather than an empty skeleton (955 with the
+scheduled performance and Party Simulation suites, on a machine that has mpv
+installed; 946 without it). There is still nothing to
 start: `apps/server/` is a placeholder, because the HTTP interface arrives with
-milestone 11. The player and the stores exist and are exercised by tests, but no
-running application composes them yet.
+milestone 11. The player and the stores exist, the player has driven a real mpv,
+and neither is exercised by a running application yet.
 
 Layout:
 

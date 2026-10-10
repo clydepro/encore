@@ -9,8 +9,9 @@ and it will be wrong faster than the SAPRS is.
 State as of this writing: **Phases 1 and 2 are merged (#20, #22); this branch is the third**
 and sits on `main`, rebased onto it at `3e70794`. Both
 databases exist, the Builder builds them, and something now *reads* them: search answers, the
-queue orders, playback makes sound — all in tests, none inside a running server. 912 tests
-pass in the standard gate (933 with the slow suites), 93.1% coverage, `scripts/check.sh`
+queue orders, playback makes sound — all in tests, none inside a running server. 925 tests
+pass in the standard gate (955 with the slow suites on a machine that has mpv installed,
+946 on one that does not), 93.4% coverage, `scripts/check.sh`
 green. The next phase is `apps/server/`, which is where the wiring stops being a test fixture.
 
 **[Issue #23](https://github.com/clydepro/encore/issues/23) is closed by this branch's PR**,
@@ -92,7 +93,7 @@ Then `tests/integration/test_queue_playback_and_search.py`, which wires all of i
 - `tests/integration/test_library_contract.py` (phase 2) still guards the read side; the
   search service now depends on it, because `encore/search/` has no SQL of its own to be
   wrong in.
-- `tests/regression/test_issue_23_search_playback_queue.py` — eight defects, one file, and a
+- `tests/regression/test_issue_23_search_playback_queue.py` — eleven defects, one file, and a
   table of symptoms in the docstring. Its value is the prose; a future session that finds
   three more bugs on one PR adds them *to this file*, not three files (AEP 13 is per issue).
 - The one-way queue→playback rule is enforced twice: as an import scan, and behaviourally by
@@ -135,21 +136,32 @@ Then `tests/integration/test_queue_playback_and_search.py`, which wires all of i
 
 ## Known loose ends
 
-- **This phase has met a real mpv (0.35.1), and it found three bugs.** `MockMpv` answers
+- **This phase has met a real mpv (0.35.1), and it found four bugs.** `MockMpv` answers
   `loadfile` by setting the properties the next read will return; a real mpv answers by
   *promising* and loading asynchronously. Running the stack against the binary produced
-  `tests/integration/test_real_mpv.py` plus three fixes. Each fix is also covered by a mocked
+  `tests/integration/test_real_mpv.py` plus four fixes. Each is also covered by a mocked
   regression test in `tests/regression/test_issue_23_search_playback_queue.py`, so CI without
-  mpv still guards all three, and ADR-005 carries the rules they taught under
-  `Implementation notes` — read that before touching `encore/playback/` again. `--input-ipc-run` does not exist before mpv 0.36, and an unknown
-  option is fatal at parse time: every launch died with "Error parsing option input-ipc-run
-  (option not found)" and exit code 1. Permissions are ours to set instead — 0700 on the
-  directory, `chmod 0600` on the socket — and the half that needs no mpv is checked by
-  `test_the_socket_directory_is_private_before_mpv_is_asked_for_it`. `idle-active=True` for
-  ~150 ms after an accepted load was read as a finished track, which published
-  `SongFinished(COMPLETED)` in answer to a guest's request. And each engine restart abandoned
-  the socket it replaced, leaking a descriptor per recovery.
-- **A fourth bug was in the same code and not found by mpv.** A `paths.temp_dir` the process
+  mpv still guards all four, and ADR-005 carries the rules they taught under
+  `Implementation notes` — read that before touching `encore/playback/` again.
+
+  1. `--input-ipc-run` does not exist before mpv 0.36 and an unknown option is fatal at parse
+     time: every launch died with "Error parsing option input-ipc-run (option not found)" and
+     exit code 1. Permissions are ours to set instead — 0700 on the directory, `chmod 0600` on
+     the socket — and the half that needs no mpv is checked by
+     `test_the_socket_directory_is_private_before_mpv_is_asked_for_it`.
+  2. `idle-active=True` for ~150 ms after an accepted load was read as a finished track, which
+     published `SongFinished(COMPLETED)` in answer to a guest's request.
+  3. Each engine restart abandoned the socket it replaced, leaking a descriptor per recovery.
+  4. A file mpv *refuses* and a file that plays out between two polls produce the same reading —
+     idle, no filename, no position — so `LOAD_GRACE_SECONDS` could only be right by luck and
+     the suite was flaky in the direction that mattered (three passes in four). mpv says which
+     one it was, in an `end-file` event that `JsonIpc` had been collecting and nobody had been
+     reading. It is read now: a refusal is `FAILED` in one tick rather than five seconds, an
+     `eof` is a listen even when the announcement is a tick late, and an engine that says
+     nothing falls back to the grace. Polling still decides everything in progress — this is the
+     one fact Encore asks the engine for instead of watching for.
+
+- **A fifth bug was in the same code and not found by mpv.** A `paths.temp_dir` the process
   cannot create or tighten raised `NotADirectoryError`/`PermissionError` out of
   `MpvLauncher.launch()`, and the supervisor catches only `MpvGoneError` and
   `EngineUnavailableError` — so one mistyped config key made `tick()` raise from a timer while

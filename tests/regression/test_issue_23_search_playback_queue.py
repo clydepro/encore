@@ -1,9 +1,13 @@
 """Regression: #23 — search, playback and the queue.
 
-Eight defects found while building AIG steps 7-9. Six of them were silent: the feature
-worked, the tests written from the specification passed, and the failure only appeared in a
-situation no test had described yet — a stopped song, a file that could not be opened, an
-mpv that died between two requests.
+Twelve defects found while building AIG steps 7-9 and then running them: the first eight
+against our own code, four by running them against a real mpv. Six of the first eight were
+silent — the feature worked, the tests written from the specification passed, and the failure
+only appeared in a situation no test had described yet: a stopped song, a file that could not be
+opened, an mpv that died between two requests. The last four were silent in a stricter sense:
+they are invisible to every other test in the suite, because `MockMpv` answers `loadfile` by
+setting the properties the next read returns, never parses a command line, and owns no file
+descriptor (`tests/integration/test_real_mpv.py`, ADR-005's implementation notes).
 
 | Defect | Symptom |
 | ------ | ------- |
@@ -15,6 +19,10 @@ mpv that died between two requests.
 | `Supervisor.health()` trusted the channel object | `/health` said "healthy" over a dead mpv |
 | `MpvProcess.stop()` waited twice, unguarded | shutdown raised after a SIGKILL that was slow to reap |
 | An unparseable IPC line reached the caller as `JSONDecodeError` | a progress poll died with a traceback, not a named failure |
+| `--input-ipc-run=0600` was passed to mpv | an option that does not exist before 0.36, and an unknown option is fatal at parse time: no engine, ever, on 0.35 |
+| `idle-active` was read as an ending during a load | a guest's request answered itself with `SongFinished(COMPLETED)` and the queue emptied against silence |
+| A restart installed a channel over the old one | every recovery leaked the socket it replaced |
+| mpv's `end-file` verdict was collected and thrown away | a file it refused read as a track that played, and a 400 ms file read as a refusal — the properties cannot tell them apart |
 
 The first was found because `tests/unit/test_events.py` already asserted the opposite of
 `encore/domain/playback.py`'s own docstring, and both were passing: two definitions of "did
@@ -577,11 +585,36 @@ class SlowLoadChannel:
         self._reads = ticks_until_file
         self._stuck = False
         self.command_log: list[str] = []
+        self._events: list[dict[str, object]] = []
 
     def never_loads(self) -> None:
-        """A file mpv accepted and will never manage to open."""
+        """A file mpv accepted and will never manage to open, and never mentions again."""
 
         self._stuck = True
+
+    def refuses(self, reason: str = "unrecognized file format") -> None:
+        """A file mpv accepted, tried, and told us about: `end-file reason="error"`.
+
+        What mpv 0.35.1 actually does in fifty-odd milliseconds, measured rather than
+        imagined: it stays idle, keeps answering nothing about the file, and pushes one event
+        that says why. The polled properties alone cannot separate this from a track that
+        played out between two reads, which is the whole reason the event is read.
+        """
+
+        self._stuck = True
+        self._events.append({"event": "end-file", "reason": "error", "file_error": reason})
+
+    def ends_at_eof(self) -> None:
+        """The other half of the same ambiguity: a real file that finished in the gap."""
+
+        self._stuck = True
+        self._events.append({"event": "end-file", "reason": "eof"})
+
+    def poll_events(self) -> list[dict[str, object]]:
+        """Drained, as `JsonIpc.poll_events` is: a verdict the service misses is lost."""
+
+        events, self._events = self._events, []
+        return events
 
     @property
     def loaded(self) -> bool:
@@ -753,3 +786,56 @@ def test_a_restart_lets_go_of_the_socket_it_replaced() -> None:
     assert _closed(first) is True, "the replaced channel was closed, not abandoned"
     assert _closed(launcher.channels[1]) is False, "the live one is still open"
     assert supervisor.channel() is launcher.channels[1]
+
+
+def test_a_refusal_mpv_names_is_a_failure_without_waiting_for_the_grace() -> None:
+    """mpv says which files it could not open, and says it quickly.
+
+    Waiting out `LOAD_GRACE_SECONDS` is the fallback for an engine that leaves the appliance to
+    infer a refusal from silence. Five seconds is five seconds of a party, and a corrupt file at
+    the head of the queue costs them once per file; a machine that pushes `end-file reason=error`
+    is answered in one reading. The inference stays for the case it was written for, which
+    `test_a_load_that_never_lands_becomes_a_failure_at_the_grace_limit` still guards.
+    """
+
+    clock = Clock()
+    service, events, channel = _slow_load_service(clock)
+    channel.refuses()
+    tap = FactTap(events)
+
+    assert service.play(_song(1), queue_item_id=QueueItemId(1)) is True
+
+    assert [event.reason for event in tap.finished] == [FinishedReason.FAILED], (
+        "an engine that says it could not open the file is not reporting a track that ended"
+    )
+    assert tap.started == [], "nothing was announced, because nothing was heard"
+    assert _state_of(service) is PlaybackState.IDLE
+    assert clock.at == START, "the grace period was never consulted"
+
+
+def test_a_track_shorter_than_one_poll_is_a_completion_not_a_failure() -> None:
+    """The trap in the test above, avoided deliberately.
+
+    A file that opens and runs out between two readings leaves exactly the property reading a
+    refusal leaves — idle, no filename, no position — and a rule of "no evidence means it
+    failed" would report a 400 ms track as a broken file, refuse to count it as a play, and log
+    a warning nobody can explain later. The verdict is what separates them, so the difference is
+    read rather than guessed.
+    """
+
+    clock = Clock()
+    service, events, channel = _slow_load_service(clock)
+    tap = FactTap(events)
+    assert service.play(_song(1), queue_item_id=QueueItemId(1)) is True
+    assert tap.finished == [], "the load is accepted and not yet over"
+    channel.ends_at_eof()
+
+    service.tick()
+
+    assert [event.reason for event in tap.finished] == [FinishedReason.COMPLETED]
+    assert tap.finished[0].completion == 1.0
+    assert len(tap.started) == 1, (
+        "a completed track is announced even when the announcement is a tick late: one fact "
+        "without the other is a song that both was and was not heard"
+    )
+    assert _state_of(service) is PlaybackState.IDLE

@@ -79,6 +79,11 @@ _ENGINE_FAILURE = (MpvCommandError, MpvGoneError, MpvTimeoutError)
 #: state that covers the gap, and this is its deadline: a file that is merely slow is still
 #: playing well inside one track's intro, and a file that is undecodable is reported rather
 #: than leaving the appliance stuck.
+#:
+#: This is the fallback, not the usual path. An engine that pushes `end-file` has already said
+#: whether the file was refused or finished (see `EngineObservation.end_verdict`), and that
+#: answer arrives in one reading; the deadline exists for the case where the engine is silent
+#: about it, which is what a mock is, and what a lost line makes momentarily true.
 LOAD_GRACE_SECONDS = 5.0
 
 
@@ -380,6 +385,28 @@ class PlaybackService:
             return self._progress
 
         if observation.finished or observation.state is PlaybackState.IDLE:
+            if observation.refused:
+                # mpv's own verdict, from the `end-file` that arrived beside these properties.
+                # Waiting for the grace to discover a refusal is the fallback for an engine
+                # that says nothing; an engine that says this is answered in one tick.
+                self._logger.warning(
+                    "mpv refused the file",
+                    extra={
+                        "song_id": int(self._current.song_id),
+                        "file": str(self._current.song.file_path),
+                        "detail": observation.end_detail,
+                    },
+                )
+                self._end(FinishedReason.FAILED, completion=0.0, silence=False)
+                return self._progress
+            if self._state is PlaybackState.LOADING:
+                # The file opened and ran out between two readings — a sting, a field
+                # recording, an intro under a second. Announced first, because a
+                # `SongFinished(COMPLETED)` with no start before it is a fact no listener can
+                # place: something was played, and this is the appliance saying so as late as
+                # it could. One start per track holds either way.
+                self._set_state(PlaybackState.PLAYING)
+                self._announce()
             if self._state is PlaybackState.PLAYING:
                 # The diagram's own edge, taken before the report: a track that ran out is
                 # `Finished`, not `Stopping`, and the difference is what an operator
@@ -491,6 +518,10 @@ class PlaybackService:
         `SongFinished(COMPLETED)`, which let the queue walk itself to empty against a silent
         appliance. `Loading` is the state that covers the gap; `LOAD_GRACE_SECONDS` is how long
         it may last before the file is called unreadable rather than merely slow.
+
+        An `end-file` verdict ends the wait in either direction: the engine has said what
+        became of the file, and waiting to be told twice would waste five seconds of a guest's
+        party and lose the event besides, which is drained when it is read.
         """
 
         current = self._current
@@ -499,6 +530,8 @@ class PlaybackService:
             or observation.state is not PlaybackState.IDLE
             or self._state is not PlaybackState.LOADING
         ):
+            return False
+        if observation.end_verdict is not None:
             return False
         if not self._load_is_overdue():
             return True
