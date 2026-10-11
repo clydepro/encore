@@ -21,6 +21,8 @@ what was rejected.
 | ADR-009  | Split the Storage Access Layer by Mutability              | Accepted               |
 | ADR-010  | Library Builder Pipeline Shape and Library Ownership      | Accepted               |
 | ADR-011  | The Queue Commands Playback; Playback Notifies the Queue  | Accepted               |
+| ADR-012  | One Appliance Thread; The Event Loop Belongs to HTTP      | Accepted               |
+| ADR-013  | Administrator Credential in runtime.db, Session in Memory | Accepted               |
 
 ## Format
 

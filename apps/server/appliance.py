@@ -49,8 +49,16 @@ from encore.playback import (
 from encore.repositories.library import LibraryStore, open_library
 from encore.repositories.runtime import RuntimeStore, open_runtime_store
 from encore.search import SearchService
-from encore.services import HealthService, LibraryService, QueueService, SSEPublisher
+from encore.services import (
+    AdminService,
+    HealthService,
+    LibraryService,
+    QueueService,
+    SSEPublisher,
+)
 from encore.services.health_service import HealthSource
+from encore.services.logging_service import LogTail
+from encore.services.statistics_service import StatisticsService
 from encore.utilities.appliance import ApplianceThread, call_async
 from encore.utilities.clock import Clock, SystemClock
 
@@ -95,6 +103,9 @@ class Appliance:
         supervisor: mpv's process and its recovery, kept visible for shutdown and tests.
         health: The aggregate, polled by the tick.
         live: The SSE fan-out.
+        admin: The credential and the sessions, for `/admin` (SAPRS 10.8, ADR-013).
+        stats: The counters, subscribed to the facts like everything else (AIG 7).
+        logs: The tail the administrative log view reads, and the handler that fills it.
         stores: Both databases, for `close()` and for a test that wants to look at rows.
     """
 
@@ -108,6 +119,9 @@ class Appliance:
     supervisor: PlaybackSupervisor
     health: HealthService
     live: SSEPublisher
+    admin: AdminService
+    stats: StatisticsService
+    logs: LogTail = field(repr=False)
     logger: logging.Logger
     clock: Clock
     library_store: LibraryStore = field(repr=False)
@@ -145,6 +159,10 @@ class Appliance:
         # on the way out to the room (SAPRS 8.6's restart is the one moment the appliance
         # produces events before a guest asks for anything).
         self.live.start()
+        # Counting is a subscriber like any other, and it has the same reason to be first:
+        # a restored queue that starts a song publishes while `start()` runs, and a counter
+        # that subscribed afterwards would be one play short with nothing to show it.
+        self.stats.start()
         self.queue.start()
         self.supervisor.start()
 
@@ -160,6 +178,7 @@ class Appliance:
         """
 
         self.appliance.stop()
+        self.stats.close()
         self.queue.close()
         self.supervisor.stop()
 
@@ -205,8 +224,17 @@ class Appliance:
                 self.logger.exception("appliance tick failed")
 
     def close(self) -> None:
-        """Release both databases. Idempotent, because `finally` runs twice in some tests."""
+        """Release both databases and the log handler this appliance installed.
 
+        Idempotent, because `finally` runs twice in some tests. The handler is removed here
+        rather than left attached for the same reason the stores are closed: a test process
+        that built forty appliances and detached nothing would have forty tails copying every
+        record, and an administrative log view that showed another test's appliance would be
+        a screen nobody could trust.
+        """
+
+        logging.getLogger("encore").removeHandler(self.logs)
+        self.logs.close()
         self.library_store.close()
         self.runtime_store.close()
 
@@ -249,7 +277,10 @@ def build(
     events = EventBus(logger=logging.getLogger("encore.events"))
 
     catalogue = LibraryService(
-        library, artwork_dir=paths.artwork_dir, logger=logging.getLogger("encore.library")
+        library,
+        artwork_dir=paths.artwork_dir,
+        events=events,
+        logger=logging.getLogger("encore.library"),
     )
     search = SearchService(
         index=library.search,
@@ -297,6 +328,20 @@ def build(
         logger=logging.getLogger("encore.health"),
     )
     live = SSEPublisher(events=events, logger=logging.getLogger("encore.sse"))
+    admin = AdminService(
+        store=runtime,
+        config=config.admin,
+        clock=time,
+        logger=logging.getLogger("encore.admin"),
+    )
+    stats = StatisticsService(
+        store=runtime, events=events, clock=time, logger=logging.getLogger("encore.statistics")
+    )
+    # The tail is a handler on `encore`, not on the root: the administrative log view shows
+    # what this appliance decided, and the journal shows everything including uvicorn. It is
+    # installed here and taken off in `close()`, which is the same lifetime as the stores.
+    logs = LogTail()
+    logging.getLogger("encore").addHandler(logs)
 
     log.info(
         "appliance composed",
@@ -317,6 +362,9 @@ def build(
         supervisor=supervisor,
         health=health,
         live=live,
+        admin=admin,
+        stats=stats,
+        logs=logs,
         logger=log,
         clock=time,
         library_store=library,

@@ -21,7 +21,10 @@ should not know about:
   11.2 makes "search cannot happen" a different sentence from "nothing matches".
 
 The service never writes. `library.db` is opened read-only by the repository (ADR-006,
-ADR-009), and there is deliberately no mutation method here for a server to find.
+ADR-009), and there is deliberately no mutation method here for a server to find. The one
+method that changes what the service reads is `reload()`, and it changes nothing on disk:
+it reopens the same path, because a Builder's atomic rename is invisible to a live handle
+and a jukebox that cannot pick up a rebuild is a jukebox that needs a restart at 2 a.m.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ import logging
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Protocol
 
 from encore.domain import (
@@ -42,8 +46,19 @@ from encore.domain import (
     Song,
     SongId,
 )
+from encore.events.bus import EventBus
+from encore.events.library import LibraryReloaded
 
-__all__ = ["DEFAULT_PAGE_LIMIT", "MAX_PAGE_LIMIT", "ArtworkFile", "LibraryService", "Page"]
+__all__ = [
+    "DEFAULT_PAGE_LIMIT",
+    "MAX_PAGE_LIMIT",
+    "ArtworkFile",
+    "LibraryRead",
+    "LibraryService",
+    "LibraryStamp",
+    "LibrarySummary",
+    "Page",
+]
 
 #: Rows a browse page returns when the caller did not ask: about one screen of touch
 #: targets on a phone (SAPRS 9.2), which is a more useful number than a round one.
@@ -145,6 +160,37 @@ class ArtworkRead(Protocol):
     def for_song(self, song_id: SongId) -> Artwork | None: ...
 
 
+class LibraryStamp(Protocol):
+    """The shape `LibraryStore.reload()` and `LibraryStore.info` hand back: the library's
+    own account of itself, from `library_meta`.
+
+    Declared here rather than imported from the repository for the same reason as
+    `LibraryRead` — a service names the capability it needs, and the store satisfies it
+    structurally (SAPRS 11.5).
+    """
+
+    @property
+    def path(self) -> Path: ...
+
+    @property
+    def library_version(self) -> str: ...
+
+    @property
+    def schema_version(self) -> int: ...
+
+    @property
+    def rules_version(self) -> str: ...
+
+    @property
+    def built_at(self) -> str: ...
+
+    @property
+    def song_count(self) -> int: ...
+
+    @property
+    def fts_available(self) -> bool: ...
+
+
 class LibraryRead(Protocol):
     """`LibraryStore`'s public surface, as capabilities rather than as a class.
 
@@ -169,7 +215,44 @@ class LibraryRead(Protocol):
 
     def counts(self) -> Mapping[str, int]: ...
 
+    @property
+    def info(self) -> LibraryStamp: ...
+
     def fts_available(self) -> bool: ...
+
+    def reload(self) -> LibraryStamp:
+        """Reopen the published file and report what it says. See `LibraryStore.reload`."""
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LibrarySummary:
+    """What the library is, for the administrative library page (AIG 14).
+
+    `meta_count` and `songs` are the same number arrived at two ways — the tally the
+    Builder stamped into `library_meta`, and a `COUNT(*)` the store runs now — and both are
+    carried because the *disagreement* is the diagnosis SAPRS 6.10 wants visible. A page that
+    printed only one of them would print a number that might be a lie, and `validation.py`
+    fails a build on exactly this pair, so the runtime should show it the same way.
+    """
+
+    path: Path
+    library_version: str
+    schema_version: int
+    rules_version: str
+    built_at: str
+    meta_count: int
+    fts_available: bool
+    counts: Mapping[str, int] = MappingProxyType({})
+
+    @property
+    def songs(self) -> int:
+        return int(self.counts.get("songs", 0))
+
+    @property
+    def tally_matches(self) -> bool:
+        """Whether the Builder's stamp and the live rows still agree."""
+
+        return self.meta_count == self.songs
 
 
 class LibraryService:
@@ -179,6 +262,10 @@ class LibraryService:
         store: The read side of `library.db` (ADR-009). Never written to (AIG 4).
         artwork_dir: `paths.artwork_dir` — the cache the Builder wrote. Every path
             returned by an `artwork_for_*` method is checked against it.
+        events: The bus, for the one fact this service may publish: that the library
+            changed under the room (SAPRS 6.11, ADR-004's one publisher per fact). Optional
+            because a service used by a Builder-side check or a page-clamping unit test has
+            no room to tell.
         logger: For the one case worth reporting: a reference whose file is not
             where the library says it is.
     """
@@ -188,10 +275,12 @@ class LibraryService:
         store: LibraryRead,
         *,
         artwork_dir: Path,
+        events: EventBus | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._store = store
         self._artwork_dir = Path(artwork_dir)
+        self._events = events
         self._logger = logger or logging.getLogger("encore.library")
 
     # -- songs (SAPRS 9.7) ------------------------------------------------
@@ -294,9 +383,60 @@ class LibraryService:
 
     # -- facts about the library itself (SAPRS 10.3) -----------------------
 
+    def reload(self) -> LibraryReloaded:
+        """Pick up a library the Builder published after this appliance started.
+
+        ADR-006's immutability is about writes, and this is not one. The file is replaced by
+        the Builder's atomic rename (SAPRS 5.8, ADR-010) and a live SQLite handle keeps the
+        inode it opened, so "reload" is one reopen of that one handle — which is why the
+        store, not a second `open_library`, owns the mechanics.
+
+        The fact that comes back is the one every screen is told, and this is the only place
+        in the Server that publishes `LibraryReloaded` (ADR-004). Its count is the Builder's
+        own stamp from `library_meta`, the same number the health probe reads; the library
+        page sets it beside the live `counts()` because a disagreement between the two is an
+        install fault, and putting both where an operator can compare them is the honest
+        version of "validated" (SAPRS 6.10).
+
+        Raises:
+            LibraryContractError: The file at that path is not a readable Encore library.
+                The previous one stays current, and the exception is the answer the page
+                gets (SAPRS 11.9: a maintenance button must not be able to stop a party).
+        """
+
+        info = self._store.reload()
+        fact = LibraryReloaded(song_count=info.song_count, version=info.library_version)
+        if self._events is not None:
+            self._events.publish(fact)
+        self._logger.info(
+            "library reloaded",
+            extra={"songs": fact.song_count, "library_version": fact.version},
+        )
+        return fact
+
     def counts(self) -> Mapping[str, int]:
         """Artists, albums, songs, files — as the store counted them, in four statements."""
         return self._store.counts()
+
+    def summary(self) -> LibrarySummary:
+        """The library's own account of itself: provenance, paths, and both tallies.
+
+        One read of `library_meta` and one pass of `counts()`, which is what makes this
+        worth calling from a page rather than from a tick (SAPRS 1.8's budgets are per
+        request, and this is five statements for an operator's screen, not for a panel).
+        """
+
+        info = self._store.info
+        return LibrarySummary(
+            path=info.path,
+            library_version=info.library_version,
+            schema_version=info.schema_version,
+            rules_version=info.rules_version,
+            built_at=info.built_at,
+            meta_count=info.song_count,
+            fts_available=info.fts_available,
+            counts=self._store.counts(),
+        )
 
     @property
     def song_count(self) -> int:

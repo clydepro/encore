@@ -1,0 +1,39 @@
+{#
+Every component's own words (SAPRS 11.7's step 8, 11.9, AIG 14's "Health").
+
+The aggregate is the banner's business; this page is the *reason*, which is why each component
+is listed with its status, its sentence and when it last answered. A degraded box that offered
+only "degraded" would send an operator to a shell and a journal, and SAPRS 1.5's "clear health
+information" is written to avoid exactly that expedition.
+
+Nothing here runs a probe of its own: `admin_views.health_context` called `check()` once, on the
+appliance thread, and this is what came back. The freshness is `checked_at`, printed, because a
+health page that does not say when it looked is a health page that can be an hour old.
+#}
+<section
+  id="admin-health"
+  class="admin-region"
+  hx-get="/admin/health"
+  hx-trigger="encore:change from:body delay:250ms"
+  hx-target="this"
+  hx-swap="outerHTML"
+>
+  <h1>Health <span class="badge badge--{{ health.status.value }}">{{ health.status.value }}</span></h1>
+  <p class="muted">
+    {% if health.status.is_healthy %}Every component answered.{% else %}{{ health.detail }}{% endif %}
+    Checked {{ health.checked_at.strftime("%H:%M:%S") }}.
+  </p>
+  <table class="admin-table">
+    <thead><tr><th>Component</th><th>Status</th><th>Detail</th></tr></thead>
+    <tbody>
+      {% for report in components %}
+        <tr>
+          <th scope="row">{{ report.component }}</th>
+          <td><span class="badge badge--{{ report.status.value }}">{{ report.status.value }}</span></td>
+          <td>{{ report.detail or "Reporting normally." }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted"><a class="quiet" href="/admin/logs">The log, for what happened next to this.</a></p>
+</section>

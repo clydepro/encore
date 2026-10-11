@@ -92,9 +92,24 @@ class Renderer:
         `headers` overrides rather than extends for `Cache-Control` specifically: a page
         shell is cacheable for a few seconds where its fragments are not, and the
         difference is one argument rather than one more subclass.
+
+        CodeQL flags the `content=` line below as a reflective XSS sink, and it is right to be
+        suspicious of a request parameter that ends up in a response body. The answer is that
+        this is a Jinja render and the environment is built with `select_autoescape`, so every
+        value in `context` arrives escaped — a fact two files away that no scanner can see and no
+        reviewer should have to take on faith. It is therefore asserted rather than assumed:
+        `tests/unit/test_templates.py`::test_no_template_turns_autoescaping_off scans every
+        template for a local opt-out (`| safe`, `{% autoescape false %}`) and renders a hostile
+        value through this exact method, so the note below fails the suite the day the escaping
+        stops. Marked for CodeQL all the same: `# codeql[...]` is inert in the version this
+        repository analyses with (the alert is filed anyway and was dismissed as a false
+        positive, which SECURITY.md records), and the marker is here so that the day it works,
+        it works on a line that already says why.
         """
 
         return Response(
+            # codeql[py/reflective-xss] Jinja autoescaping, tested; see the docstring above and
+            # SECURITY.md. Inert until the analyser honours markers (see above).
             content=self.render(name, context),
             media_type="text/html; charset=utf-8",
             status_code=status_code,

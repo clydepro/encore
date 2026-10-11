@@ -1,8 +1,9 @@
 # Administrator Guide
 
-Status: **outline** — the administrative interface lands with milestone 14
-(AIG 21). Written for the person who installs the box, and who will be asked
-about it at a party.
+Status: **implemented** — the administrative interface landed with milestone 14
+(AIG 21, #28), and this page describes the thing that exists rather than the thing
+that was planned. Written for the person who installs the box, and who will be
+asked about it at a party.
 
 ## Mental model
 
@@ -33,7 +34,10 @@ Outline:
    [Building the library](#building-the-library). The Installer does not do this
    for you: it needs a music directory that only you know the location of.
 5. Install and enable the systemd units; verify the `jukebox` mDNS name.
-6. Open the admin dashboard, confirm health is green, print the QR code.
+6. Open `http://encore.local:8080/admin` on a phone or laptop on the same
+   network, set the administrator password (see
+   [Signing in](#signing-in)), confirm health is green, and print the QR code —
+   which is milestone 15's `GET /qr`, and not there yet.
 
 ## Building the library
 
@@ -95,29 +99,127 @@ in silence is the failure this report exists to prevent.
 
 ## Daily operation
 
-There is not supposed to be any. The dashboard exists so that "is it broken or
-is it the WiFi?" takes ten seconds to answer.
+There is not supposed to be any. The dashboard exists so that "is it broken or is
+it the WiFi?" takes ten seconds to answer.
 
-- **Dashboard** — Now Playing, queue depth, health, uptime.
-- **Playback** — pause, resume, skip, stop, seek. Nothing here changes queue
-  rules.
-- **Queue** — inspect and remove entries. Reordering is intentionally absent.
-- **Health** — per-component status, mpv process state, database accessibility,
-  last recovery.
-- **Statistics** — plays, most-requested, peak concurrency.
-- **Logs** — structured, filterable, no secrets (SAPRS 16 logging rules in AEP).
-- **Configuration** — read-only summary. Encore will not edit YAML for you
+### Signing in
+
+The appliance has one administrator and one password, and the password is not in
+any file you edit.
+
+On a box that has never been signed in to, `http://encore.local:8080/admin` shows a
+form that asks for **one** field: the password you would like. Type it, twice is
+not asked for, and you are in — that page is the same page that will later ask you
+to sign in, because a separate setup route would be a page nobody tests twice
+(ADR-013). Ten characters is the minimum; a shorter one is refused with a sentence
+about the length rather than a rule you have to guess.
+
+If the installer set `ENCORE_ADMIN_PASSWORD` for an unattended install, the first
+sign-in *is* that password, the credential is written on first use, and the
+environment variable is then forgotten — the value lives in `runtime.db`, hashed,
+and nothing reads the environment again. Leaving it set is harmless and untidy.
+
+What a session is worth:
+
+- **An hour by default** (`admin.session_minutes`), and the hour restarts each time
+  you use it, so a queue-clear in the forty-ninth minute does not fail.
+- **In memory only.** Restarting the appliance signs you out. That is deliberate: a
+  token that survives a disk-image restore is a token somebody can restore into
+  service (ADR-013).
+- **One laptop is one session.** Five of you can sign in with the same password and
+  each get a session; the dashboard says how many are open.
+- **Five wrong passwords lock sign-in** for fifteen minutes (`FAILURE_WINDOW` in
+  `encore/services/admin_service.py`), measured from the oldest of the five, on the appliance
+  rather than per address — an appliance on a LAN has one address that matters and ADR-007
+  forbids keeping notes about who was connecting. The sign-in page says roughly how long is left
+  while you are looking at it, and a script gets a `429` with the exact seconds in `Retry-After`.
+  A successful sign-in clears the count, so four mistypes do not get paid for later, and a locked
+  appliance does not check the password at all — which is both the point of a limiter and the
+  reason a lockout is not a hint about what you typed.
+- **Changing the password ends every session, including yours.** You are sent back
+  to the sign-in page with a line saying so. It is the only behaviour that makes
+  "rotate it after the festival" mean something.
+- **Signing out ends one session** — yours — and withdraws the cookie.
+
+There is no CSRF token. The cookie is `HttpOnly` and `SameSite=Strict`, and a
+request that would change something is refused if it arrives from a different
+origin. The one thing that buys over a token is that there is no token to forget to
+check, and the one thing it does not buy is protection against a *GET* — which is
+why no administrative page changes anything when you load it.
+
+### The screens
+
+- **Dashboard** — Now Playing, what is waiting and how long until the last of it,
+  the five transport buttons, a health line, and how many sessions are open. It
+  redraws itself when the appliance says something happened; it does not poll.
+- **Playback** — pause, resume, skip, stop, start. No seek: SAPRS 8.8's
+  administrative list does not include it and a room that could jump into the
+  middle of a track is a room that loses its place.
+- **Queue** — every request, uncapped, with the two operations an operator has and
+  a guest does not: take one out, take all the waiting ones out. Removing what is
+  playing is a skip, not a silence. There is no reordering, and there is not going
+  to be (SAPRS 8.1).
+- **Health** — the aggregate, then each component's own words: `playback`,
+  `library`, `search`, `runtime`. If mpv had to be restarted, that is where it
+  says so.
+- **Statistics** — plays, searches, requests, distinct songs heard, history rows,
+  today and ever; a fortnight of trend as a table rather than a chart; the
+  leaderboard. Peak concurrency and crossfade faults are v1.1 counters and are not
+  here (SAPRS 10.3 marks them).
+- **Logs** — the last few minutes of the appliance's own records, newest first,
+  filterable by level. This is a ring buffer, not the journal: it holds 400 lines,
+  it holds no tracebacks, and the page says `journalctl -u encore` beside the
+  filter for the rest. Credentials are redacted here exactly as they are in the
+  journal, by one rule rather than two.
+- **Configuration** — the validated configuration, printed from the parsed model
+  rather than from the YAML on disk, with anything that looks like a credential
+  redacted. Read-only, and it says so: Encore will not edit YAML for you
   (SAPRS 12.3, 12.7).
-- **Library** — version, song/artist/album counts, build date, validation report
-  reference.
+- **Library** — where this library came from: version, schema and normalization
+  rules, build date, the counts, whether FTS is available, and the artwork
+  directory. It prints the Builder's own song tally *and* a live count, because a
+  disagreement between those two is an install fault worth seeing rather than one
+  number that might be a lie (SAPRS 6.10).
+- **Password** — the change form, and the timestamp of the last successful sign-in,
+  which is the only history this appliance keeps about the administrator.
+
+A control answers with the part of the screen it changed. If your browser runs
+JavaScript that is a redraw of the panel you pressed it in; if it does not, it is a
+redirect back to the page. Both performed the command — the shape of the bug
+`tests/regression/test_issue_28_administration_interface.py` exists to keep dead.
+
+### What an operator does at a party
+
+Fill the queue with requests, then press **Skip**. Or open `/admin/queue` and take
+one request out. Every action on those screens is the same operation a guest's
+button performs, run by you instead of by them, which is why the room's phone and
+your laptop never disagree: the queue is one list in `runtime.db` and there is one
+code path that changes it (ADR-011).
+
+One asymmetry is worth knowing before somebody mentions it. **A pause reaches a
+phone that asks and not a phone that is watching.** Playing, finishing, skipping and
+advancing are facts the appliance announces; pausing is not one of them (ADR-004
+decides what counts as a fact, and milestone 14 did not extend that list). A guest
+looking at a paused track sees a progress bar that has stopped moving rather than a
+"Paused" badge, until the next thing that happens redraws their screen. Skipping,
+resuming and stopping are all announced.
 
 ## Maintenance
 
 - **Rebuild the library**: run `encore-builder` (see
-  [Building the library](#building-the-library)), then
-  `POST /admin/library/reload`. A failed build never replaces a working
-  library (SAPRS 5.8), and a successful one leaves the previous file's inode
-  intact for any Server process still holding it open.
+  [Building the library](#building-the-library)); it publishes by renaming a
+  finished file into place, so a build that fails leaves the working library where
+  it was (SAPRS 5.8). Then tell the running Server: **Library → Reopen library** on
+  the dashboard's library page, or `POST /admin/library/reload` with your session
+  cookie. There is no automatic detection and there is not going to be one — a
+  Server that polled its own catalogue would be watching a filesystem for a change
+  the Builder could simply have announced, and ADR-006's immutability is about
+  writes rather than about refreshes.
+
+  A reload cannot stop the party. If the new file is not a readable Encore library,
+  the page refuses it and the appliance keeps playing the catalogue it had. If it
+  is, every screen is told with a `LibraryReloaded` fact, and whatever is playing
+  keeps playing — its path was resolved when it was queued.
 - **Restart the appliance**: `systemctl restart encore` — the queue survives
   because it lives in `runtime.db`.
 - **mpv dies**: the Supervisor restarts it and publishes `PlaybackRecovered`; if
@@ -129,20 +231,39 @@ is it the WiFi?" takes ten seconds to answer.
 
 ## Security posture
 
-- Guests stay anonymous; the admin session is the only credential on the box.
+- Guests stay anonymous; the administrator's password is the only credential on the
+  box, and there is exactly one of them. No guest accounts, no per-device tokens,
+  no "remember me" (ADR-007).
+- The password is stored hashed (Argon2id, or bcrypt if the platform's Argon2
+  library is missing) in `runtime.db`. It is never in the image, never in a
+  template, never in a log, and `runtime.db`'s bytes do not contain it — which is
+  asserted rather than believed.
+- The `admin:` section of `encore.yaml` holds one number and cannot hold a
+  password: an unknown key there is a startup error rather than a false sense of
+  security (SAPRS 12.6, AEP 17).
+- Sessions are random 256-bit tokens, held in memory, carried in a cookie that
+  `HttpOnly` and `SameSite=Strict` describe. A restart ends them.
 - Bind to the LAN; do not expose the appliance through a tunnel without reading
-  ADR-007 first.
-- Session secret comes from the environment or system store (SAPRS 12.6), never
-  from config files or source.
+  ADR-007 first. The cookie cannot be `Secure` on a plain-HTTP appliance, which is
+  the trade ADR-013 records rather than hides: on the LAN the exposure to defend is
+  a cross-site request from a device that is already inside, and `Strict` plus the
+  origin check is what answers it.
+- Failed sign-ins are counted per appliance, never per address, and nothing about
+  who was connecting is kept. The one timestamp recorded is the last successful
+  sign-in.
 - Report vulnerabilities privately — see [`SECURITY.md`](../SECURITY.md).
 
 ## Known gaps during bootstrap
 
-Milestones 1–5 work: configuration, the domain model, the event bus, both
-databases with their repositories, and the Library Builder. Not yet implemented:
-the HTTP interface, mpv control, the admin login, and the installer. The lists
-above are commitments for the milestones named in AIG Chapter 21, so that
-documentation and code land together (AEP 11).
+Milestones 1–14 work: configuration, the domain model, the event bus, both
+databases with their repositories, the Library Builder, search, playback, the
+queue, the HTTP runtime, the guest interface, the live stream, and the
+administrative interface. Not yet implemented: the installer (milestone 15), the
+full-scale Party Simulation driver (16) and QR code generation, which is the
+installer's `/qr` route rather than this page's.
+
+The lists above are what exists; where a commitment is still open it says so, so
+that documentation and code land together (AEP 11).
 
 The Builder is usable now and is the one part of the appliance you can run
 against real music today; without a Server it simply has nothing to publish to.

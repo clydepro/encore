@@ -52,21 +52,57 @@ The vocabulary in `encore/templates/` is deliberately small, and
 
 - `hx-get`, `hx-post` — over `action`/`href`, never instead of them. A form must work when the
   script never loaded (SAPRS 13.2's "no single point of failure" reaches the front end).
-- `hx-target` — `find <selector>` to move feedback into one line of a row, or `#region` for a
-  panel. `hx-target="closest …"` is available and unused.
-- `hx-swap` — `innerHTML`. Nothing else. A swap *style* is not a selector:
-  `hx-swap="find .row-status"` is not htmx, whatever it looks like, and it was a bug here once.
+- `hx-target` — `find <selector>` to move feedback into one line of a row, `#region` for a
+  panel, and `closest .admin-region` on an administrative control, which is how a button inside
+  a region says "redraw the thing you are in" without naming an id that a page has twice.
+- `hx-swap` — `innerHTML` for the guest's regions. Administrative panels use `outerHTML`, on
+  one condition that is load-bearing: the swapped element must be the region itself, with the
+  same `id` and the same `hx-*` attributes, or the refresh dies with the swap that replaced it.
+  Every `admin/panels/*.html` begins with the section that carries its own trigger for exactly
+  that reason, and `tests/unit/test_templates.py` checks the shape. The one response that must
+  not follow it is a failure: `partials/error.html` is a paragraph, not a region, so
+  `errors.respond()` answers it with `HX-Reswap: innerHTML` and goes *into* the element instead of
+  over it. Honouring `outerHTML` there would make a refused rebuild visible once and then leave a
+  region with no `id` and no trigger, which is an interface that stops working in a way nobody can
+  reproduce.
 - `hx-swap-oob` — the `oob` flag on a panel template, so a fragment arriving over SSE can name
   its own target.
-- `hx-trigger`, `hx-params` — the search box's debounce and its query parameter.
+- `hx-trigger`, `hx-params` — the search box's debounce and its query parameter, and the
+  administrative regions' `encore:change from:body delay:250ms` (see
+  [Administrative pages](#administrative-pages)).
+- `hx-confirm` — one use in the tree, on the queue-clear button. It is the only administrative
+  action with no undo, and a native confirm is a modal that cannot be styled into lying about
+  what it does; the alternative was a dialog component, which is more JavaScript than this
+  project has. A browser without JavaScript gets no confirm and no `hx-*` at all — it gets the
+  action and a dashboard that shows an empty Up Next, which is the honest version.
 
 Rules:
 
 - No `hx-boost`. Every swap is declared where it happens, so a link's cost is visible in the
   template that contains it.
-- No inline `hx-confirm`, no `hx-on` handlers, no JavaScript in a template. If a screen needs
-  behaviour that is not in the vocabulary, the behaviour belongs on the appliance.
+- No `hx-on` handlers and no JavaScript in a template. If a screen needs behaviour that is not in
+  the vocabulary, the behaviour belongs on the appliance.
 - A fragment route answers with markup, not JSON. A machine client has `/api/v1`.
+- **A failure that was asked for as a fragment is answered as one, and the bridge makes htmx
+  render it.** This is the one place `encore-live.js` interferes with htmx's own decisions, and it
+  exists because htmx's default `responseHandling` ends in `{code: "[45]..", swap: false}`: a 4xx
+  or 5xx body is dropped without being read. That default assumes a server that answers a failure
+  with a *page*; ours answers with the region's markup (`partials/error.html`), so a guest's
+  "the queue holds 8 songs" and an operator's "that rebuild is not a database" were being computed
+  correctly, sent correctly and then thrown away — an interface that appears to do nothing. The
+  rule is narrow in the two ways that matter: it fires only on an error response, and only when
+  the response is HTML, so a JSON envelope is never swapped into a region as text. The alternative
+  was an `HX-Reswap` header at every failure site, which is eleven places that can forget it where
+  this is one place that cannot.
+- **A `401` that arrives at a panel is a door, not a message.** `errors.respond()` sends
+  `HX-Redirect` with it, and htmx acts on that header before it consults its own table, so an
+  expired session ends at the sign-in page with `?next=` back to the panel that asked. A swapped
+  sentence containing a link is a clue; a navigation is the action. The fragment body still goes
+  out, because a client that ignores the header should still read something true.
+- Both halves of the two rules above are asserted in
+  `tests/regression/test_issue_28_administration_interface.py` — including the vendored default
+  this depends on, so an htmx upgrade that changes `responseHandling` fails a test rather than
+  silently restoring an interface that appears to do nothing.
 
 ## The live layer
 
@@ -84,9 +120,61 @@ Reconnect is a growing backoff (1 s → 30 s) and a fresh `snapshot`. There is n
 handling in either direction, which removes a class of drift: the server never claims to have
 kept history it did not keep.
 
-`EventSource` cannot send a header, which is why the admin stream (milestone 14) will need a
-same-origin cookie and a session that also works without a header. Nothing in this file solves
-that yet, and the comment in `encore-live.js` saying so is the placeholder.
+`EventSource` cannot send a header, which was a note in this file about milestone 14 needing an
+administrative stream. It does not have one, and the resolution is cheaper than the problem
+looked: `EventSource` *does* send same-origin cookies, so an authenticated stream would have
+worked — but an operator's laptop is one connection, and a second fan-out with its own queue per
+tab, its own resync path and its own budget for a screen nobody in the room is watching is a
+second live layer. The administrative pages refresh themselves from the facts the guest stream
+was already sending. See [Administrative pages](#administrative-pages).
+
+## Administrative pages
+
+The same two regions, the same script, the same vocabulary. What is different is one event and
+one convention.
+
+The event is `encore:change`, dispatched by `encore-live.js` on `document.body` whenever a frame
+says the appliance moved — a `swap:` of a region the screen can see, a `snapshot` that differs
+from what it drew, or a `resync`. Every `admin/panels/*.html` region listens for it:
+
+```text
+hx-trigger="encore:change from:body delay:250ms"
+```
+
+That is the whole of the refresh design, and the two halves of it are decisions:
+
+- **No polling.** Nothing under `/admin` asks for itself on a timer. A dashboard left open
+  overnight on a kitchen tablet is a request every five seconds against a box designed to serve
+  one disk (SAPRS 12.4), and `tests/integration/test_admin_interface.py` fails any admin page
+  that contains `setInterval`, `setTimeout(` or a `refresh` meta — asserted as markup because a
+  test cannot watch a network it did not build.
+- **No new SSE region.** The guest frames are still `player` and `alerts`, and
+  `REGIONS` in `encore-live.js` is still two names. An operator's panel refreshes by fetching its
+  own HTML — one GET, on the laptop that is already open — which keeps the fan-out arithmetic in
+  [Regions](#regions) true for the forty phones it was written about. The `delay:250ms` is
+  htmx's throttle doing what a debounce would otherwise have to: a skip that publishes two facts
+  repaints once.
+
+The convention is that a screen exists twice. `admin/pages/dashboard.html` is the whole document,
+for a browser that typed a URL; `admin/panels/dashboard.html` is the region, for `HX-Request`
+and for the refresh. Both are rendered from one context builder (`encore/api/admin_views.py`),
+so the two cannot describe two different appliances, and adding a screen means adding both files
+and one function — a page that forgot its panel would answer an HTMX refresh with a whole
+document inside a `<section>`, which is the markup equivalent of a wrong number.
+
+An administrative control's response is the region that asked, named by `?panel=`. That is why
+the dashboard's Pause button redraws the dashboard rather than the queue page: the alternative is
+each of the ten screens knowing which of the others its buttons affect, which is a table nobody
+maintains. A no-JavaScript browser gets a `303` to the page instead, and both branches perform
+the command first — the shape of the bug in
+`tests/regression/test_issue_28_administration_interface.py`.
+
+An operator's screen also disagrees with a guest's in one visible way: it is allowed to be
+*behind*. Guest markup comes from the appliance thread's own read at the moment of the fact;
+an administrative panel is refetched a quarter of a second later, so the number it prints can be
+newer than the one it replaced. That is a consequence of not adding a second stream, and it is
+worth having written down rather than discovered during a party: the dashboard is a screen an
+operator acts on, not the record of what the room heard.
 
 ## CSS
 
@@ -111,6 +199,9 @@ Conventions that are load-bearing:
 - `tests/integration/test_server_app.py` — page versus fragment, the confirmation's wording,
   the frame ordering a room sees.
 - `tests/e2e/test_guest_journey.py` — the walk a guest actually takes.
+- `tests/integration/test_admin_interface.py` and `tests/e2e/test_admin_journey.py` — the same
+  things from the other side of the console, including "no administrative page polls" and
+  "nothing under `/admin` answers without a session".
 - Coverage needs `encore/templates/` rendered by real Jinja, which the above do; there is no
   template-only test suite and adding one would be the wrong shape (a template that renders in
   isolation and is wired to nothing is the failure mode SAPRS 9.10 was written about).
@@ -119,9 +210,10 @@ Run them with `scripts/test.sh` or `uv run pytest tests/unit/test_fragments.py -
 
 ## What is not here
 
-- Admin pages (milestone 14) — they will reuse both regions and must not add a third without a
-  reason that survives the fan-out arithmetic above.
 - QR posters (milestone 15) — `GET /qr` is documented as pending in the
   [API reference](../api/README.md).
+- An administrative theme. The console reuses the guest stylesheet plus about ninety lines of
+  `.admin-*`, and a second design system for a screen one person sees is not a thing this project
+  needs.
 - Sound. Nothing in this directory plays audio; playback is mpv, on the appliance thread, and
   the browser's only relationship to it is a number that moves.

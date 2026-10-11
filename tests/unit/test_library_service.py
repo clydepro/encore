@@ -22,6 +22,7 @@ miss do not need a SQLite file. `tests/integration/test_server_app.py` opens the
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
@@ -45,6 +46,30 @@ from encore.services.library_service import (
     ArtworkFile,
     LibraryService,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class Stamp:
+    """The `LibraryStamp` the service's protocol asks for, as a value rather than a database.
+
+    A store built to count reads has one account of itself, and the fields exist only to satisfy
+    the protocol's shape: `song_count` is the fixture's, `built_at` is a date nobody will parse.
+    The real stamp is `LibraryInfo`, and `tests/unit/test_library_reload.py` is where that class
+    is exercised against a Builder's output.
+    """
+
+    path: Path
+    library_version: str
+    schema_version: int
+    rules_version: str
+    built_at: str
+    song_count: int
+    fts_available: bool
+
+    @property
+    def usable(self) -> bool:
+        return True
+
 
 ARTISTS = [
     Artist(
@@ -187,6 +212,26 @@ class Store:
     def fts_available(self) -> bool:
         return self._fts
 
+    @property
+    def info(self) -> Stamp:
+        # The protocol's `info` is the library's own account of itself, which a store built to
+        # count reads has exactly one of: this one, unrepeated. The version strings are the
+        # fixture's rather than a Builder's — nothing here reads them, and the values exist to
+        # satisfy `LibraryRead`, whose `reload` a test of a failed library page also uses.
+        return Stamp(
+            path=Path("/library.db"),
+            library_version="test",
+            schema_version=1,
+            rules_version="1",
+            built_at="2026-01-01T00:00:00+00:00",
+            song_count=len(SONGS),
+            fts_available=self._fts,
+        )
+
+    def reload(self) -> Stamp:
+        self.reads.append("reload")
+        return self.info
+
 
 def built(
     tmp_path: Path, *, references: dict[int, str] | None = None, fts: bool = True
@@ -318,12 +363,18 @@ def test_an_artist_screen_is_three_reads(tmp_path: Path) -> None:
 
     Three statements for a whole artist — the artist, their albums, their tracks. A fourth
     per album would still be correct and would be the shape of a slow page.
+
+    The counter the page writes is asserted here too, and it is asserted *separately* from the
+    reads because it belongs to the other database (ADR-009): `library.db` is read five times
+    to draw an artist, and `runtime.db` is written once to say an artist was looked at. A test
+    that put both in one list would be a test of a design AIG 22 forbids.
     """
 
     from encore.api.views import artist_context
 
     service = built(tmp_path)
-    context = artist_context(_JustLibrary(service), ArtistId(2))  # type: ignore[arg-type]
+    jukebox = _JustLibrary(service)
+    context = artist_context(jukebox, ArtistId(2))  # type: ignore[arg-type]
 
     assert context["artist"] is not None
     assert context["albums"]
@@ -338,6 +389,29 @@ def test_an_artist_screen_is_three_reads(tmp_path: Path) -> None:
         "artists_by_ids",
         "albums_by_ids",
     ]
+    assert jukebox.stats.calls == ["artist_viewed"]
+
+
+class _CountingStats:
+    """The three request-side counters, recorded rather than performed.
+
+    `views` increments one of these per page, which is the whole of what a browse counter
+    needs to be (SAPRS 10.3's "Artist Page Views"). The service that would write it is
+    exercised against a real `runtime.db` in `tests/unit/test_statistics_service.py`; here the
+    point is only that a catalogue read did not quietly become a database write.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def searched(self) -> None:
+        self.calls.append("searched")
+
+    def artist_viewed(self) -> None:
+        self.calls.append("artist_viewed")
+
+    def album_viewed(self) -> None:
+        self.calls.append("album_viewed")
 
 
 class _JustLibrary:
@@ -350,6 +424,7 @@ class _JustLibrary:
 
     def __init__(self, library: LibraryService) -> None:
         self.library = library
+        self.stats = _CountingStats()
 
 
 def test_a_song_that_is_not_in_the_library_resolves_to_nothing(tmp_path: Path) -> None:

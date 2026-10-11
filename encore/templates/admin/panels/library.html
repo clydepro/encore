@@ -1,0 +1,47 @@
+{#
+The library, as the appliance experiences it (AIG 14's "Library information", SAPRS 6.10).
+
+Two tallies, deliberately side by side: the number the Builder stamped into `library_meta` and
+the number a `COUNT(*)` gives right now. They are the same number on a correct install and
+`encore/repositories/library/contract.py` fails a build whose disagreement is too large — so a
+page that printed only one of them would print a figure that might be a lie, and the
+disagreement is itself the diagnosis.
+
+"Reopen" is here rather than a timer for the reason ADR-006 gives: the runtime never writes this
+file and cannot see a rebuild by waiting, because SQLite holds the inode it opened. The button
+is the only way a new library arrives without a restart, and `LibraryReloaded` is what tells the
+search panels their "not available" sentence may have stopped being true (SAPRS 6.11).
+#}
+{% set panel_name = "library" %}
+<section id="admin-library" class="admin-region">
+  <h1>Library</h1>
+  <table class="admin-table admin-table--settings">
+    <tbody>
+      <tr><th scope="row">file</th><td><code>{{ summary.path }}</code></td></tr>
+      <tr><th scope="row">built</th><td>{{ summary.built_at }}</td></tr>
+      <tr><th scope="row">library version</th><td>{{ summary.library_version }}</td></tr>
+      <tr><th scope="row">schema</th><td>{{ summary.schema_version }}</td></tr>
+      <tr><th scope="row">rules</th><td>{{ summary.rules_version }}</td></tr>
+      <tr><th scope="row">songs</th><td>{{ summary.songs }}</td></tr>
+      <tr><th scope="row">albums</th><td>{{ summary.counts.get("albums", 0) }}</td></tr>
+      <tr><th scope="row">artists</th><td>{{ summary.counts.get("artists", 0) }}</td></tr>
+      <tr><th scope="row">files</th><td>{{ summary.counts.get("files", 0) }}</td></tr>
+      <tr><th scope="row">artwork</th><td>{{ summary.counts.get("artwork", 0) }} in <code>{{ artwork_dir }}</code>{% if not artwork_present %} (directory missing){% endif %}</td></tr>
+      <tr><th scope="row">search</th><td>{% if search_available %}FTS5 available{% else %}not available — the library was built without it, or its index is corrupt{% endif %}</td></tr>
+    </tbody>
+  </table>
+
+  {% if not summary.tally_matches %}
+    <p class="admin-region__note admin-region__note--bad">
+      The Builder counted {{ summary.meta_count }} songs and the file holds {{ summary.songs }}.
+      Something wrote to a database that is meant to be immutable; rebuild and reopen it.
+    </p>
+  {% endif %}
+  {% if action %}<p class="admin-region__note">{{ action }}.</p>{% endif %}
+
+  <form class="admin-region__form" method="post" action="/admin/library/reload"
+        hx-post="/admin/library/reload" hx-target="closest .admin-region" hx-swap="outerHTML">
+    <button class="button button--quiet" type="submit">Reopen library</button>
+    <span class="muted">after the Builder has published a new one</span>
+  </form>
+</section>

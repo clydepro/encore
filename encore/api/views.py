@@ -20,6 +20,15 @@ appliance's and not one screen's:
 * **Every label comes from a batch.** The rows are built by `encore/api/rows.py`, which
   resolves artists and albums two queries per page rather than two per row, because
   SAPRS 1.8's 100 ms search budget cannot survive a serialiser that reads.
+
+One thing this module does besides building contexts, and it is stated here rather than
+buried: the three counters that only a *request* can know about — searches, artist pages,
+album pages — are incremented where the request is assembled, in `results_context`,
+`artist_context` and `album_context`. `encore/search/service.py` declines to count its own
+key for the reason AIG 4 gives (one number, one writer), and the alternative is the same
+line repeated in the page route, the fragment route and the JSON route, which would be three
+places for one fact to become two. A page view is already one visit to the appliance thread,
+so the count costs a statement rather than a round trip.
 """
 
 from __future__ import annotations
@@ -222,6 +231,7 @@ def results_context(jukebox: Jukebox, text: str, *, limit: int | None = None) ->
     """A search, as three labelled lists (SAPRS 9.6)."""
 
     results: SearchResults = jukebox.search.search(text, limit=limit)
+    jukebox.stats.searched()
     return {
         "query": text,
         "results": results,
@@ -241,6 +251,7 @@ def artist_context(jukebox: Jukebox, artist_id: ArtistId) -> dict[str, Any]:
     artist = jukebox.library.artist(artist_id)
     if artist is None:
         return {"artist": None, "albums": [], "tracks": []}
+    jukebox.stats.artist_viewed()
     return {
         "artist": artist,
         "albums": jukebox.library.albums_for_artist(artist_id),
@@ -254,6 +265,7 @@ def album_context(jukebox: Jukebox, album_id: AlbumId) -> dict[str, Any]:
     album = jukebox.library.album(album_id)
     if album is None:
         return {"album": None, "artist": None, "tracks": []}
+    jukebox.stats.album_viewed()
     return {
         "album": album,
         "artist": jukebox.library.artist(album.artist_id),

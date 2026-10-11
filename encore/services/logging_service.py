@@ -17,17 +17,35 @@ WiFi is. That constrains the design more than any preference does.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sys
+from collections import deque
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from types import MappingProxyType
 from typing import Final, TextIO, cast
 
 from encore.config.models import LoggingConfig
 from encore.utilities.redaction import redact
 
-__all__ = ["ENVELOPE", "ConsoleFormatter", "JsonFormatter", "LoggingService", "record_fields"]
+__all__ = [
+    "DEFAULT_TAIL_CAPACITY",
+    "ENVELOPE",
+    "ConsoleFormatter",
+    "JsonFormatter",
+    "LogTail",
+    "LoggedEvent",
+    "LoggingService",
+    "record_fields",
+]
+
+#: Records the administrative log tail keeps. Four hundred is a few minutes of a busy
+#: party and about 120 kB on a 4 GB board — the journal has everything, and this exists so
+#: an operator can see the last few minutes without a shell (AIG 14's "Logs").
+DEFAULT_TAIL_CAPACITY: Final = 400
 
 #: Attributes `logging` sets on every record. Anything else in `record.__dict__`
 #: arrived through `extra=` and is the reason the line exists.
@@ -156,6 +174,102 @@ class ConsoleFormatter(logging.Formatter):
         )
         line = f"{stamp} {record.levelname:<7} {record.name}: {payload['message']}"
         return f"{line} {extras}" if extras else line
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LoggedEvent:
+    """One line of the tail, as the page will print it.
+
+    `fields` excludes the four envelope keys (`record_fields` puts them there for the
+    formatters) and has already been through `redact`, so a field named `password` is
+    `[redacted]` here exactly as it is in the journal — one rule, one place (AEP 16, 17).
+    """
+
+    occurred_at: datetime
+    level: str
+    logger: str
+    message: str
+    fields: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
+
+    def as_dict(self) -> dict[str, object]:
+        """The JSON shape for one line: the envelope, then the extras."""
+
+        return {
+            "timestamp": self.occurred_at.isoformat(timespec="microseconds"),
+            "level": self.level,
+            "logger": self.logger,
+            "message": self.message,
+            **self.fields,
+        }
+
+
+class LogTail(logging.Handler):
+    """A bounded ring of the appliance's own records, readable from a page (AIG 14).
+
+    Why a ring and not `journalctl -u encore`: the administrative interface is expected to
+    work from a phone, and a shell is not. Why not a log file of our own: AEP 16 puts the
+    journal as the durable record, and a second file with a rotation policy would be a
+    second answer to "where did that go?". This is the last few minutes, in memory, and the
+    Administrator Guide says so beside the `journalctl` command that has the rest.
+
+    Records are flattened on the way in rather than retained, because a `LogRecord` holds
+    `exc_info`, which holds frames, which holds locals: a ring of records is a ring of
+    memory the appliance cannot give back. `record_fields()` is called here — the same
+    function both formatters call — so the redaction rule has exactly one owner.
+
+    Args:
+        capacity: Lines kept. The oldest fall out silently; they are in the journal.
+    """
+
+    def __init__(self, *, capacity: int = DEFAULT_TAIL_CAPACITY) -> None:
+        super().__init__()
+        self._lines: deque[LoggedEvent] = deque(maxlen=max(1, capacity))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Keep one line. Never raises: a log view must not break the thing it watches.
+
+        stdlib's `Handler.handle` already catches and reports an `emit` that raises, via
+        `handleError` → `raiseExceptions` printing to stderr; the try/except is here so an
+        appliance under `python -O`, a stripped interpreter, or a test that switched
+        `raiseExceptions` off behaves identically, and so a bad record can never become a
+        traceback inside the tick that published it (SAPRS 11.9).
+        """
+
+        with contextlib.suppress(Exception):  # the guarantee above is the point
+            payload = record_fields(record)
+            self._lines.append(
+                LoggedEvent(
+                    occurred_at=datetime.fromtimestamp(record.created, UTC),
+                    level=str(payload["level"]),
+                    logger=str(payload["logger"]),
+                    message=str(payload["message"]),
+                    fields=MappingProxyType(
+                        {k: v for k, v in payload.items() if k not in set(ENVELOPE)}
+                    ),
+                )
+            )
+
+    def lines(
+        self, *, limit: int | None = None, minimum: str | None = None
+    ) -> tuple[LoggedEvent, ...]:
+        """Newest first, optionally capped and filtered by level name.
+
+        The filter is by `levelname` rather than `levelno` because the screen offers a
+        dropdown of four words, and a numeric threshold belongs to `logging`, not to an
+        operator's afternoon.
+        """
+
+        snapshot = list(self._lines)
+        if minimum is not None:
+            wanted = logging.getLevelNamesMapping().get(minimum.upper())
+            if wanted is not None:
+                ranks = logging.getLevelNamesMapping()
+                snapshot = [line for line in snapshot if ranks.get(line.level, 0) >= wanted]
+        snapshot.reverse()
+        return tuple(snapshot if limit is None else snapshot[:limit])
+
+    def __len__(self) -> int:
+        return len(self._lines)
 
 
 class LoggingService:

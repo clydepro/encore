@@ -1,0 +1,49 @@
+{#
+The shell every administrative page is drawn in (SAPRS 8.8, 10.8, AIG 14).
+
+It extends the guest's `shell.html` rather than replacing it, for one reason that matters more
+than laziness: the alerts strip, the stylesheet, the live script and the footer are the
+appliance talking, and an administrative interface with its own copies of them is an interface
+where a degradation notice appears on one screen and not the other. Everything operator-only is
+additive — a second `nav`, and the session line in the footer.
+
+Two things stated here because they are true of every page that uses this file:
+
+* **Nothing is fetched on a timer.** The live regions inside a page arrive with
+  `hx-trigger="encore:change from:body"`, which `encore-live.js` dispatches when a frame says
+  the appliance changed. An operator watching a queue should see it move within SAPRS 12.4's
+  one second, and a polling admin page would add a request per admin per second to a box whose
+  whole design assumes one CPU and one disk.
+* **This nav is labelled, and the guest's is not shared.** `aria-label="Administration"` beside
+  the header's `aria-label="Library"` is the difference between two navigations a screen reader
+  can tell apart and two it cannot, which SAPRS 9.2 asks for by name rather than by taste.
+#}
+{% extends "shell.html" %}
+{% block title %}Administrator{% endblock %}
+{% block main %}
+  <nav class="admin__nav" aria-label="Administration">
+    <a href="/admin/dashboard"{% if nav == "dashboard" %} aria-current="page"{% endif %}>Dashboard</a>
+    <a href="/admin/queue"{% if nav == "queue" %} aria-current="page"{% endif %}>Queue</a>
+    <a href="/admin/health"{% if nav == "health" %} aria-current="page"{% endif %}>Health</a>
+    <a href="/admin/statistics"{% if nav == "statistics" %} aria-current="page"{% endif %}>Statistics</a>
+    <a href="/admin/logs"{% if nav == "logs" %} aria-current="page"{% endif %}>Logs</a>
+    <a href="/admin/library"{% if nav == "library" %} aria-current="page"{% endif %}>Library</a>
+    <a href="/admin/configuration"{% if nav == "configuration" %} aria-current="page"{% endif %}>Configuration</a>
+    <a href="/admin/password"{% if nav == "password" %} aria-current="page"{% endif %}>Password</a>
+  </nav>
+
+  {% block admin %}{% endblock %}
+
+  <div class="admin__session">
+    {% if session %}
+      <p class="muted">
+        Signed in. This session ends at {{ session.expires_at.strftime("%H:%M") }}
+        and signing in anywhere else ends it here.
+      </p>
+    {% endif %}
+    <form class="admin__logout" method="post" action="/admin/logout"
+          hx-post="/admin/logout" hx-swap="none">
+      <button class="button button--quiet" type="submit">Sign out</button>
+    </form>
+  </div>
+{% endblock %}

@@ -1,0 +1,46 @@
+{#
+What the appliance is running with, and the sentence that explains why there is no form
+(SAPRS 12.3, 12.6, AIG 14's "Configuration summary").
+
+Every value is the *validated model*, so what is printed is what the services were handed at
+startup rather than what a file once said (SAPRS 12.5 makes the two agree by refusing to start
+when they do not). Names that read as secrets go through the same redaction list the log
+formatter uses, and there are no secrets in `config.yaml` to redact — which is the point of
+12.6's rule, and why a key that looks like one is a startup error rather than a value.
+
+The reason there is no editing is stated on the page rather than in a manual: runtime state
+belongs in `runtime.db` and configuration belongs in the file an installer wrote. An interface
+that rewrote the YAML would be an application-managed database with a `.yaml` extension
+(SAPRS 12.7 forbids that shape in the database; this is the same mistake wearing different
+clothes), and a party that changed the volume by editing a file would be a party with a loud
+song still playing while it did.
+#}
+<section id="admin-configuration" class="admin-region">
+  <h1>Configuration</h1>
+  <p class="muted">
+    Read from <code>/etc/encore/config.yaml</code> at startup and validated then.
+    Encore has no way to change it while running, and does not try: restart the service to pick
+    up an edit.
+  </p>
+  {% for section, settings in sections %}
+    <h2 class="admin-region__heading">{{ section }}</h2>
+    <table class="admin-table admin-table--settings">
+      <tbody>
+        {% for key, value in settings %}
+          <tr>
+            <th scope="row">{{ key }}</th>
+            <td>{{ value }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endfor %}
+  <h2 class="admin-region__heading">Administration</h2>
+  <table class="admin-table admin-table--settings">
+    <tbody>
+      <tr><th scope="row">credential</th><td>{% if admin.credential %}set in runtime.db{% else %}not yet created{% endif %}</td></tr>
+      <tr><th scope="row">session_minutes</th><td>{{ admin.session_minutes }}</td></tr>
+      <tr><th scope="row">last sign-in</th><td>{{ admin.last_login.strftime("%Y-%m-%d %H:%M") if admin.last_login else "—" }}</td></tr>
+    </tbody>
+  </table>
+</section>

@@ -1,0 +1,67 @@
+{#
+Usage, as the appliance counts it (SAPRS 10.3, AIG 14's "Statistics").
+
+Two views of the same counters on one screen — today, and ever — because they answer different
+questions ("is tonight working?" and "is this box used?") and a page that printed only one would
+be read as the other. Both come from `StatisticsService.report()`, which is one transaction, so
+the "ever" cannot be smaller than the "today" the row beside it claims.
+
+No chart. A sparkline of fourteen days of plays is a nice thing to draw and a thing to maintain,
+and the trend is printed as a table instead: eleven numbers, aligned, on a screen an operator
+reads once at 1 a.m. with a problem.
+#}
+<section
+  id="admin-statistics"
+  class="admin-region"
+  hx-get="/admin/statistics"
+  hx-trigger="encore:change from:body delay:250ms"
+  hx-target="this"
+  hx-swap="outerHTML"
+>
+  <h1>Statistics</h1>
+  <p class="muted">{{ report.plays_today }} played today, {{ report.plays_total }} since the box was built in.</p>
+  <table class="admin-table admin-table--counters">
+    <thead><tr><th>Counter</th><th>Today</th><th>Ever</th></tr></thead>
+    <tbody>
+      {% for key, total in report.totals.items() %}
+        <tr>
+          <th scope="row">{{ key | replace("_", " ") }}</th>
+          <td>{{ report.today.get(key, 0) }}</td>
+          <td>{{ total }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2 class="admin-region__heading">Last {{ report.trend | length }} days</h2>
+  <table class="admin-table admin-table--trend">
+    <tbody>
+      <tr>{% for day, trend_plays in report.trend %}<th scope="col">{{ day.strftime("%a %d") }}</th>{% endfor %}</tr>
+      <tr>{% for day, plays in report.trend %}<td>{{ plays }}</td>{% endfor %}</tr>
+    </tbody>
+  </table>
+  <p class="muted">{{ report.busiest_day[1] }} plays on {{ report.busiest_day[0].strftime("%d %b") }}.</p>
+
+  <h2 class="admin-region__heading">Most played</h2>
+  <table class="admin-table">
+    <tbody>
+      {% for row, plays in leaderboard %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td>{% if row %}{{ row.title }}{% else %}A song no longer in the library{% endif %}</td>
+          <td class="muted">{{ row.subtitle if row else "" }}</td>
+          <td>{{ plays }} play{% if plays != 1 %}s{% endif %}</td>
+        </tr>
+      {% else %}
+        <tr><td>Nothing has finished a track yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2 class="admin-region__heading">The play log</h2>
+  <p class="muted">
+    {{ report.history_rows }} tracks finished, of {{ report.distinct_songs }} different ones in
+    a library of {{ library.get("songs", 0) }}.
+    {% for outcome, count in report.outcomes.items() %} {{ count }} {{ outcome }}{% endfor %}.
+  </p>
+</section>
