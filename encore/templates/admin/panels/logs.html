@@ -1,0 +1,48 @@
+{#
+The appliance's own records, newest first (AIG 14's "Logs", SAPRS 12.8's discipline).
+
+This is a *tail*, and it says so: the complete record is in the journal (`journalctl -u
+encore`), and what is here is the last few hundred lines of the process's memory, which is the
+part an operator wants while standing next to the box at a party. The number kept is printed so
+the absence of an older line is not mistaken for the absence of an older event.
+
+What a line can never contain is a client. No address, no user agent, no query that would let a
+question be asked about one phone rather than about the appliance — `encore/services/logging_service.py`
+redacts the fields that could, and the absence of a filter box here is that rule made visible
+(ADR-007).
+
+Refreshed by `encore:change` like every other admin region. A log page on a timer would be the
+most predictable request pattern on the network and the least necessary: the events that make a
+log line are the same events that make the frame.
+#}
+<section
+  id="admin-logs"
+  class="admin-region"
+  hx-get="/admin/logs{% if level %}?level={{ level }}{% endif %}"
+  hx-trigger="encore:change from:body delay:500ms"
+  hx-target="this"
+  hx-swap="outerHTML"
+>
+  <h1>Logs</h1>
+  <nav class="admin-filter" aria-label="Log level">
+    <a href="/admin/logs"{% if not level %} aria-current="page"{% endif %}>All</a>
+    {% for name in levels %}
+      <a href="/admin/logs?level={{ name }}"{% if level == name %} aria-current="page"{% endif %}>{{ name }}</a>
+    {% endfor %}
+  </nav>
+  <p class="muted">
+    {{ lines | length }} line{% if lines | length != 1 %}s{% endif %} shown{% if level %} at {{ level }} or worse{% endif %}
+    · {{ kept }} kept in memory. The journal has the rest: <code>journalctl -u encore</code>.
+  </p>
+  <ol class="admin-log">
+    {% for line in lines %}
+      <li class="admin-log__line admin-log__line--{{ line.level | lower }}">
+        <span class="admin-log__time">{{ line.occurred_at.strftime("%H:%M:%S") }}</span>
+        <span class="admin-log__level">{{ line.level }}</span>
+        <span class="admin-log__message">{{ line.message }}</span>
+      </li>
+    {% else %}
+      <li class="admin-log__line">Nothing has been logged since the appliance started.</li>
+    {% endfor %}
+  </ol>
+</section>

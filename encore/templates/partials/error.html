@@ -13,6 +13,8 @@ cannot act on is a defect.
     <p class="error__hint">The queue holds {{ details.limit }} songs. Ask again once some have played.</p>
   {% elif details.song_id %}
     <p class="error__hint">Song {{ details.song_id }} is not in this library. Try searching for it instead.</p>
+  {% elif details.login %}
+    <p class="error__hint"><a class="quiet" href="{{ details.login }}">Sign in again</a> and this panel will draw.</p>
   {% endif %}
   {% for field in details.fields or [] %}
     <p class="error__hint">{{ field.location }}: {{ field.message }}</p>

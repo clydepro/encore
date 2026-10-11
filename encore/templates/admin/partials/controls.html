@@ -1,0 +1,52 @@
+{#
+The five transport buttons (SAPRS 8.8).
+
+Each is a form, not a link, because they change something and a GET that mutates is the kind of
+thing a prefetcher gets wrong. Each names the panel it belongs to in its own URL, so the answer
+comes back as the region that asked rather than as somebody else's markup — the one piece of
+wiring that lets the dashboard and the queue screen share both the buttons and the action routes
+without either of them guessing.
+
+A browser without JavaScript gets a 303 to the dashboard instead of a fragment, which is the
+same bargain `POST /queue` strikes with a phone whose script never loaded (SAPRS 13.2).
+#}
+<div class="admin-controls" aria-label="Playback controls">
+  {% if audible %}
+    <form method="post" action="/admin/playback/pause?panel={{ panel_name }}"
+          hx-post="/admin/playback/pause?panel={{ panel_name }}"
+          hx-target="closest .admin-region" hx-swap="outerHTML">
+      <button class="button" type="submit">Pause</button>
+    </form>
+  {% elif current %}
+    <form method="post" action="/admin/playback/resume?panel={{ panel_name }}"
+          hx-post="/admin/playback/resume?panel={{ panel_name }}"
+          hx-target="closest .admin-region" hx-swap="outerHTML">
+      <button class="button" type="submit">Resume</button>
+    </form>
+  {% else %}
+    <form method="post" action="/admin/playback/start?panel={{ panel_name }}"
+          hx-post="/admin/playback/start?panel={{ panel_name }}"
+          hx-target="closest .admin-region" hx-swap="outerHTML">
+      <button class="button" type="submit"{% if not length %} disabled{% endif %}>Start</button>
+    </form>
+  {% endif %}
+
+  <form method="post" action="/admin/playback/skip?panel={{ panel_name }}"
+        hx-post="/admin/playback/skip?panel={{ panel_name }}"
+        hx-target="closest .admin-region" hx-swap="outerHTML">
+    <button class="button button--quiet" type="submit">Skip</button>
+  </form>
+
+  <form method="post" action="/admin/playback/stop?panel={{ panel_name }}"
+        hx-post="/admin/playback/stop?panel={{ panel_name }}"
+        hx-target="closest .admin-region" hx-swap="outerHTML">
+    <button class="button button--quiet" type="submit">Stop</button>
+  </form>
+
+  <form method="post" action="/admin/queue/clear?panel={{ panel_name }}"
+        hx-post="/admin/queue/clear?panel={{ panel_name }}"
+        hx-target="closest .admin-region" hx-swap="outerHTML"
+        hx-confirm="Take every waiting request out? The song playing now carries on.">
+    <button class="button button--danger" type="submit"{% if not length %} disabled{% endif %}>Clear queue</button>
+  </form>
+</div>

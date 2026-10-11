@@ -1,0 +1,48 @@
+{#
+The one page that is both a door and a first run (SAPRS 10.8, ADR-013).
+
+`configured` decides which sentence this page says, and nothing else: with a credential it asks
+for a password, without one it asks somebody to choose it. The alternative — a setup wizard at
+its own URL — would be a page that only ever appears once per appliance, which is a page nobody
+tests twice and a first-run experience that reads like an error.
+
+There is no username field. There is one administrator (SAPRS 1.3), and a form that asks for a
+name would promise accounts the appliance does not have and cannot back without the identity
+store ADR-007 rules out for everyone else on the network.
+
+The `next` hidden field is where a redirect that bounced here goes back to. It is echoed only
+after `admin.py` has narrowed it to a path on this host, so the page cannot be made to hand a
+signed-in browser to someone else's site.
+#}
+{% extends "shell.html" %}
+{% block title %}Sign in · Encore{% endblock %}
+{% block main %}
+  <section class="admin-login">
+    <h1>{% if configured %}Encore administration{% else %}Set the administrator password{% endif %}</h1>
+
+    {% if not configured %}
+      <p class="muted">
+        This appliance has no administrator yet. Whatever you type below becomes the one
+        password it will accept — there is no username, and no way to recover this except to
+        delete <code>runtime.db</code> and sign in again as a new operator.
+      </p>
+    {% endif %}
+
+    {% if notice %}<p class="admin-login__notice">{{ notice }}</p>{% endif %}
+    {% if error %}<p class="admin-login__error" role="alert">{{ error }}</p>{% endif %}
+
+    <form class="admin-login__form" method="post" action="/admin/login?next={{ next }}">
+      <label class="field">
+        <span class="field__label">{% if configured %}Password{% else %}New password{% endif %}</span>
+        <input class="field__input" type="password" name="password" autocomplete="current-password"
+               {% if not configured %}minlength="10"{% endif %} required autofocus>
+      </label>
+      {% if not configured %}
+        <p class="muted">Ten characters or more. It protects a whole party's speakers.</p>
+      {% endif %}
+      <button class="button" type="submit">{% if configured %}Sign in{% else %}Create it{% endif %}</button>
+    </form>
+
+    <p class="admin-login__back"><a class="quiet" href="/">Back to the jukebox</a></p>
+  </section>
+{% endblock %}

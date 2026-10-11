@@ -24,9 +24,11 @@ import pytest
 
 from encore.config.models import LoggingConfig
 from encore.services.logging_service import (
+    DEFAULT_TAIL_CAPACITY,
     ConsoleFormatter,
     JsonFormatter,
     LoggingService,
+    LogTail,
     record_fields,
 )
 from encore.utilities.redaction import REDACTED, is_sensitive, redact
@@ -478,3 +480,182 @@ def test_stack_info_is_recorded_separately_from_the_exception(sink: io.StringIO)
     [record] = lines(sink)
     assert "Stack (most recent call last)" in str(record["stack"])
     assert "exception" not in record
+
+
+# -- the tail the administrative log view reads (AIG 14) -------------------
+
+
+def tail(capacity: int = DEFAULT_TAIL_CAPACITY) -> LogTail:
+    """A handler nobody attached to a logger, driven by records made by hand.
+
+    Detached on purpose: the tests below are about what the ring keeps and in what order,
+    and a handler installed on `encore` would make every other test in the suite a source of
+    lines this one asserts on.
+    """
+
+    made = LogTail(capacity=capacity)
+    made.setLevel(logging.DEBUG)
+    return made
+
+
+def line(tail: LogTail, level: int, message: str, **extra: object) -> None:
+    """One record, through the handler's own `emit`, extras and all.
+
+    `Logger.handle` is skipped because it would consult a logger's effective level, and the
+    point of these tests is the ring, not the filtering that happens before it.
+    """
+
+    record = logging.LogRecord("encore.test.tail", level, "f.py", 1, message, (), None)
+    for key, value in extra.items():
+        setattr(record, key, value)
+    tail.emit(record)
+
+
+def test_the_tail_keeps_newest_first() -> None:
+    """The screen reads top-down and the ring fills in the other order.
+
+    One reversal, here rather than one in the template, because a template that ordered the
+    lines would be a template that could disagree with the page that counts them.
+    """
+
+    held = tail()
+    for number in range(4):
+        line(held, logging.INFO, f"line {number}")
+
+    assert [item.message for item in held.lines()] == ["line 3", "line 2", "line 1", "line 0"]
+
+
+def test_the_tail_is_bounded_and_says_so() -> None:
+    """Capacity is a memory bound, and the journal is the durable one.
+
+    An appliance that kept every line since boot would hold a string per request for a whole
+    party; one that kept nothing would show an operator an empty page and a reason to ssh in.
+    The dropped lines are *not* counted as missing: `len(tail)` is what the page prints, and
+    the Administrator Guide points at `journalctl` for the rest.
+    """
+
+    held = tail(capacity=3)
+    for number in range(10):
+        line(held, logging.INFO, f"line {number}")
+
+    assert len(held) == 3
+    assert [item.message for item in held.lines()] == ["line 9", "line 8", "line 7"]
+
+
+def test_a_limit_cuts_the_view_and_not_the_memory() -> None:
+    """The page asks for 200 of 400 kept lines. The 400 stay, because the next request
+    may ask for a different number and re-deriving them is not possible."""
+
+    held = tail(capacity=400)
+    for number in range(400):
+        line(held, logging.INFO, f"line {number}")
+
+    assert len(held.lines(limit=5)) == 5
+    assert len(held) == 400
+
+
+def test_a_level_filter_keeps_nothing_below_itself() -> None:
+    """`WARNING` means "and worse", which is what a screen's dropdown has to mean.
+
+    Filtering by name rather than by number is a decision with a consequence, and it is this:
+    a custom level between two documented ones would be invisible on the page. The four names
+    are `AEP 16`'s, so the consequence is bounded by a rule the same file asserts.
+    """
+
+    held = tail()
+    line(held, logging.DEBUG, "traced")
+    line(held, logging.INFO, "noted")
+    line(held, logging.WARNING, "warned")
+    line(held, logging.ERROR, "broke")
+
+    assert [item.message for item in held.lines(minimum="WARNING")] == ["broke", "warned"]
+    assert [item.message for item in held.lines(minimum="ERROR")] == ["broke"]
+    assert [item.message for item in held.lines(minimum="NOT A LEVEL")] == [
+        "broke",
+        "warned",
+        "noted",
+        "traced",
+    ], "a filter nobody understands must not hide the log"
+
+
+def test_a_line_redacts_what_the_journal_formatter_would(sink: io.StringIO) -> None:
+    """One redaction rule, two readers.
+
+    The screen must not show a value the journal would have hidden — and must not be a second
+    implementation of the same list, which is the way two rules become one rule and one
+    oversight. `record_fields` is the single owner, and this asserts the tail went through it.
+    """
+
+    held = tail()
+    line(held, logging.INFO, "tried a password", password=FAKE_PASSWORD, artist="Bela")
+
+    [kept] = held.lines()
+
+    assert kept.fields["password"] == REDACTED
+    assert FAKE_PASSWORD not in str(kept.as_dict()["password"])
+    assert kept.fields["artist"] == "Bela"
+
+
+def test_the_tail_never_raises_whatever_a_record_contains() -> None:
+    """A log view that can break the thing it watches is not a view.
+
+    `emit` is called from inside the code that is already failing — a tick that caught an
+    exception, a render that could not write — so an exception here would travel back into the
+    failure path. A record whose message cannot even be formatted is the worst case, and the
+    handler drops the line rather than the party (SAPRS 11.9).
+    """
+
+    held = tail()
+    broken = logging.LogRecord(
+        "encore.test", logging.ERROR, "f.py", 1, "%d", ("not a number",), None
+    )
+
+    held.emit(broken)
+
+    assert len(held) == 1, "the line is kept, unformatted, because its existence is the news"
+
+
+def test_a_record_with_an_exception_keeps_the_line_and_not_the_frames() -> None:
+    """`exc_info` holds frames, and frames hold locals.
+
+    A ring of `LogRecord`s would be a ring of memory the appliance cannot give back, which is
+    why `LogTail` flattens on the way in — this is the test that stops someone "improving" it
+    by storing the record and formatting on read. What the tail therefore does *not* show is a
+    traceback, and the log page says so in the same breath as the `journalctl` command that
+    does: a screen built on a bounded ring should be honest about being one (AEP 16 puts the
+    durable record in the journal, not here).
+    """
+
+    held = tail()
+    try:
+        raise ValueError("a disk that was not there")  # noqa: TRY301 - the raise is the fixture
+    except ValueError:
+        import sys
+
+        held.emit(
+            logging.LogRecord(
+                "encore.test", logging.ERROR, "f.py", 1, "load failed", (), sys.exc_info()
+            )
+        )
+
+    [kept] = held.lines()
+
+    assert kept.message == "load failed"
+    assert kept.level == "ERROR"
+    assert "a disk that was not there" not in str(kept.as_dict())
+    assert not any(getattr(item, "exc_info", None) for item in held._lines), (
+        "no frames are retained"
+    )
+
+
+def test_the_timestamp_is_the_records_own_instant() -> None:
+    """The tail is read long after the line was written, so `now()` would be a lie."""
+
+    held = tail()
+    line(held, logging.INFO, "queued")
+
+    [kept] = held.lines()
+
+    assert kept.occurred_at.tzinfo is not None
+    assert kept.occurred_at <= datetime.now(UTC)
+    assert kept.occurred_at.year >= 2024

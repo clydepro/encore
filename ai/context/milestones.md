@@ -21,8 +21,8 @@ or too early.
 | 11 | FastAPI | **Done — `encore/api/`, `apps/server/`** |
 | 12 | HTMX | **Done — `encore/controllers/`, `encore/templates/`, `encore/static/`** |
 | 13 | SSE | **Done — `encore/services/sse_publisher.py`, `/events`** |
-| 14 | Administrative interface | Not started ← **next** |
-| 15 | Installer | Not started |
+| 14 | Administrative interface | **Done — `encore/api/auth.py`, `controllers/admin.py`, `templates/admin/`, `services/{admin,statistics}_service.py`** |
+| 15 | Installer | Not started ← **next** |
 | 16 | Party Simulation | Not started |
 | 17 | Documentation | Ongoing |
 
@@ -37,6 +37,56 @@ the search service is what makes a guest's request exist at all.
 PBK's ten-milestone view groups the same work; both are listed in the README
 roadmap. Steps 2, 3 and 4 are PBK milestone 2 (“Core Framework”), and are
 declared complete against its checklist in the section below.
+
+## What step 14 delivered
+
+- `encore/services/admin_service.py` — one appliance-wide credential (Argon2id via passlib,
+  hashed, stored in `runtime.db`'s `admin_state` table) and the sessions in front of it: random
+  32-byte tokens in memory, sliding expiry from `admin.session_minutes`, a five-failure window,
+  a first-run `setup()` that refuses to run twice, and a `change_password()` that revokes every
+  session. No HTTP, no SQL, no mpv: it is given a store and a clock (`tests/support/…`-style
+  protocol seams, satisfied structurally by `RuntimeStore`).
+- `encore/api/auth.py` — the cookie (`HttpOnly`, `SameSite=Strict`, `Path=/`, no `Secure`, because
+  the appliance is HTTP on a LAN), the origin check on state-changing requests, and
+  `depend_admin`, the dependency every protected route reaches. There is no CSRF token; ADR-013
+  argues the flags and the origin check are the same defence with less to keep in sync.
+- `encore/controllers/admin.py`, `encore/api/admin_views.py`, `encore/templates/admin/` — eleven
+  screens and their actions. The controller exports two routers: `router` (the door) and `secure`
+  (everything else, protected at router level), which is the shape that makes "I forgot to guard
+  the new route" unconstructible. Every screen exists twice — `pages/x.html` and `panels/x.html` —
+  rendered from one context builder, so a refresh and a navigation cannot disagree.
+- `encore/services/statistics_service.py` — counters subscribed to the facts the bus already
+  carries, plus three request-side counters called from `api/views.py`. `report()` is one
+  transaction, which is what lets the page and `GET /api/v1/stats` print the same numbers.
+- `LogTail` in `encore/services/logging_service.py` — a bounded ring of flattened, redacted
+  records, attached to the `encore` logger by the composition root and removed on close. The
+  journal stays the durable record; this is the part an operator can read from a phone.
+- Library reload: `LibraryConnection.reopen()`, `LibraryStore.reload()`,
+  `LibrarySearch.set_availability()` and `LibraryService.reload()`. Verification on the new
+  handle, swap only on success, identity preserved — so a rebuild published mid-party reaches the
+  running appliance through one click and one fact (`LibraryReloaded`), and `library.db` is still
+  never written.
+- `encore/static/js/encore-live.js` gained one line's worth of behaviour: it dispatches
+  `encore:change` on `document.body` when a frame says the appliance moved. Administrative regions
+  trigger on it. There is no second SSE stream, no new frame name, no new region, and nothing
+  under `/admin` polls — all four are asserted.
+
+Decisions taken here that later steps must honour:
+
+- **Sessions are not durable.** A restart signs the operator out. A token in `runtime.db` would
+  survive a disk-image restore, which is the failure ADR-013 was written to avoid.
+- **One credential, and one failure counter.** Sign-in failures are counted per appliance, never
+  per address: an appliance on a LAN has one address that matters, and a table of failing addresses
+  would be the guest-tracking ADR-007 forbids.
+- **Administrative actions are queue mutations.** The console calls `QueueService` and never
+  `PlaybackService` directly, so ADR-011's single mutator holds for the operator too and the
+  guest's screen stays coherent when someone at the laptop touches the list.
+- **A page performs its action before it decides what markup to return.** `?panel=` names the
+  region that asked; a browser without JavaScript gets the same command and a 303. The branch order
+  is in the regression file because getting it wrong produced a dashboard that said "paused" above
+  a track that was playing.
+- **No new fact types.** `EVENT_VOCABULARY` is still the same eight, and pausing is still not one
+  of them; a phase that wants a guest's screen to react to a pause needs an ADR, not a publisher.
 
 ## What steps 11–13 delivered
 
@@ -190,13 +240,18 @@ them (`container.py` still builds config and logging only — the wiring belongs
   Builder sole ownership of the `library.db` schema and sets `paths.music_dir` to
   `/opt/music`. Both are Accepted, and both are implemented.
 - Test infrastructure: fixtures, temp SQLite helpers, mock mpv, Party Simulation
-  profiles + loader, a performance target registry with three of its five budgets
-  measured rather than promised, and a synthetic media generator that writes real silent
-  MP3/FLAC containers with valid tags and embedded covers. 912 tests (931 with the
-  slow suites).
+  profiles + loader, a performance target registry with all five of its budgets measured rather
+  than promised, an ASGI driver that can hold an SSE response open, and a synthetic media generator
+  that writes real silent MP3/FLAC containers with valid tags and embedded covers. 1268 tests in the
+  standard gate (1309 with the slow suites).
 - Architecture guardrail tests and `tools/check_links.py`.
 
 ## Explicitly not implemented
+
+- **The installer**, `encore-install`, systemd units, `GET /qr` (milestone 15). The mechanism
+  `ENCORE_ADMIN_PASSWORD` seeds a credential with; the install that sets it is not written.
+- **The full Party Simulation driver** (milestone 16). The shape of a party with an operator in it
+  is simulated and its ledger asserted; 15,000 songs and hundreds of HTTP guests are not.
 
 - Any HTTP endpoint, template, static asset or SSE stream.
 - Any *running* service. `encore/playback/` has driven a real mpv (0.35.1, `--ao=null`) in
@@ -211,20 +266,22 @@ them (`container.py` still builds config and logging only — the wiring belongs
   server to subscribe to it yet.
 - The installer and `encore-install`.
 
-## Where to put the first feature
+## Where a new feature goes now
 
-Step 11 (FastAPI) starts in `apps/server/`, which is the composition root decided in
-phase 2 and still unwritten: it opens both stores, builds `SearchService`,
-`PlaybackService`, `PlaybackSupervisor` and `QueueService`, binds the supervisor to the
-service (`supervisor.bind(playback)`), starts the queue (which restores a `PLAYING` row
-from a dead process), and stops them in that order. The pieces are tested together
-already — `tests/integration/test_queue_playback_and_search.py` wires exactly this graph
-by hand, so the server's job is to copy that file, not to invent it.
+Steps 5–14 are behind us, so the question this section used to answer ("where does the first
+feature go?") has a settled shape: an HTTP feature starts in `encore/controllers/` (routes) and
+`encore/api/` (dependencies, errors, contexts), reaches state through `deps.read()`, and puts its
+business rules in `encore/services/`. The composition root is `apps/server/appliance.py::build()`,
+which is no longer unwritten: it opens both stores, wires the bus, the queue, the player, the
+supervisor, health, statistics and the publisher, starts them in the order the facts require and
+unwinds in reverse. `tests/support/appliances.py::composed_appliance()` is the same graph with a
+fake engine, and it is what an integration or e2e test should use rather than a hand-wired copy —
+that is the reason `test_server_app.py` and `test_admin_interface.py` exist in that order.
 
-`EventBus` is synchronous and `QueueService.start()` is not async, so nothing here needs
-an event loop except SSE (milestone 13), which publishes *from* handlers. Keep playback
-off the request path: `PlaybackService.tick()` belongs to a background task, and a
-request that plays a song should publish and return.
+Two rules from that history are worth restating because they constrain where a *new* service can
+put work: `EventBus` is synchronous and one thread owns SQLite and mpv, so anything a request
+starts must publish and return rather than play; and a service that talks to another service does
+it through the bus, with ADR-011's queue→playback command as the one justified exception.
 
 ## Known open questions to resolve before v1
 
@@ -232,4 +289,5 @@ request that plays a song should publish and return.
   MIT; changing it is a one-file, one-ADR decision.
 - HTMX and Tailwind distribution in `encore/static/` (vendored vs CDN) — decided
   during milestone 12.
-- Administrator credential mechanism (SAPRS 12.6) — decided during milestone 14.
+- Administrator credential mechanism (SAPRS 12.6) — **decided in milestone 14**: the hash lives in
+  `runtime.db`, the sessions live in memory, ADR-013 records both and why.

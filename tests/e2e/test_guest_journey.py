@@ -9,8 +9,11 @@ and `tests/integration/test_server_app.py`, where the assertions are about indiv
 
 Three things are deliberately *not* here:
 
-* **Admin** — milestone 14, and the guest surface has no session to borrow.
-* **QR codes** — also milestone 14's installer work.
+* **An operator** — the same appliance has an administrative journey now
+  (`test_admin_journey.py`), but this file stays the guest's, because the guest's guarantee is
+  that none of it needed a session: every request below is anonymous, and it is asserted that the
+  page a guest reads has no admin link and sets no cookie.
+* **QR codes** — the installer's, and milestone 15's.
 * **Real audio** — `tests/integration/test_real_mpv.py` owns that, slow and opt-in.
 
 The queue ceiling is 6, from `composed_appliance`'s non-default configuration: a journey that

@@ -14,6 +14,90 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Added
 
+- The administrative interface (AIG 21 step 14, #28): sign-in and first-run
+  password setup, a dashboard, playback controls, queue management, health,
+  statistics, a log tail, a configuration summary, library information with a
+  reload, password change and logout. Every screen exists twice — a page for a
+  browser and a fragment for `HX-Request` — from one context builder, so an
+  operator refreshing a region and then navigating to the page cannot see a
+  number move. No new SSE region and no new fact: admin regions refresh on
+  `encore:change`, which the live script dispatches when a frame it already
+  needed to send arrives, so the guest's stream budget is unchanged and nothing
+  under `/admin` polls.
+- `encore/services/admin_service.py` — the credential and the sessions. Argon2id
+  or bcrypt through `passlib`, never a hand-rolled hash; sessions in memory with
+  a sliding expiry, so a restart signs the operator out deliberately rather than
+  leaving a durable token that survives a disk image restore; five failures per
+  window per appliance before a lockout, counted in memory because counting them
+  per address would be the guest-tracking ADR-007 forbids. A wrong password and
+  an untouched appliance raise the same sentence from the same line, because the
+  first thing an unauthenticated caller should not be able to learn is whether
+  there is a password to be wrong about. ADR-013 records the choice and its two
+  consequences (`Secure` cannot be set on an HTTP appliance; a password rotation
+  ends every session, including the one that asked).
+- `encore/api/auth.py` — the cookie and the origin check. `HttpOnly`,
+  `SameSite=Strict`, `Path=/`, `Max-Age` from `admin.session_minutes`, and no
+  `Secure`, because the appliance serves plain HTTP on a LAN and a `Secure`
+  cookie would make the interface unreachable rather than safer. There is no
+  CSRF token: the flags are the defence, plus a refusal of any state-changing
+  request whose `Origin` names somewhere else. A request with no `Origin` is
+  allowed, which is what keeps `curl --cookie` in a setup script working.
+- `encore/services/statistics_service.py` — counters over the facts the bus
+  already carries, subscribed once by the composition root, plus the three
+  request-side counters a page can add (`searched`, `artist_viewed`,
+  `album_viewed`). A `SongFinished` is the one event that makes a play, and
+  whether it counts is `PlaybackOutcome.counts_as_played`'s existing domain rule
+  rather than a new one; a report is built in one transaction so the screen and
+  `GET /api/v1/stats` cannot describe two different parties. Counter names live
+  in `repositories/runtime/statistics.py`'s vocabulary, which means
+  `encore/services/__init__.py` deliberately does not import this module eagerly
+  — see the note there.
+- `encore/repositories/library/connection.py::reopen` and
+  `LibraryStore.reload()`: a library reload that keeps the object identity every
+  repository and `SearchService` depend on. A live SQLite handle keeps the inode
+  it opened and the Builder publishes by renaming a completed file into place
+  (ADR-006, ADR-010), so "notice the rebuild" is one reopen of one handle, not a
+  second store nobody closed. Verification runs on the new handle before the
+  swap: a build interrupted mid-write leaves the running library serving and
+  raises a refusal about that file.
+- `LogTail` in `encore/services/logging_service.py` — a bounded ring of the
+  appliance's own records, flattened on the way in (a retained `LogRecord` holds
+  frames, and frames hold locals), redacted through the one `record_fields` rule
+  both formatters use, and read by the log page instead of by a shell. The
+  journal remains the durable record; the page says so beside the `journalctl`
+  command.
+- `encore/api/admin_views.py` and `encore/controllers/admin.py`. The controller
+  exports two routers rather than one — `router` (the sign-in page) and `secure`
+  (everything else, `dependencies=[Depends(depend_admin)]` at router level) — so
+  that adding a route under `/admin` next month cannot accidentally be public.
+  Administrative actions go through `QueueService` and never to
+  `PlaybackService` directly (ADR-011), which is why the guest's screen stays
+  coherent when the operator touches the queue.
+- Two administrative JSON routes beside their page equivalents:
+  `DELETE /api/v1/queue/{item_id}` and `GET /api/v1/stats`, both requiring the
+  same session as the pages. `docs/api/README.md` states the difference in
+  authentication — a tool may present a cookie, and no guest ever does.
+- ADR-013 (The Administrator Credential Lives in `runtime.db` and Sessions Live in
+  Memory), with the two rejected alternatives named: a token file under
+  `ENCORE_HOME`, which would make a disk image restore a set of live sessions,
+  and sessions in `runtime.db`, which would survive the same restore and be
+  revocable only by writing to the database the reboot was meant to escape.
+- Test support: `encore-live.js` now dispatches one DOM event, `encore:change`,
+  on `document.body`, and every administrative region listens for it. Guest
+  regions stay `player` and `alerts` — `tests/unit/test_templates.py` still
+  asserts that, and a room of phones pays nothing for an operator's dashboard.
+- Administrative coverage in five suites: `tests/integration/test_admin_interface.py`
+  (every route, every failure path, and an enumeration of the OpenAPI document
+  that makes "nothing under `/admin` answers without a session" a property rather
+  than a list), `tests/unit/test_admin_service.py`, `tests/unit/test_api_auth.py`,
+  `tests/unit/test_statistics_service.py`,
+  `tests/unit/test_library_reload.py` (against two real Builder passes over two
+  real corpora), plus `tests/e2e/test_admin_journey.py`, four admin page budgets,
+  and `tests/party_simulation/test_admin_in_the_room.py`, which runs an operator
+  removing, clearing and skipping inside a party and asserts the ledger still
+  closes. Regression coverage for #28 is in
+  `tests/regression/test_issue_28_administration_interface.py`.
+
 - The HTTP runtime, the guest interface and the live stream (AIG 21 steps 11, 12
   and 13, #25), which is the first thing in this repository that can be started:
   `scripts/run-server.sh`, or `uv run python -m apps.server.main --config …`.
@@ -243,6 +327,32 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Changed
 
+- `LibraryService`'s `LibraryRead` protocol gained `info` and `reload()`, because
+  the library page prints provenance and the reload button needs a fact published
+  by exactly one caller (ADR-004). `LibraryStore` satisfies it structurally; the
+  doubles in `tests/unit/test_library_service.py` and
+  `tests/unit/test_library_read.py` grew to match, which is the cost of a protocol
+  and the reason it is written down rather than assumed.
+- Three guest routes now write one counter each: `/search`, `/artists/{id}` and
+  `/albums/{id}` call `stats.searched()`, `artist_viewed()` and `album_viewed()`.
+  The increment lives where the request is assembled rather than inside
+  `SearchService` or `LibraryService`, so the page, the fragment and the JSON route
+  cannot count a view three different ways — and so that a service used by the
+  Builder or a unit test stays free of `runtime.db`. The catalogue reads per screen
+  are unchanged and asserted as unchanged: an artist page that began writing a
+  counter *and* reading twice as much would fail `test_an_artist_screen_is_three_reads`.
+- `apps/server/appliance.py` starts `StatisticsService` before the queue starts, so
+  the first fact of a party has a listener, and attaches `LogTail` to the `encore`
+  logger on configure and removes it on close. `encore/services/__init__.py` does
+  not import `statistics_service`: the module needs `StatisticKey` from the runtime
+  repository's vocabulary, and pulling SQLAlchemy into every configuration and
+  domain test to re-export one class is a trade nobody should have to make twice.
+- The OpenAPI description no longer says statistics and queue removal have no
+  machine endpoint, and `GET /docs` stays public on purpose: the guest API's shape
+  has to be discoverable by someone who has not signed in, and the administrative
+  routes in the same document are protected by the session rather than by the
+  document's absence.
+
 - `PlaybackOutcome.counts_as_played` means what SAPRS 11.9 needs it to mean: only
   `COMPLETED` counts as a play. It used to be "not `FAILED`", which made a skipped
   track a listen and a stopped one a listen, and would have had the statistics service
@@ -358,6 +468,57 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Fixed
 
+- The dashboard answered its own transport buttons with a URL segment. The routes in
+  `encore/controllers/admin.py` write their feedback sentences inline, all except the
+  five-word `?command=` one, whose table (`_sentence()`) was written, documented and
+  never called — so a panel that had just been paused read "pause." beside a
+  `Paused` badge. The coverage report found it (a function with a docstring that no
+  line ever entered); `tests/integration/test_admin_interface.py` now asserts the five
+  sentences and asserts that none of them is the path segment echoed back.
+- A failure that the appliance rendered as a fragment was thrown away by the
+  client. htmx's default `responseHandling` ends in `{code: "[45]..", swap:
+  false}`, so every 4xx and 5xx body — a guest's "the queue holds 8 songs", an
+  operator's "that rebuild is not a database" — was computed correctly, sent
+  correctly and never swapped into the region that asked for it. The symptom was
+  not an error message, it was a button that appeared to do nothing. The live
+  bridge now allows the swap for an HTML error response (`htmx:beforeSwap`), and
+  the failure answers with `HX-Reswap: innerHTML` so it goes *into* the region
+  rather than over it — an administrative panel swaps itself `outerHTML` on
+  purpose, and replacing one with an error paragraph would have left it with no
+  `id` and no refresh trigger, visible exactly once. A `401` additionally carries
+  `HX-Redirect` to the sign-in page with `?next=`, because a panel cannot sign
+  itself in and htmx acts on that header before it consults its own table. Both halves are pinned, including the vendored default
+  the rule depends on, so an upgrade that changes it fails a test rather than
+  silently restoring the dead interface.
+- A locked appliance answered a sign-in with an error page and no way back.
+  `RateLimitError` is a sibling of `AuthenticationError` — right for the service,
+  invisible to a handler that caught only the parent — so `_reason()`'s "try
+  again in N minutes" was unreachable code, the operator got `error.html` where
+  the login form should have been, and the wait appeared nowhere a client could
+  obey. The login route now names both cases; the page says the wait above the
+  password field, and the number is in a `Retry-After` header beside
+  `details.retry_after_seconds` for anything that reads headers rather than
+  markup (`docs/api/README.md`,
+  `tests/regression/test_issue_28_administration_interface.py`).
+- A file at `paths.library_db` that is not a database at all — an interrupted
+  publish, a truncated copy, someone's `cp` into the wrong directory — raised
+  `sqlite3.DatabaseError` from inside the shape check, because SQLite reports a bad
+  header lazily and the check *is* the first query. It is now a
+  `LibraryContractError` naming the file and the Builder, which matters at two
+  moments: at startup the log line says what to do, and at the library page's
+  reload button the answer is a 503 about that file rather than a 500 about this
+  process. The previous library stays current either way (it always did —
+  verification happens on the new handle before the swap); what changed is that the
+  refusal is now a sentence an operator can act on
+  (`tests/regression/test_issue_28_administration_interface.py`).
+- `LibraryStore.reload()` updated search's availability by building a new
+  `LibrarySearch`, which left `SearchService` — handed the old object at
+  composition — answering from the verdict a library that was no longer current had
+  made. The verdict is now a property of the file refreshed in place
+  (`set_availability`), so a rebuild that added or lost an FTS index is noticed by
+  the service that was already running
+  (`tests/unit/test_library_reload.py::test_search_follows_the_file_rather_than_the_process`).
+
 - Five more defects in the launch path, four of them found by running the finished playback
   stack against a real mpv rather than against `MockMpv`, and fixed where a mock could not hide
   them again: the unsupported launch option and the leaked socket described above, and a load
@@ -466,6 +627,50 @@ The release process moves the section into a dated, bracketed version heading.
   recorded by the release notes rather than a line each.
 
 ### Security
+
+- The administrative interface, and the credential model behind it (ADR-013). One
+  appliance-wide password, hashed with Argon2id through `passlib` and stored in
+  `runtime.db` — never in the image, never in a template, never in a log, and the
+  test suite asserts the plaintext is not in the database's bytes. Sessions are
+  random 256-bit tokens held in memory; a restart signs everyone out, which is the
+  intended behaviour and is written down rather than discovered. `ENCORE_ADMIN_PASSWORD`
+  is read once at startup to seed the credential for unattended installs and is
+  then forgotten — a password that stayed in the environment would be readable from
+  `/proc` for the life of a machine that outlives the event.
+- Cross-site request defence without a CSRF token: `SameSite=Strict` plus `HttpOnly`
+  plus a refusal of a state-changing request whose `Origin` names another site. The
+  combination is stated in the ADR with the one thing it does not do — it does not
+  protect a GET, which is why no administrative GET changes anything.
+- Sign-in failure is rate limited per appliance (five failures, then a window) and
+  deliberately not per address: an appliance has one LAN, ADR-007 forbids keeping
+  notes about who was connecting, and a per-address table would be both the
+  tracking and the false comfort. The lockout resets on a successful sign-in, so an
+  operator who mistypes four times and then gets in is not punished later. A locked
+  appliance answers `429` with the remaining seconds in `Retry-After`, and it
+  refuses before hashing anything, so neither the status nor the timing says whether
+  the last guess was close.
+- `?next=`, which is a suggestion from someone else's page, is filtered before it is
+  obeyed. The filter refuses a scheme, an authority, a backslash (which some browsers
+  fold into a slash before they look for a host) and any character a URL parser would
+  delete before deciding what it is parsing, so a percent-decoded tab cannot turn
+  `/host` into `//host` on the way out; anything refused lands on the dashboard
+  instead. CodeQL flagged the redirect as a sink, which it is: the reason it is not a
+  vulnerability is now written where the code is, tested twice (once with the hostile
+  shapes, once with the paths that must survive intact), and recorded in
+  [SECURITY.md](SECURITY.md) along with the alert's dismissal. A filter that had only
+  ever refused `http://` and `//` would have passed every test written against it,
+  which is what the second test is for.
+- Template autoescaping is asserted rather than assumed. `tests/unit/test_templates.py`
+  scans every template for `| safe` and `{% autoescape false %}` and renders a hostile
+  value through the same `Renderer.response` method the requests use, so the answer to
+  "does the admin surface escape?" is a test that fails rather than a reading of the
+  environment's configuration.
+- The log tail the administrative interface serves is redacted by the same
+  `record_fields` rule that writes the journal, so a password in a debug line is
+  hidden from both readers or from neither. Nothing was added to the sensitive-name
+  list to make that true — it already carries `password`, `credential`, `session`,
+  `token` and `cookie` — which is the point of one rule with one owner rather than a
+  second list maintained beside the first.
 
 - Secret scanning, dependency vulnerability auditing and CodeQL analysis wired
   into CI; reporting process documented in `SECURITY.md`.

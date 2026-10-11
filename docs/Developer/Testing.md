@@ -161,6 +161,50 @@ suite exists for, and it does not need 15,000 files to show up.
 What is not here: HTTP, SSE, browsing, and the 15,000-song corpus. `test_party_simulation.py`
 says so in its skip reason, and the full driver lands with milestone 16.
 
+## The administrative interface (SAPRS 8.8, AIG 14)
+
+Six suites rather than one, because "an operator pressed a button" is not one claim:
+
+- `tests/unit/test_admin_service.py` — the credential rules against a real `runtime.db`: hashing,
+  the lockout window, sliding expiry, session pruning, and the two revocations (logout ends one
+  session, a password change ends every one). Also that a wrong password and an untouched
+  appliance raise the same sentence, which is a security property with a one-line test and no
+  obvious way to keep it.
+- `tests/unit/test_api_auth.py` — the cookie's flags, the origin check, and the two answers one
+  401 gives (a person follows a link to the door; a tool gets the envelope). A route test cannot
+  tell which rule fired, and a typo in `Path=/` is a logout that quietly does nothing.
+- `tests/unit/test_statistics_service.py` and `tests/unit/test_library_reload.py` — the two
+  services this phase added, the first against a real store and a real bus, the second against
+  two real Builder passes over two real corpora.
+- `tests/integration/test_admin_interface.py` — every route, every failure path, and the property
+  that a route added next month could break: nothing under `/admin` answers without a session.
+  Enumerated from the OpenAPI document rather than a list of paths, because FastAPI ≥ 0.140 keeps
+  an `include_router` as one opaque node and an iteration over `app.routes` would be comparing an
+  empty set to itself.
+- `tests/e2e/test_admin_journey.py` — an operator's day, in order, with the guests' SSE stream
+  open beside it, and `tests/party_simulation/test_admin_in_the_room.py`, which puts the same
+  actions into a party and checks the ledger still closes.
+
+One assertion in the integration file deserves naming because it looks like trivia: the admin
+pages are read as text and checked for `setInterval`, `setTimeout(` and a `refresh` meta. A test
+here cannot watch a browser's network — there is no browser — so the rule "the administrative
+interface must not poll" is enforced against the markup that would cause it. The other half is
+`tests/regression/test_issue_28_administration_interface.py`, which proves that a page that
+*looks* refreshed did the thing it was asked to do.
+
+Two more properties are asserted as text for the same reason, and both are worth understanding
+before changing either file:
+
+- **A failure that was asked for as a fragment is answered as one, and the client is told to
+  render it.** htmx's default `responseHandling` discards a 4xx or 5xx body, which means the
+  appliance's most helpful markup was its most invisible. The regression file asserts the
+  vendored default is still what the bridge's rule assumes, and the integration file asserts the
+  503 that a bad rebuild produces arrives as HTML.
+- **The lockout's answer is a page with a field on it.** `429` in the mapping and `429` from the
+  route are different facts, and the reason they diverged is a two-class exception hierarchy.
+  The integration test tries six passwords against one appliance and reads both halves: the
+  wait in the page, and `Retry-After` for a client that has no eyes.
+
 ## Chaos and recovery (SAPRS 14.10, 14.13)
 
 These are no longer planned seams; they are tests that run.

@@ -105,6 +105,18 @@ class LibrarySearch:
         if not self._available:
             raise SearchUnavailableError
 
+    def set_availability(self, *, available: bool) -> None:
+        """Record the FTS verdict after the store reopened its handle.
+
+        The mutator exists rather than a new object because the *identity* is the contract:
+        `SearchService` holds this `SearchRead` (SAPRS 11.5, ADR-009's capability rather than
+        a class), so `LibraryStore.reload()` updates the verdict in place. Replacing the
+        object would leave search running on the decision a library that is no longer
+        current made — and a rebuild that added FTS tables would look like a broken index.
+        """
+
+        self._available = available
+
 
 def _song_hit(row: sqlite3.Row) -> SongHit:
     return SongHit(song=to_song(row), score=_score(row))

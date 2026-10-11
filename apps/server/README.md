@@ -12,10 +12,13 @@ appliance described in SAPRS 2.1 and AIG Chapter 6.
 
 ## Status
 
-Implemented through AIG 21 milestone 13 (#25): configuration, both stores, search,
+Implemented through AIG 21 milestone 14 (#28): configuration, both stores, search,
 playback with its supervisor, the queue, health, the guest HTML surface, the
-`/api/v1` JSON API and `/events` SSE. The administrative interface (milestone 14)
-and the installer (milestone 15) are not here yet.
+`/api/v1` JSON API, `/events` SSE, and the administrative interface at `/admin` —
+login and first-run setup, the dashboard, playback and queue control, health,
+statistics, the log tail, the configuration summary, library information and a
+reload. The installer (milestone 15) is not here yet, so neither is `GET /qr`,
+which needs the address the installer would have configured.
 
 ## Running it
 

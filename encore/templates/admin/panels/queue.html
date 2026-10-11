@@ -1,0 +1,30 @@
+{#
+Queue management, in full (SAPRS 8.8).
+
+The same rows as the dashboard and the whole list rather than the visible twenty, because the
+subject of this screen *is* the list: an operator looking for the request that will not go away
+needs the fortieth row, not a link that says twenty exist. It is the uncapped read for the same
+reason `GET /queue` is one for a guest (SAPRS 9.9) — with remove buttons, which a guest never sees.
+
+`health` arrives with the page rather than only with the strip, because a queue that will not
+advance is usually a queue with a sick engine behind it, and the two facts on one screen is the
+difference between a diagnosis and two pages.
+#}
+{% set panel_name = "queue" %}
+<section
+  id="admin-queue"
+  class="admin-region"
+  hx-get="/admin/queue"
+  hx-trigger="encore:change from:body delay:250ms"
+  hx-target="this"
+  hx-swap="outerHTML"
+>
+  <h1>Queue</h1>
+  {% if action %}<p class="admin-region__note">{{ action }}.</p>{% endif %}
+  <p class="muted">
+    {{ length }} of a possible {{ max_items }}
+    {% if wait.total_seconds() >= 1 %} · about {{ wait | clock }} of music{% endif %}.
+  </p>
+  {% include "admin/partials/rows.html" %}
+  {% include "admin/partials/controls.html" %}
+</section>

@@ -63,6 +63,28 @@ Raspberry Pi 4. Nightly runs the slow suites: performance and the baseline party
 - GitHub-native secret scanning and push protection are repository settings, not
   workflow steps: see [Repository administration](Repository-Administration.md).
 
+### Triaging a code scanning alert
+
+The `CodeQL` check on a PR is not the analysis; it is a gate over the alerts the
+analysis filed, and it fails on anything new regardless of whether the code that
+caused it survived. `# codeql[query-id]` comments are **inert** in the analyser
+this repository runs — the alert is still filed, with the marker's own line as its
+location — so a false positive is closed by dismissing it, not by commenting:
+
+```bash
+gh api repos/OWNER/ENCORE/code-scanning/alerts --jq '.[] | "\(.number) \(.state) \(.rule.id)"'
+gh api -X PATCH repos/OWNER/ENCORE/code-scanning/alerts/N \
+  -f state=dismissed -f dismissed_reason="false positive"
+```
+
+Two things make that honest rather than quiet. The justification goes next to the
+code it describes, naming the test that would fail if the claim stopped being
+true; and `SECURITY.md` keeps the list of findings dismissed on purpose, because a
+dismissed alert that no document mentions is indistinguishable from one nobody
+looked at. The REST field is `dismissed_reason`, its value is one of
+`false positive`, `won't fix`, `used in tests`, `mitigated`, and the comment on an
+alert is not settable through the REST endpoint (GraphQL only).
+
 ## Release
 
 Builds and verifies, then publishes a GitHub release and (for non-`rc` tags, via

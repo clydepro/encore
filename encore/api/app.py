@@ -36,7 +36,7 @@ from encore.api import fragments, sse, v1
 from encore.api.deps import Jukebox
 from encore.api.errors import register_error_handlers
 from encore.api.html import STATIC_DIR, Renderer, build_renderer
-from encore.controllers import browse, panels, queue
+from encore.controllers import admin, browse, panels, queue
 
 __all__ = ["create_app"]
 
@@ -56,8 +56,10 @@ services, and `GET /events` keeps a browser's copy of that state current without
 it to poll.
 
 Queueing is **not idempotent**: two `POST`s of one song create two queue items (SAPRS
-10.4). Everything a guest can do is here; playback control is administrative and lives
-behind `/admin` in milestone 5.
+10.4). Everything a guest can do is here. Playback control, queue removal and the counters
+are administrative and live behind `/admin` and the two marked routes (SAPRS 8.8, 10.8) —
+sign in there with the password the operator set on first run, and every one of those routes
+is a session cookie away.
 """
 
 
@@ -110,8 +112,11 @@ def create_app(
         openapi_tags=_TAGS,
         # `/docs` rather than a versioned path: the document describes the whole
         # application, and the one version it happens to describe is in its `info` block.
-        # The admin screens will not want it public (SAPRS 10.12), which is milestone 5's
-        # decision to make, not this one's.
+        # The admin screens are behind a session and this document is not, which is SAPRS
+        # 10.12's rule read closely: what must not be guessable is the *guest* interface's
+        # shape, and `/docs` is the specification of a guest interface. An operator's routes
+        # appear in it because they are routes; knowing they exist grants nothing, and a
+        # document that hid them would be a document an integrator cannot use.
         docs_url="/docs",
         redoc_url=None,
     )
@@ -122,6 +127,8 @@ def create_app(
 
     register_error_handlers(app, logger=app.state.log)
     app.include_router(browse.router)
+    app.include_router(admin.router)
+    app.include_router(admin.secure)
     app.include_router(panels.router)
     app.include_router(queue.router)
     app.include_router(v1.router)
@@ -150,5 +157,13 @@ _TAGS = [
         "design (SAPRS 10.4).",
     },
     {"name": "v1", "description": "The versioned JSON interface (SAPRS 10.2)."},
+    {
+        "name": "admin",
+        "description": "The operator's interface (SAPRS 8.8, 10.8, AIG 14): sign-in, the "
+        "dashboard, playback control, queue management, health, statistics, logs, the "
+        "configuration summary and the library. Everything under `/admin` except the "
+        "sign-in page itself requires a session cookie, and there is no account to make: "
+        "the first password typed on first run becomes the appliance's one administrator.",
+    },
     {"name": "events", "description": "The Server-Sent Events stream (SAPRS 9.10, 10.5)."},
 ]

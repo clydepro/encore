@@ -182,6 +182,17 @@ class AdminStateRepository:
 
         self._session.execute(update(AdminState).where(AdminState.id == 1).values(last_login_at=at))
 
+    def last_login(self) -> datetime | None:
+        """When the credential was last accepted, or None if it never has been.
+
+        A read of the row `record_login` writes, and nothing else: "the appliance came
+        back up at 4 a.m." and "someone signed in at 4 a.m." are different sentences, and
+        the administrator is entitled to ask which one the box could tell them (ADR-013).
+        """
+
+        row = self._row()
+        return None if row is None else row.last_login_at
+
     def scheme(self) -> str:
         """The hash this build produces, for the configuration summary."""
 

@@ -37,7 +37,12 @@ from encore.api import errors
 from encore.domain import SongId
 from encore.playback import MpvTimeoutError
 from encore.search import SearchUnavailableError
-from encore.services.errors import QueueFullError, SongNotAvailableError
+from encore.services.errors import (
+    AuthenticationError,
+    QueueFullError,
+    RateLimitError,
+    SongNotAvailableError,
+)
 from encore.utilities.appliance import ApplianceNotRunning, WrongThreadError
 from tests.support.http import running
 
@@ -120,6 +125,14 @@ def mpv_timeout() -> None:
     raise MpvTimeoutError("get_property did not answer in time")
 
 
+def not_signed_in() -> None:
+    raise AuthenticationError("the password was not right")
+
+
+def locked_out() -> None:
+    raise RateLimitError(623)
+
+
 # -- the table ------------------------------------------------------------
 
 
@@ -132,6 +145,8 @@ def mpv_timeout() -> None:
         (not_ready, 503, "not_ready"),
         (wrong_thread, 503, "not_ready"),
         (exploded, 500, "internal"),
+        (locked_out, 429, "rate_limited"),
+        (not_signed_in, 401, "unauthorized"),
     ],
 )
 async def test_a_service_failure_becomes_the_status_the_api_reference_promises(
@@ -386,3 +401,36 @@ async def test_details_carry_numbers_and_not_sentences() -> None:
 
     assert all(isinstance(value, int) for value in full.values())
     assert all(isinstance(value, int) for value in missing.values())
+
+
+async def test_a_wait_is_advertised_in_a_header_as_well_as_a_body() -> None:
+    """A 429 that only says "later" in a JSON field is a 429 that will be ignored.
+
+    `Retry-After` is the half of the answer that is not ours to read: a proxy, a `curl --retry`
+    and a client generated from the OpenAPI document all look at the header (RFC 9110 §10.2.3).
+    The body keeps its number, because the envelope is where everything else a client can branch
+    on lives. The two must agree, which is what the second assertion is for: a header computed
+    somewhere else is a second clock that will drift.
+    """
+
+    tool = await call(failing(locked_out), headers=NEITHER)
+    person = await call(failing(locked_out), headers=BROWSER)
+
+    assert tool.status == 429
+    assert tool.headers["retry-after"] == "623"
+    assert tool.json()["error"]["details"] == {"retry_after_seconds": 623}
+    assert person.status == 429
+    assert person.headers["retry-after"] == "623", "the page and the envelope waited differently"
+
+
+async def test_a_failure_with_nothing_to_wait_for_sends_no_retry_after() -> None:
+    """`Retry-After` on a 409 would be a lie with a number in it.
+
+    The queue being full is not a promise about the future — the ceiling says how much is full,
+    and how long until a slot opens is `/api/v1/queue`'s `wait_ms`, not this header's.
+    """
+
+    response = await call(failing(queue_full))
+
+    assert response.status == 409
+    assert "retry-after" not in response.headers

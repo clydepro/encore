@@ -1,0 +1,13 @@
+{#
+One administrative screen, in its shell (SAPRS 9.3's shape, applied to AIG 14's list).
+
+The page is two lines and a name: the region template beside it is what an `HX-Request` gets
+back, and keeping the pair in files of the same name is what stops the two from describing the
+appliance differently. `admin/shell.html` contributes the navigation, the alerts strip and the
+sign-out; everything between them belongs to this screen alone.
+#}
+{% extends "admin/shell.html" %}
+{% block title %}Library · Encore admin{% endblock %}
+{% block admin %}
+  {% include "admin/panels/library.html" %}
+{% endblock %}

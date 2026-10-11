@@ -15,6 +15,7 @@ property of the file handle rather than of everyone remembering not to call `com
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -113,6 +114,33 @@ class LibraryStore:
 
     def close(self) -> None:
         self._connection.close()
+
+    def reload(self) -> LibraryInfo:
+        """Read the published `library.db` again, and report what it turned out to be.
+
+        A running Server cannot see a rebuild by waiting: the Builder publishes by renaming
+        a completed file into place (SAPRS 5.8, ADR-010), and a live SQLite handle keeps
+        the inode it opened. So "pick up the new library" is one reopen of one handle
+        (ADR-006's immutability is about writes, not about refreshes), and this is the only
+        method on this class that changes what the class reads.
+
+        What it does not do is migrate. A file built for another schema revision fails the
+        shape check and raises, leaving the old library current: the runtime does not
+        migrate the library (ADR-006), and a half-read catalogue is worse than an outdated
+        one. Anything still playing from the previous library keeps playing — its file path
+        was resolved when the song was queued, and a Builder that deleted the old artwork
+        mid-track is a Builder the validation report already refuses to be (SAPRS 6.10).
+
+        Raises:
+            LibraryContractError, StoreNotFoundError, ContractViolationError: Whatever the
+                new file is not. The store keeps serving the library it had.
+        """
+
+        self._info = self._connection.reopen(_check)
+        # The verdict travels with the open, and the object holding it is the one
+        # `SearchService` was built against: update it, do not replace it.
+        self.search.set_availability(available=self._info.fts_available)
+        return self._info
 
     def __enter__(self) -> LibraryStore:
         return self
@@ -230,7 +258,18 @@ def open_library(path: Path, *, immutable: bool = False) -> LibraryStore:
 
 
 def _check(connection: LibraryConnection) -> LibraryInfo:
-    missing = REQUIRED_TABLES - connection.table_names()
+    try:
+        names = connection.table_names()
+    except sqlite3.Error as error:
+        # A file that is not a database at all. The distinction matters now that a running
+        # appliance can ask this question (the library page's reload, AIG 14): "not an Encore
+        # library" and "not a library file" are the same refusal, and a `DatabaseError` escaping
+        # here would reach a request as a 500 about a page that was only trying to help.
+        raise LibraryContractError(
+            f"{connection.path} is not a readable database ({error}); it is not an Encore "
+            "library. Build it with encore-builder (SAPRS 6.1)."
+        ) from error
+    missing = REQUIRED_TABLES - names
     if missing:
         raise LibraryContractError(
             f"{connection.path} is not an Encore library: no {' and '.join(sorted(missing))} "

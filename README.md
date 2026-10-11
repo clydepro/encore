@@ -196,10 +196,13 @@ Documentation, Security, Release.
 The core is in place — domain model, Event Bus, configuration, both databases,
 the Library Builder, search, playback, the queue — and there is now something to
 start: `scripts/run-server.sh` serves the guest pages, the JSON API and the SSE
-stream over the composed graph, so `scripts/check.sh` runs 1109 tests against
-real code (1146 with the scheduled performance and Party Simulation suites, on a
-machine that has mpv installed). The administrative interface is the remaining
-half of the HTTP surface, and arrives with milestone 14.
+stream over the composed graph, and `/admin` is the operator's half of the same
+appliance — a dashboard, the queue, health, statistics, a log tail, the
+configuration summary and a library reload, so a rebuild published mid-party is
+noticed without a restart. `scripts/check.sh` runs 1268 tests against real code
+(1309 with the scheduled performance, real-mpv and Party Simulation suites, on a
+machine that has mpv installed). The installer is what is left of the HTTP
+surface, and arrives with milestone 15.
 
 Layout:
 

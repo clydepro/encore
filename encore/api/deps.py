@@ -29,7 +29,15 @@ from encore.config.models import EncoreConfig
 from encore.events.bus import EventBus
 from encore.playback import PlaybackService
 from encore.search import SearchService
-from encore.services import HealthService, LibraryService, QueueService, SSEPublisher
+from encore.services import (
+    AdminService,
+    HealthService,
+    LibraryService,
+    QueueService,
+    SSEPublisher,
+)
+from encore.services.logging_service import LogTail
+from encore.services.statistics_service import StatisticsService
 from encore.utilities.appliance import ApplianceThread, call_async
 
 __all__ = ["Jukebox", "call_async", "jukebox_of", "read", "renderer_of"]
@@ -54,6 +62,13 @@ class Jukebox(Protocol):
         playback: The engine's last known state, for Now Playing.
         health: The aggregate, for `/api/v1/health` and the banner.
         live: The SSE fan-out, for `/events`.
+        admin: The credential and the sessions. The only service in this list an HTTP
+            handler may call *without* crossing `read()`, because a session check is a
+            dictionary lookup and not a database read (ADR-013).
+        stats: The counters, for `/api/v1/stats` and the dashboard.
+        logs: The tail of this appliance's own log records, for the administrative log view.
+            Not behind `read()`: reading a ring buffer is not touching a database, and the
+            handler that reads it is the one that already holds the request.
         logger: The application's logger, so a failed render is reported in the
             appliance's journal rather than in a module-global one.
         version: The appliance's version, for `/api/v1/info` and the docs.
@@ -85,6 +100,15 @@ class Jukebox(Protocol):
 
     @property
     def live(self) -> SSEPublisher: ...
+
+    @property
+    def admin(self) -> AdminService: ...
+
+    @property
+    def stats(self) -> StatisticsService: ...
+
+    @property
+    def logs(self) -> LogTail: ...
 
     @property
     def logger(self) -> logging.Logger: ...

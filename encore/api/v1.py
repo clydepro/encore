@@ -18,10 +18,11 @@ Three things are deliberate:
   (SAPRS 8.8) and belong behind step 14's authentication, so they are absent rather than
   present and open.
 
-Missing things, stated rather than discovered: `DELETE /api/v1/queue/{id}` and the
-playback commands are the administrator's (step 14); `/api/v1/qr` is deferred with the
-QR page to step 14 (issue #25); `StatisticsService` has no endpoint yet because it has no
-caller yet.
+Missing things, stated rather than discovered: the playback commands live behind `/admin`
+with the rest of what only an operator may do (SAPRS 8.8), and `/api/v1/qr` is deferred with
+the QR page to a later phase (issue #25). The two administrative routes at the end of this
+file are the exception that proves the rule — a machine that wants to help a party needs
+nothing else, and a machine that wants to run one needs a session like any other client.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from pydantic import BaseModel
 
 from encore.api import views
+from encore.api.auth import depend_admin
 from encore.api.deps import Jukebox, jukebox_of, read
 from encore.api.rows import SongRow
 from encore.api.schemas import (
@@ -45,7 +47,16 @@ from encore.api.schemas import (
     SearchModel,
     SongModel,
 )
-from encore.domain import Album, AlbumId, Artist, ArtistId, QueueItem, Song, SongId
+from encore.domain import (
+    Album,
+    AlbumId,
+    Artist,
+    ArtistId,
+    QueueItem,
+    QueueItemId,
+    Song,
+    SongId,
+)
 
 __all__ = ["router"]
 
@@ -192,7 +203,76 @@ async def info(jukebox: Juke) -> dict[str, Any]:
     }
 
 
+# -- the two routes that are not a guest's ------------------------------------
+
+#: Both routes below declare the session on the decorator rather than in a parameter, because
+#: neither reads the identity it verifies: the requirement is the whole of what the dependency
+#: contributes, and a handler that took an `AdminSession` it never looked at would be a handler
+#: that appeared to do something with one. `encore/controllers/admin.py` makes the same choice
+#: for the same reason, one level up.
+_ADMIN = [Depends(depend_admin)]
+
+
+@router.delete(
+    "/queue/{item_id}",
+    response_model=dict,
+    summary="Take one request out (administrator)",
+    dependencies=_ADMIN,
+)
+async def remove(jukebox: Juke, item_id: Annotated[int, Path(ge=1)]) -> dict[str, Any]:
+    """Remove a queued request — the JSON twin of the dashboard's own button.
+
+    SAPRS 10.2's "two complementary interfaces" is why this exists: an operator scripting a
+    shutdown should not have to drive a browser to empty a queue. The behaviour is not here at
+    all — it is `QueueService.remove()`, which the page and this route share rather than
+    duplicate (ADR-011).
+
+    Removing what is playing is a skip, and the answer says which of the two happened: a caller
+    that asked about item 7 and got only `{"removed": 7}` cannot tell whether the appliance is
+    now quiet or now playing something else.
+    """
+
+    outcome, view = await read(jukebox.appliance, partial(_remove, jukebox, QueueItemId(item_id)))
+    if outcome is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "that request is no longer in the queue")
+    return {
+        "removed": item_id,
+        "as": "skip" if outcome else "removal",
+        "queue_length": view.length,
+        "state": view.queue_state,
+    }
+
+
+@router.get(
+    "/stats", response_model=dict, summary="Usage counters (administrator)", dependencies=_ADMIN
+)
+async def stats(jukebox: Juke) -> dict[str, Any]:
+    """The counters the statistics page prints, as data.
+
+    `StatisticsReport.as_json` is the whole of the shape, which is the point: the screen and
+    this route read one report built in one transaction, so they cannot describe two different
+    parties. The trend is included because a total without a shape is a number an operator
+    cannot act on (SAPRS 10.3).
+    """
+
+    report = await read(jukebox.appliance, jukebox.stats.report)
+    return report.as_json()
+
+
 # -- what runs on the appliance thread ----------------------------------------
+
+
+def _remove(jukebox: Jukebox, item_id: QueueItemId) -> tuple[bool | None, views.PlayerView]:
+    """Take one item out, then read the queue once so the answer describes what is left.
+
+    The `bool | None` keeps `QueueService.remove`'s three answers as they are: `None` that the
+    item was not there, `True` that it was the one playing, `False` that it was waiting. The
+    view is read *after* the removal, which is the only way `queue_length` in the response is
+    the length the caller is being told about rather than the one before.
+    """
+
+    removed = jukebox.queue.remove(item_id)
+    return removed, views.player(jukebox)
 
 
 def _dump(model: BaseModel | None) -> dict[str, Any]:

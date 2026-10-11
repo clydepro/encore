@@ -23,6 +23,8 @@ from typing import Final
 
 import pytest
 
+from encore.api.html import build_renderer
+
 TEMPLATES: Final = Path(__file__).resolve().parents[2] / "encore" / "templates"
 STATIC: Final = Path(__file__).resolve().parents[2] / "encore" / "static"
 
@@ -49,8 +51,22 @@ TARGET_KEYWORDS: Final = frozenset(
 
 #: Attribute names Encore's templates are allowed to use. A new one is a decision about the
 #: front end's surface area, and `docs/Developer/Frontend.md` is where it gets written down.
+#:
+#: `hx-confirm` joins the list with the administrative interface, for one button: "clear the
+#: queue" is the only operator action no undo returns, and a native confirm dialog is the only
+#: confirmation that cannot drift out of step with the page behind it — no component, no state,
+#: nothing to re-render when the queue moves while the dialog is open.
 ALLOWED_ATTRIBUTES: Final = frozenset(
-    {"hx-get", "hx-post", "hx-target", "hx-swap", "hx-swap-oob", "hx-trigger", "hx-params"}
+    {
+        "hx-get",
+        "hx-post",
+        "hx-target",
+        "hx-swap",
+        "hx-swap-oob",
+        "hx-trigger",
+        "hx-params",
+        "hx-confirm",
+    }
 )
 
 #: The regions `encore/static/js/encore-live.js` will try to swap, and therefore the ids that
@@ -144,3 +160,56 @@ def test_the_regions_the_script_names_are_the_regions_the_templates_define() -> 
     body = "\n".join(text for _, text in files())
     for region in REGIONS:
         assert f'id="{region}"' in body, f"no template defines the region {region!r}"
+
+
+def test_no_template_turns_autoescaping_off() -> None:
+    """Every value in every template is escaped, which is the claim CodeQL asks about.
+
+    A scanner that sees `Response(content=template.render(...))` and a request parameter
+    somewhere upstream is right to be suspicious: it is a *sink* with a source flowing to it,
+    and the only thing between them is a configuration flag on a Jinja environment two files
+    away. `api/html.py` sets that flag with `select_autoescape`, which decides by filename —
+    so the guarantee holds exactly as long as no template opts out locally, and an opt-out is
+    one `| safe` away from a working feature.
+
+    This is the assertion that keeps the difference visible. It is not a substitute for the
+    escaping (that is the environment's job) and it is not a suppression of the alert either:
+    `html.py` carries the reason in its own comment, and this is the reason's evidence.
+    """
+
+    opted_out = [
+        f"{path.relative_to(TEMPLATES)}:{number}"
+        for path, text in files()
+        for number, line in enumerate(text.splitlines(), start=1)
+        if re.search(r"\|\s*safe\b|{%\s*autoescape\s+false", line)
+    ]
+    assert not opted_out, f"templates that escape themselves: {opted_out}"
+
+    renderer = build_renderer()
+    escaped = renderer.render(
+        "partials/error.html",
+        {
+            "failure": _Failure("<script>alert(1)</script>"),
+            "details": {
+                "fields": [{"location": ["body", "song_id"], "message": '<img src=x onerror="1">'}]
+            },
+        },
+    )
+    assert "<script>" not in escaped, "a value reached a page without escaping"
+    assert "&lt;script&gt;" in escaped
+    # The value survives as text in an attribute context rather than becoming a tag: `onerror`
+    # is still readable in the page source, and `<img` is not there to execute.
+    assert "onerror" in escaped
+    assert "<img" not in escaped
+
+
+class _Failure:
+    """The shape `errors.respond()` passes to the error templates: a `code` and a `message`.
+
+    Constructed here rather than imported from `encore.api.errors` because this file is about
+    what a template does with a string, and the string is the interesting part.
+    """
+
+    def __init__(self, message: str, code: str = "invalid_request") -> None:
+        self.message = message
+        self.code = code

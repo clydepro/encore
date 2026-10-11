@@ -1,0 +1,36 @@
+{#
+Every queued item, with the one thing an operator can do to it (SAPRS 8.8, 9.9).
+
+The guest's row partial is *not* used here, and that is deliberate rather than a missed
+reuse: its button asks the appliance to queue a song, which is a guest's action and belongs on a
+guest's screen. This table's subject is the queue's own state — position, status, and whether the
+library still knows the song — and its only verb is removal.
+
+`status` is the queue's word, not an inference from the player, so a row says `playing`,
+`queued`, `finished` or `removed` as `runtime.db` believes it (SAPRS 9.7's "show the difference").
+A row whose song has gone out of the library renders as a disabled row rather than disappearing,
+because the queue still holds the position and an operator is the one person who needs to see it.
+#}
+<ol class="admin-rows" aria-label="Queued requests">
+  {% for row in rows %}
+    <li class="admin-row{% if not row.available %} admin-row--missing{% endif %}">
+      <span class="admin-row__position">{{ row.position or "" }}</span>
+      <span class="admin-row__text">
+        <span class="admin-row__title">{{ row.title }}</span>
+        <span class="admin-row__subtitle">{{ row.subtitle }}</span>
+      </span>
+      <span class="admin-row__length">{{ (row.song.duration if row.song else none) | clock }}</span>
+      <span class="row-status row-status--{{ row.status }}">{{ row.status }}</span>
+      {% if row.item_id %}
+        <form class="admin-row__form" method="post"
+              action="/admin/queue/{{ row.item_id }}/remove?panel={{ panel_name }}"
+              hx-post="/admin/queue/{{ row.item_id }}/remove?panel={{ panel_name }}"
+              hx-target="closest .admin-region" hx-swap="outerHTML">
+          <button class="button button--quiet" type="submit">Remove</button>
+        </form>
+      {% endif %}
+    </li>
+  {% else %}
+    <li class="admin-row admin-row--empty">Nobody is waiting.</li>
+  {% endfor %}
+</ol>

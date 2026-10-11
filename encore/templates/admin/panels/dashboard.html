@@ -1,0 +1,56 @@
+{#
+The console: what is on the speakers, everything waiting, and the five buttons (SAPRS 8.8, 9.8).
+
+It is the guest's own panels, not a paraphrase of them: `now_playing.html` and the row partial
+are included rather than re-drawn, because the most likely bug in an administrative dashboard is
+the one where it disagrees with the screen the party is looking at. The difference is the
+uncapped list and the remove buttons, which a guest cannot have.
+
+`hx-trigger="encore:change from:body"` is what makes this page live without a timer:
+`encore-live.js` dispatches that event when a frame says the appliance moved, and the region
+rebuilds itself from the same `views.player` read the guest's `snapshot` came from. A polling
+version of this line would be one request per second per open tab, on a box whose design
+assumes one disk (SAPRS 12.4's one-second budget is met by the frame, not by the fetch).
+
+`action` is set only on a response to something the operator just did (`admin.py`'s `_changed`),
+and it is drawn as a line rather than a toast: SAPRS 10.8's "no dead ends" is about errors, but
+the same instinct says a confirmation that vanishes on the next song is a confirmation an
+operator never saw.
+#}
+{% set panel_name = "dashboard" %}
+<section
+  id="admin-dashboard"
+  class="admin-region admin-region--dashboard"
+  hx-get="/admin/dashboard"
+  hx-trigger="encore:change from:body delay:250ms"
+  hx-target="this"
+  hx-swap="outerHTML"
+>
+  {% if action %}<p class="admin-region__note">{{ action }}.</p>{% endif %}
+
+  {% include "panels/now_playing.html" %}
+  {% include "admin/partials/controls.html" %}
+
+  <h2 class="admin-region__heading">Waiting</h2>
+  <p class="muted">
+    {{ length }} of {{ max_items }} possible ·
+    {% if wait.total_seconds() < 1 %}nothing queued up{% else %}about {{ wait | clock }} until the last one{% endif %}
+  </p>
+  {% set rows = up_next %}
+  {% include "admin/partials/rows.html" %}
+  {% if more_waiting %}
+    <p class="admin-region__more">
+      and {{ more_waiting }} more after these —
+      <a href="/admin/queue">the whole list</a>
+    </p>
+  {% endif %}
+
+  {% if health.status.is_healthy %}
+    <p class="admin-region__health">All components healthy. {{ sessions }} open session{% if sessions != 1 %}s{% endif %}.</p>
+  {% else %}
+    <p class="admin-region__health admin-region__health--bad">
+      {{ health.detail or "The appliance has a problem." }}
+      <a href="/admin/health">Component detail</a>
+    </p>
+  {% endif %}
+</section>

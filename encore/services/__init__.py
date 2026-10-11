@@ -18,18 +18,27 @@ In place so far:
 * `SSEPublisher` — bus facts to browser frames (SAPRS 9.10, 10.5), from milestone 13.
   A service rather than an endpoint: it knows the bus and nothing about HTTP.
 
-`StatisticsService` is the remaining name on AIG 7's list, and it is absent on purpose:
-its first caller is the administrator dashboard (milestone 14), and phase 3's lesson was
-that a service written before its caller exists quietly stops being true.
+`StatisticsService` is the name on AIG 7's list that is *not* imported here. It needs
+`StatisticKey`, the counter vocabulary the runtime repository owns, and importing it at
+package level would put SQLAlchemy in front of every configuration and domain test in the
+suite — the same reason phase 2 declined to wire the stores into `build_core_services`. The
+composition root in `apps/server/` imports the module directly, which is where storage
+belongs.
+
+`AdminService` arrives with milestone 14 (SAPRS 10.8, ADR-013): the credential check, and
+the sessions that follow from it. It holds the one piece of runtime state in this process
+that is deliberately not in a database, and ADR-013 is where that is argued rather than
+assumed.
 
 Search lives in `encore/search/` and playback in `encore/playback/`, each a package with its
 own public surface: a service does not appear here to describe itself, it appears when it
-does something. `LibraryService`, `HealthService`, `StatisticsService` and `SSEPublisher`
-were the four named as arriving with their milestones; three of them have.
+does something. `LibraryService`, `HealthService`, `StatisticsService`, `AdminService` and
+`SSEPublisher` are the five named as arriving with their milestones; five of them have.
 """
 
 from __future__ import annotations
 
+from encore.services.admin_service import AdminService, AdminSession
 from encore.services.container import CoreServices, build_core_services
 from encore.services.errors import QueueError, QueueFullError, SongNotAvailableError
 from encore.services.health_service import HealthService, HealthSnapshot
@@ -44,6 +53,8 @@ from encore.services.queue_service import (
 from encore.services.sse_publisher import SSEPublisher
 
 __all__ = [
+    "AdminService",
+    "AdminSession",
     "CoreServices",
     "HealthService",
     "HealthSnapshot",

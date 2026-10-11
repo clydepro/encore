@@ -63,26 +63,93 @@ class LibraryConnection:
                 ),
             )
         self._path = resolved
+        self._immutable = immutable
         self._lock = threading.Lock()
         self._closed = False
-        self._connection = sqlite3.connect(
-            _read_only_uri(resolved, immutable=immutable),
-            uri=True,
-            check_same_thread=False,
-            timeout=BUSY_TIMEOUT_MILLISECONDS / 1000,
-        )
-        # `query_only` is a no-op if the URI already refused, and the URI is a
-        # no-op if something attached this file by path. Setting both costs one
-        # statement each and removes the assumption that only one worked.
-        self._connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MILLISECONDS}")
-        self._connection.execute("PRAGMA query_only = ON")
-        self._connection.row_factory = sqlite3.Row
+        self._connection = self._connect(resolved)
 
     @property
     def path(self) -> Path:
         """The file this handle reads."""
 
         return self._path
+
+    @property
+    def immutable(self) -> bool:
+        """Whether this handle was opened with `immutable=1` (see the class docstring).
+
+        Read by `LibraryStore.reload`, which must not turn a reload into a silently
+        different kind of handle: a connection that gains `immutable` would start trusting
+        a file that can still change under it, and one that loses it costs a little locking
+        nobody asked to pay for.
+        """
+
+        return self._immutable
+
+    def reopen[T](self, verify: Callable[[LibraryConnection], T]) -> T:
+        """Open this handle's own path again, and switch only if `verify` allows it.
+
+        This is the whole of a library reload at the storage layer, and the *in place* part
+        is the reason it is a method rather than a new object. Every repository in this
+        package holds this connection, and `LibraryStore.search` — the object
+        `SearchService` was handed at composition — holds it too. Replacing the store's
+        attribute with a second connection would therefore leave songs reading the rebuilt
+        library and search reading a handle nobody closed, which reports itself as "the
+        library changed, and now search is dead". One handle, one door; the door changes
+        what it points at.
+
+        `verify` runs against the new handle while the old one is still live, which is what
+        stops a reload making a broken file current. The Builder publishes atomically
+        (SAPRS 5.8), so a shape check is how to tell "a new library" from "something else is
+        now at that path", and the answer arrives before anything is swapped.
+
+        Args:
+            verify: Reads the new handle and returns what the caller wants back — in
+                practice `store._check`, whose `LibraryInfo` becomes the store's own.
+
+        Raises:
+            StoreNotFoundError: There is no file at this path any more.
+            Anything `verify` raises. The previous handle stays live in that case: a failed
+                reload is a no-op with an exception, not a jukebox gone deaf (SAPRS 11.9).
+        """
+
+        if not self._path.is_file():
+            raise StoreNotFoundError(
+                self._path,
+                hint="the library the reload was asked for is gone; the running library is "
+                "still readable until it is published again (ADR-006)",
+            )
+        fresh = LibraryConnection(self._path, immutable=self._immutable)
+        try:
+            verdict = verify(fresh)
+        except Exception:
+            fresh.close()
+            raise
+        with self._lock:
+            old, self._connection = self._connection, fresh._connection
+            fresh._closed = True
+            self._closed = False
+        old.close()
+        return verdict
+
+    def _connect(self, path: Path) -> sqlite3.Connection:
+        """Open the read-only handle ADR-009 specifies, with both refusals set.
+
+        `query_only` is a no-op if the URI already refused, and the URI is a no-op if
+        something attached this file by path. Setting both costs one statement each and
+        removes the assumption that only one worked.
+        """
+
+        connection = sqlite3.connect(
+            _read_only_uri(path, immutable=self._immutable),
+            uri=True,
+            check_same_thread=False,
+            timeout=BUSY_TIMEOUT_MILLISECONDS / 1000,
+        )
+        connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MILLISECONDS}")
+        connection.execute("PRAGMA query_only = ON")
+        connection.row_factory = sqlite3.Row
+        return connection
 
     @property
     def raw(self) -> sqlite3.Connection:

@@ -80,6 +80,29 @@ after 60 days from the report, whichever comes first.
 - Logs are structured and scrubbed; do not enable debug logging in shared
   environments.
 
+## Code scanning findings that stay open on purpose
+
+CodeQL sees real sinks in two places and is wrong about what reaches them. Both are dismissed as
+false positives in the alert list rather than deleted, because the alert is the record that the
+question was asked; the answer is in the code, next to the line that triggered it.
+
+- **`py/url-redirection` on `?next=`** (`encore/controllers/admin.py`). The destination of the
+  post-sign-in redirect comes from a query parameter, which is a legitimate thing to be alarmed
+  about. It passes through `_safe()`, which accepts an absolute path on this host and returns a
+  constant for everything else — a scheme, an authority, a backslash, or any character a URL
+  parser would remove before it decides what the target is. `tests/integration/
+  test_admin_interface.py` sends each of those shapes and asserts none leaves the appliance, and
+  asserts the filter still keeps a legitimate `/admin/logs?level=warning` whole.
+- **`py/reflective-xss` on the HTML renderer** (`encore/api/html.py`). Every value the interface
+  echoes — a search query, a song title from a built library, a field-name list from a validation
+  failure — reaches a response body through one Jinja `render`, and the environment is built with
+  `select_autoescape`. `tests/unit/test_templates.py` scans every template for a local opt-out
+  (`| safe`, `{% autoescape false %}`) and renders a hostile value through that same method, so
+  the claim fails the suite the day it stops being true.
+
+Both are asserted in a test rather than argued in prose, which is the only form of false-positive
+claim that survives a refactor.
+
 ## Automation in this repository
 
 - `security.yml` runs CodeQL, `uv audit` against OSV, dependency review, and
