@@ -17,14 +17,14 @@ yet.
 
 ## Status
 
-Steps 1–13 of [AIG Chapter 21](../AIG/AIImplementationGuide_AIG.md) are
+Steps 1–14 of [AIG Chapter 21](../AIG/AIImplementationGuide_AIG.md) are
 implemented: the domain model, the Event Bus, configuration and logging, both
-databases and the Builder that fills one of them, search, playback, the queue, and
-the HTTP + HTMX + SSE surface a guest's phone talks to. What is left is the
-administrative interface (step 14), the installer (15), the Party Simulation driver
-(16) and the documentation pass (17). "How do I implement X" is answered by the
-SAPRS and the ADRs for what is not built yet, and by the code in `encore/` for
-what is; [`Frontend.md`](Frontend.md) is the front end's contract.
+databases and the Builder that fills one of them, search, playback, the queue, the
+HTTP + HTMX + SSE surface a guest's phone talks to, and the administrative
+interface at `/admin`. What is left is the installer (step 15), the Party
+Simulation driver (16) and the documentation pass (17). "How do I implement X" is
+answered by the SAPRS and the ADRs for what is not built yet, and by the code in
+`encore/` for what is; [`Frontend.md`](Frontend.md) is the front end's contract.
 
 ## The shape of a change
 

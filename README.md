@@ -5,9 +5,15 @@ songs from your library on their own phones, and a strictly FIFO queue plays
 them through mpv. The box lives in a cupboard and needs no tending: the music,
 not the software, is the centre of attention.
 
-> **Status: bootstrap.** The repository is initialised, the tooling and CI are
-> enforced, and the architecture is documented — no application code yet. See
-> [Roadmap](#roadmap) and [Project Bootstrap Kit](docs/ProjectBootstrapKit_PBK.md).
+> **Status: pre-release — the appliance works, packaging it is what is left.**
+> AIG 21 steps 1–14 are done: build a library with the Builder, start the server,
+> browse and queue from a phone, hear strict-FIFO playback move on gaplessly, and
+> run the whole thing from `/admin`. What stands between this and `1.0.0` is the
+> installer (step 15), the Party Simulation driver (step 16) and the documentation
+> pass (step 17). Nothing here is installable with one command yet —
+> [Roadmap](#roadmap) is the status board, and
+> [Project Bootstrap Kit](docs/ProjectBootstrapKit_PBK.md) is how the repository got
+> to be this shape.
 
 ## Table of contents
 
@@ -34,8 +40,9 @@ speakers and serves a mobile-first web interface to everyone on the LAN.
 - **Queue** — strict FIFO, visible to everyone, duplicates allowed.
 - **Playback** — mpv with gapless transitions, crossfade, progress reporting and
   automatic recovery from crashes.
-- **Administration** — an authenticated dashboard for playback, health,
-  statistics and logs.
+- **Administration** — an authenticated dashboard: playback control, queue
+  management, health, statistics, a log tail, the configuration summary and
+  library information.
 - **Real time** — Server-Sent Events drive Now Playing and Up Next; the page
   never polls.
 
@@ -58,9 +65,12 @@ same rule that keeps the appliance dependable.
 
 ## Screenshots
 
-Not yet — the interface exists (milestones 11–13, `encore/templates/`), but no
-screenshots of it have been taken. Images will land in
-[`docs/images/`](docs/images/) and be referenced from the
+Not yet — the interface exists (milestones 11–14, `encore/templates/` and
+`encore/templates/admin/`), but no screenshot of it has been taken. Every page in
+this repository has been rendered by a test, and by nothing else: the guest
+surface and the administrative surface have never met a real phone browser, which
+is the first thing to check on hardware and is written down rather than implied.
+Images will land in [`docs/images/`](docs/images/) and be referenced from the
 [User Guide](docs/User-Guide.md).
 
 ## Features
@@ -72,14 +82,21 @@ screenshots of it have been taken. Images will land in
 - One-tap queueing, including repeats of a track already in the queue.
 - Live Now Playing with album art and progress, pushed over SSE.
 - Up Next: the same queue every guest sees.
-- QR-code onboarding at `jukebox.home.arpa`.
+- QR-code onboarding at `jukebox.home.arpa` — arrives with the installer, since a
+  QR has to encode the address the installer configured.
 
 **Host and administrator**
 
-- Authenticated dashboard: playback control, queue management, health,
-  statistics, logs, read-only configuration and library information.
+- Authenticated dashboard: playback control, queue management, health, statistics,
+  logs, read-only configuration and library information.
+- One appliance-wide password, hashed with Argon2id into `runtime.db`, with a
+  first-run setup page, a five-failure lockout that says how long to wait, and
+  sessions that live in memory so a restart signs the operator out on purpose
+  ([ADR-013](docs/adr/ADR-013-administrator-credential-and-session.md)).
+- A library reload, so a rebuild published mid-party is noticed without a restart.
 - Playback supervisor that restarts mpv and reconnects after failures.
-- Runtime state in a separate database, so restarts do not lose the queue.
+- Runtime state in a separate database, so restarts do not lose the queue — and
+  an immutable library database, so no request can ever change the collection.
 
 **Offline tooling**
 
@@ -144,9 +161,9 @@ superseded by
 
 > Not installable yet — the one-command `encore-install` is step 15. Everything it
 > would run exists: the Builder produces a library, and the server starts and
-> serves guests, an API and the live stream (steps 1–13). The commands below are
-> the manual path, which is authoritative (SAPRS 13.2) and is what the installer
-> will automate.
+> serves guests, an API, the live stream and the administrative interface
+> (steps 1–14). The commands below are the manual path, which is authoritative
+> (SAPRS 13.2) and is what the installer will automate.
 
 Target: Raspberry Pi 4, Raspberry Pi OS 64-bit (Debian 12 and Ubuntu 24.04 also
 supported).
@@ -157,12 +174,22 @@ git clone https://github.com/clydepro/encore.git && cd encore
 uv run python -m apps.builder.main --source /path/to/music --output ./dist-library
 
 # 2. Install the appliance
-curl -fsSL https://encore.example/install.sh | sudo bash   # automated
+curl -fsSL https://encore.example/install.sh | sudo bash   # automated, step 15
 # ...or follow docs/Administrator-Guide.md step by step   # manual, authoritative
 
 # 3. Start it
 sudo systemctl enable --now encore
 ```
+
+Until step 15 lands, the manual path is the only path, and
+[the Administrator guide](docs/Administrator-Guide.md) is authoritative about it.
+Two of its steps are the ones the installer will eventually take over: creating the
+`encore` system user with the layout below, and providing `ENCORE_ADMIN_PASSWORD`,
+which an unattended install uses to seed the credential once and then forgets.
+Without it the appliance still works — `/admin` becomes a first-run page that
+accepts a password and logs a warning about having been set up over plain HTTP —
+which is the right behaviour for a person trying a box out and the wrong one for a
+box at a party.
 
 Filesystem layout (SAPRS 13.3):
 
@@ -193,16 +220,20 @@ Quality gates are enforced locally on commit and again in CI
 ([five workflows](docs/Developer/Continuous-Integration.md)): Validate, Test,
 Documentation, Security, Release.
 
-The core is in place — domain model, Event Bus, configuration, both databases,
-the Library Builder, search, playback, the queue — and there is now something to
-start: `scripts/run-server.sh` serves the guest pages, the JSON API and the SSE
-stream over the composed graph, and `/admin` is the operator's half of the same
-appliance — a dashboard, the queue, health, statistics, a log tail, the
-configuration summary and a library reload, so a rebuild published mid-party is
-noticed without a restart. `scripts/check.sh` runs 1268 tests against real code
-(1309 with the scheduled performance, real-mpv and Party Simulation suites, on a
-machine that has mpv installed). The installer is what is left of the HTTP
-surface, and arrives with milestone 15.
+The whole runtime is in place — domain model, Event Bus, configuration, both
+databases, the Library Builder, search, playback, the queue, HTTP, HTMX, SSE and
+the administrative interface — and there is something to start: `scripts/run-server.sh`
+serves the guest pages, the JSON API and the live stream over the composed graph,
+and `/admin` is the operator's half of the same appliance. The two halves are one
+application on purpose: they share the event bus, the queue and the thread that
+owns SQLite and mpv, so an operator and a guest can never be shown two different
+jukeboxes.
+
+`scripts/check.sh` runs 1268 tests against real code (1311 with the scheduled
+performance, real-mpv and Party Simulation suites, on a machine that has mpv
+installed) at 93.5% coverage of `encore/`. What is left of the HTTP surface is the
+QR endpoint, and it arrives with the installer (milestone 15), because a code has
+to encode the address the installer would have configured.
 
 Layout:
 
@@ -211,11 +242,13 @@ Layout:
 apps/        builder/ and server/ entry points
 encore/      the package: api, config, controllers, domain, events, playback,
              repositories, search, services, templates, static, utilities
-tests/       unit, integration, regression, performance, party_simulation
+tests/       unit, integration, regression, e2e, performance, party_simulation,
+             and support/ (the fixtures those suites share)
 docs/        SAPRS, AIG, AEP, PBK, adr/, Developer/, api/, images/
 ai/          current phase, handoff notes, prompts, context bundles,
              task templates, reviews, checklists
-scripts/     bootstrap, lint, format, test, check, run-server, run-builder
+scripts/     bootstrap, check, format, lint, test, run-server, run-builder, and the
+             three that configure a GitHub repository
 tools/       developer-only utilities
 ```
 
@@ -256,8 +289,10 @@ the same work into ten milestones.
 11. **FastAPI. Done** — `encore/api/`, `apps/server/`, versioned JSON API.
 12. **HTMX. Done** — `encore/controllers/`, `encore/templates/`, server-rendered fragments.
 13. **SSE. Done** — `/events`, `encore/services/sse_publisher.py`.
-14. Administrative interface. ← next
-15. Installer.
+14. **Administrative interface. Done** — `encore/api/auth.py`,
+    `encore/controllers/admin.py`, `encore/templates/admin/`,
+    `encore/services/{admin,statistics}_service.py`.
+15. Installer. ← **next**
 16. Party Simulation.
 17. Documentation → `1.0.0`.
 
