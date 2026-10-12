@@ -6,9 +6,8 @@ For whoever picks this up next. Read with
 request → SAPRS → AIG → ADRs → AEP (AEP 2). This page is a pointer, not an authority, and it will
 be wrong faster than the SAPRS is.
 
-State as of this writing: **Phases 1–4 are merged (#20, #22, #24, #26); this branch is the fifth**
-and sits on `main` at `532e384` as
-[PR #27](https://github.com/clydepro/encore/pull/27), for issue
+State as of this writing: **Phases 1–5 are merged (#20, #22, #24, #26, #27).** Phase 5 landed as
+[d688d9d](https://github.com/clydepro/encore/commit/d688d9d) for issue
 [#28](https://github.com/clydepro/encore/issues/28). (The branch is named for the pull request
 rather than the issue, which breaks CONTRIBUTING §2; `ai/current-phase.md` says why and why it
 was not renamed.) The appliance has two audiences now: a guest

@@ -1,20 +1,22 @@
 # Current Phase
 
-**Phase 5 — the administrative interface (AIG step 14): implemented, as
-[PR #27](https://github.com/clydepro/encore/pull/27) on
-`feat/27-administration-interface`, closing issue
-[#28](https://github.com/clydepro/encore/issues/28).** Phases 1–4 are merged:
+**Phase 5 — the administrative interface (AIG step 14): merged as
+[d688d9d](https://github.com/clydepro/encore/commit/d688d9d) through
+[PR #27](https://github.com/clydepro/encore/pull/27), closing issue
+[#28](https://github.com/clydepro/encore/issues/28).** Phase 6 — the installer
+(step 15) — is what comes next, and no work has started on it. Phases 1–4 are merged:
 [PR #20](https://github.com/clydepro/encore/pull/20) (domain, bus, configuration),
 [PR #22](https://github.com/clydepro/encore/pull/22) (repositories, Builder — closed #19),
 [PR #24](https://github.com/clydepro/encore/pull/24) (search, playback, queue — closed #23) and
-[PR #26](https://github.com/clydepro/encore/pull/26) (HTTP, HTMX, SSE — closed #25). This branch
-sits on `main` at `532e384` and needs nothing from an unmerged sibling.
+[PR #26](https://github.com/clydepro/encore/pull/26) (HTTP, HTMX, SSE — closed #25). Phase 5 sat
+on `main` at `532e384` and needed nothing from an unmerged sibling.
 
-One deviation from CONTRIBUTING §2 to declare: the branch is named after the pull request,
-because the work started before issue #28 existed. The issue was opened afterwards so that
+One deviation from CONTRIBUTING §2, now historical: the merged branch
+(`feat/27-administration-interface`, deleted) was named after the pull request because the work
+started before issue #28 existed. The issue was opened afterwards so that
 `tests/regression/test_issue_28_administration_interface.py` could cite something real, and
-renaming the branch would have orphaned the open pull request. A future session that resents
-the name should rename it in the same commit as nothing else.
+renaming the branch mid-flight would have orphaned the open pull request. The lesson for phase 6
+is the ordering CONTRIBUTING already states: open the issue, then branch, then write code.
 
 ## Delivered
 
