@@ -82,6 +82,11 @@ scripts/check.sh
 
 ## AI assistance disclosure (AEP 27, SAPRS 15.14)
 
+This checkbox is the whole disclosure — no signature line, no model name, no email
+address in the body or in the commit message. Who is accountable is already carried
+by the commit and by this pull request, and a hand-written copy of it is the one
+part of a disclosure that can be wrong without anything noticing (#30).
+
 - [ ] No AI assistance was used
 - [ ] AI assistance used; the human author(s) above reviewed every line, and the
       session started from `ai/prompts/standard-prompt-header.md`

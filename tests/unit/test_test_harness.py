@@ -143,6 +143,53 @@ def test_issue_templates_cover_the_required_set() -> None:
     }, "PBK 8 requires all seven issue forms"
 
 
+def test_ai_disclosure_is_stated_where_a_session_reads_it() -> None:
+    """The convention, guarded rather than hoped for (#30).
+
+    A pull request once ended with "Generated with AI assistance (Claude). Author:
+    matt (<matttrent@gmail.com>)." Both halves were invented on the spot: the address
+    is in no git config on any machine in this project's history, no file in the
+    repository and no earlier pull request, and the model named was not the one the
+    session reported. The next session copied the sentence forward without checking
+    it, which is how a fabrication becomes a convention.
+
+    What made that possible was not carelessness but a gap. SAPRS 15.14 and
+    CONTRIBUTING §8 both require disclosure and neither named the form, so each
+    session derived one, and the template's checkbox went unfilled in favour of a
+    paragraph nobody could verify. The rule is now written in all four places a
+    session can reach it, and this test is what keeps the fourth from drifting:
+    prose a document is depended on for is prose worth asserting, in the same way
+    `test_github_configuration_is_present` asserts the scaffolding PBK promised.
+
+    The assertion is on the presence of the prohibition and its reason, deliberately
+    phrased loosely: what must not regress is that a session is told to use the
+    checkbox and nothing else, not the sentence's punctuation.
+    """
+
+    template = (PROJECT_ROOT / ".github" / "pull_request_template.md").read_text(encoding="utf-8")
+    contributing = (PROJECT_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    header = (PROJECT_ROOT / "ai" / "prompts" / "standard-prompt-header.md").read_text(
+        encoding="utf-8"
+    )
+    playbook = (PROJECT_ROOT / "docs" / "AEP" / "AIEngineeringPlaybook_AEP.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "## AI assistance disclosure" in template, "the template lost the section itself"
+    for name, text in (
+        ("pull_request_template.md", template),
+        ("CONTRIBUTING.md", contributing),
+        ("ai/prompts/standard-prompt-header.md", header),
+        ("AIEngineeringPlaybook_AEP.md", playbook),
+    ):
+        assert "checkbox" in text, f"{name} no longer names the checkbox as the disclosure"
+    # The reason, stated at least once in the normative document, so a future editor
+    # removing the rule can decide whether they disagree with it rather than tripping
+    # over its absence.
+    assert "email" in contributing.lower(), "CONTRIBUTING no longer forbids the invented half"
+    assert "model" in contributing.lower(), "CONTRIBUTING no longer forbids naming a model"
+
+
 def test_ai_support_materials_are_organised() -> None:
     ai = PROJECT_ROOT / "ai"
     for directory in ("prompts", "context", "task_templates", "reviews", "checklists"):

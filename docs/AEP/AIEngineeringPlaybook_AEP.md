@@ -434,6 +434,9 @@ Documentation updates
 
 Related issue
 
+AI assistance disclosure — the pull request template's checkbox, which is the whole
+of it. Not a commit trailer, not a model name, not an email address.
+
 Keep pull requests focused.
 
 ---
