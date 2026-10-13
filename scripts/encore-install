@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Install Encore from a clone, before Encore exists on the machine (SAPRS 13.7, ADR-014).
+#
+#   sudo ./scripts/encore-install install
+#   sudo ./scripts/encore-install verify
+#   ./scripts/encore-install install --root /tmp/rehearsal --no-service --dry-run
+#
+# The wrapper exists for one reason and has no logic: `encore-install` is a console script of the
+# distribution, so after the first install it is on `PATH` — but the command that has to work is
+# the one you run before anything is installed, from a checkout, as root. `uv run` solves that
+# without touching system Python (SAPRS 13.4's rule binds the install, not the installer).
+#
+# Everything after this file's exec line is `apps/installer/`'s behaviour. A bootstrap script that
+# had its own opinions about the appliance would be a second installer, and the two would disagree
+# in the manner of all duplicated rules: quietly, and on the machine that matters.
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+if ! command -v uv >/dev/null 2>&1; then
+  cat >&2 <<'MISSING'
+uv is required to install Encore (AIG 3), and this machine does not have it.
+
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+
+Then re-run this. `uv` is the only thing the bootstrap needs: the installer itself is in this
+repository and resolves its dependencies into /opt/encore/venv, not into your system Python.
+MISSING
+  exit 3  # EXIT_PREREQUISITES, the same value `apps/installer/main.py` uses
+fi
+
+# The credential has exactly one route in, and it is not a flag: see ADR-015 and SAPRS 12.6. A
+# `--admin-password` would put it in `ps` output and shell history, which is a worse version of the
+# thing 12.6 exists to prevent — so it is passed through the environment, and `sudo` has to be told
+# not to scrub it.
+if [[ -n "${ENCORE_ADMIN_PASSWORD:-}" && "$(id -u)" == "0" ]]; then
+  export ENCORE_ADMIN_PASSWORD
+fi
+
+exec uv run --frozen --no-dev python -m apps.installer.main "$@"
