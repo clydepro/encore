@@ -20,7 +20,7 @@ from apps.installer.plan import CreateDirectories, EnsureFile, Plan
 from apps.installer.report import Report, next_steps
 from encore.config.models import EncoreConfig
 
-SECRET = "correct horse battery staple"
+SECRET = "correct horse battery staple"  # pragma: allowlist secret
 
 
 def options(
