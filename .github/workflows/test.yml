@@ -30,9 +30,12 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen --all-groups
-      - name: Unit, integration and regression
+      - name: Unit, integration, regression and end-to-end
+        # `tests/e2e` is listed here because the milestone-15 install-and-boot tests live there,
+        # and a suite CI never runs is a suite that stops being a check. `scripts/check.sh` has
+        # always included it; the divergence was invisible until it mattered.
         run: >
-          uv run pytest tests/unit tests/integration tests/regression
+          uv run pytest tests/unit tests/integration tests/regression tests/e2e
           --cov=encore --cov-report=xml --cov-report=term-missing
           --junitxml=report.xml
       - name: Coverage summary

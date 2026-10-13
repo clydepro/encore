@@ -36,7 +36,7 @@ from encore.api import fragments, sse, v1
 from encore.api.deps import Jukebox
 from encore.api.errors import register_error_handlers
 from encore.api.html import STATIC_DIR, Renderer, build_renderer
-from encore.controllers import admin, browse, panels, queue
+from encore.controllers import admin, browse, panels, qr, queue
 
 __all__ = ["create_app"]
 
@@ -133,6 +133,9 @@ def create_app(
     app.include_router(queue.router)
     app.include_router(v1.router)
     app.include_router(sse.router)
+    # Not under `/api/v1`: a QR code is a printed thing rather than an integration surface, and
+    # the URL guests are told about is `/qr` on the same page that tells them the address.
+    app.include_router(qr.router)
 
     app.state.renderer = renderer or build_renderer()
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

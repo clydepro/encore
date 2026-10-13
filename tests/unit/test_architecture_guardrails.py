@@ -294,6 +294,16 @@ def test_builder_does_not_import_runtime_playback() -> None:
         assert not offenders, f"{path.relative_to(PROJECT_ROOT)} couples Builder to Server"
 
 
+INSTALLER_ROOT = "apps/installer"
+
+#: What the installer may not import. `encore.config` is allowed on purpose — one definition of
+#: a valid `config.yaml` is worth more than a dependency-free installer, and 12.5's rule that a
+#: bad value names the offending setting is enforced by the models that enforce it for the
+#: Server. Playback and HTTP are not: an installer that could start a song is an installer whose
+#: import graph includes a sound card.
+INSTALLER_FORBIDDEN = ("encore.playback", "encore.api", "encore.controllers", "fastapi")
+
+
 def test_package_skeleton_matches_the_mandated_layout() -> None:
     """AIG 5 / PBK 2 fix the layout; drift here is a defect, not a preference."""
 
@@ -312,6 +322,11 @@ def test_package_skeleton_matches_the_mandated_layout() -> None:
         "encore/utilities",
         "apps/server",
         "apps/builder",
+        # AIG 5 predates the installer; ADR-014 amends the layout to name it, on the argument
+        # that installer logic belongs to neither application and importing it from either would
+        # couple them. It is listed here so the amendment is visible in the same place the
+        # original list is.
+        "apps/installer",
         "tests/unit",
         "tests/integration",
         "tests/regression",
@@ -450,3 +465,31 @@ def test_configuration_cannot_write() -> None:
                 offenders.append(f"{path.relative_to(PROJECT_ROOT)}:{node.lineno} open(..., w)")
 
     assert offenders == [], f"the Configuration package wrote something: {offenders}"
+
+
+def test_the_installer_is_a_third_application_and_not_a_third_layer() -> None:
+    """ADR-014: `apps/installer` sits beside the Server, above it, and never inside it.
+
+    The rule that matters is not "no imports" — the installer validates configuration with
+    `encore.config`, which is the whole reason it is Python rather than bash. It is that nothing
+    in the installer can reach a speaker or a request. An installer that imported `playback`
+    would import mpv's IPC client at the moment root is holding a database it is about to delete.
+    """
+
+    for path in _python_files(INSTALLER_ROOT):
+        offenders = {name for name in _imports(path) if name.startswith(INSTALLER_FORBIDDEN)}
+        assert not offenders, f"{path.relative_to(PROJECT_ROOT)}: {sorted(offenders)}"
+
+
+def test_the_installer_never_imports_the_server_it_installs() -> None:
+    """The same argument, one level up, and a sharper failure.
+
+    `apps.server.appliance` is the composition root. Importing it from the installer would give
+    the process that writes `/etc/encore/environment` a running mpv, a SQLite handle and a thread,
+    all while it is deciding whether to delete a directory. It would also make 13.2's claim —
+    that the installer automates the documented steps rather than becoming the appliance — false.
+    """
+
+    for path in _python_files(INSTALLER_ROOT):
+        offenders = {name for name in _imports(path) if name.startswith("apps.server")}
+        assert not offenders, f"{path.relative_to(PROJECT_ROOT)}: {sorted(offenders)}"

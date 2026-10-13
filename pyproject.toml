@@ -35,15 +35,24 @@ dependencies = [
     "pydantic-settings>=2.5",
     "python-multipart>=0.0.32",
     "pyyaml>=6.0",
+    "segno>=1.6",
     "sqlalchemy>=2.0,<3.0",
     "sse-starlette>=2.1",
     "uvicorn[standard]>=0.30",
 ]
 
 [project.scripts]
-# The Builder is a command you run to completion, not a service (ADR-001). The
-# Server's entry point lands with its own milestone.
+# The Builder is a command you run to completion, not a service (ADR-001). The Server's
+# entry point is here for the same reason `scripts/run-server.sh` is: `--version` and
+# `--help` on an installed box. The unit file runs `python -m apps.server.main`.
 encore-builder = "apps.builder.main:main"
+# The Server runs under systemd as `python -m apps.server.main` (SAPRS 13.1); this is the
+# same entry point for a terminal, so `encore-server --help` works on an installed box.
+encore-server = "apps.server.main:main"
+# SAPRS 13.7's one command. It is a console script rather than a curl-pipe-bash because
+# the manual steps in the Administrator Guide are authoritative (SAPRS 13.2) and the
+# installer is allowed to be read.
+encore-install = "apps.installer.main:main"
 
 [project.urls]
 Homepage = "https://github.com/clydepro/encore"
@@ -72,9 +81,15 @@ requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
+# Every package is listed by hand, and `tests/unit/test_packaging.py` fails if a directory
+# holding modules is missing from this list. It is worth the duplication: the first version
+# of this list omitted `apps.server`, so a wheel installed on an appliance had no server in
+# it while every development test passed (issue #32).
 packages = [
     "apps",
     "apps.builder",
+    "apps.installer",
+    "apps.server",
     "encore",
     "encore.api",
     "encore.config",
@@ -83,13 +98,19 @@ packages = [
     "encore.events",
     "encore.playback",
     "encore.repositories",
+    "encore.repositories.library",
+    "encore.repositories.runtime",
     "encore.search",
     "encore.services",
     "encore.utilities",
 ]
 
 [tool.setuptools.package-data]
-encore = ["py.typed"]
+# Templates and static files live inside the `encore` package but are not modules, so they
+# travel only if they are named here. `encore/api/html.py` and `encore/api/app.py` resolve
+# both directories relative to the installed package, so a wheel without them builds
+# happily and 500s on the first page view.
+encore = ["py.typed", "templates/**/*.html", "static/**/*.css", "static/**/*.js", "static/**/*.svg", "static/**/*.md"]
 
 [tool.ruff]
 line-length = 100
@@ -143,13 +164,18 @@ ignore = [
     "PLR2004",# spec numbers (15,000 songs, 40 guests) belong in the assertion
     "S101",   # assert is the test language
     "S105",   # dummy credentials in tests
-    "S108",   # /tmp paths are what a filesystem test wants, and tmp_path is not always enough
+    "S108",    # /tmp paths are what a filesystem test wants, and tmp_path is not always enough
+    "S604",     # `shell=` here is a keyword on the installer's ServiceAccount double, not the
+                # subprocess flag the rule is about (tests/unit/test_installer_checks.py)
     "S608",   # tests assemble SQL against contract names to prove the contract; the
               # interpolation is never user-supplied, which is the point of the check
     "PLC0415",# a test that imports inside a function is importing for the failure case
     "T201",   # the performance suite prints its measurements
 ]
-"tests/support/**" = ["S608"]
+"tests/support/**" = [
+    "S608",
+    "ARG002", # a double satisfies a protocol; the parameters it ignores are the protocol's
+]
 "tools/**" = [
     "INP001",
     "PLR2004",
@@ -163,6 +189,12 @@ ignore = [
 ]
 "apps/server/main.py" = [
     "T201", # the server's CLI: `--version` and a usage error go to a terminal, not to a log
+]
+"apps/installer/main.py" = [
+    # The installer is a CLI whose whole job is a report on stdout, and its report is written
+    # before any logging exists: the configuration that decides log format is the thing it is
+    # currently explaining how to fix.
+    "T201",
 ]
 "tests/integration/test_core_foundation.py" = [
     # The child process is this repository's own interpreter running this repository's own

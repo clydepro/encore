@@ -30,6 +30,10 @@ Two things stated here because they are true of every page that uses this file:
     <a href="/admin/library"{% if nav == "library" %} aria-current="page"{% endif %}>Library</a>
     <a href="/admin/configuration"{% if nav == "configuration" %} aria-current="page"{% endif %}>Configuration</a>
     <a href="/admin/password"{% if nav == "password" %} aria-current="page"{% endif %}>Password</a>
+    {# Not `/admin/qr`: the code is the guest address, it is public on purpose, and putting it
+    behind the session would make the person with the printer the only one who could not reach
+    it. The link is here so an operator knows it exists. #}
+    <a href="/qr">Print QR</a>
   </nav>
 
   {% block admin %}{% endblock %}

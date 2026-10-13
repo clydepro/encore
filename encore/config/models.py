@@ -27,6 +27,8 @@ from typing import Annotated, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from encore.utilities.qr import HTTP_DEFAULT_PORT
+
 __all__ = [
     "AdminConfig",
     "AudioConfig",
@@ -74,6 +76,24 @@ class ServerConfig(_Section):
         if not value.strip():
             raise ValueError("must not be blank")
         return value.strip()
+
+    @property
+    def guest_url(self) -> str:
+        """The address a guest opens, which is the address the QR code encodes (SAPRS 1.4, 9.11).
+
+        One method because there are three places that need it — `/qr`, the JSON API's `url`,
+        and the line the installer prints when it finishes — and the failure mode of three
+        `f"http://{domain}/"` expressions is the quiet one: an appliance on port 8080 prints a
+        code that resolves and refuses the connection, and every one of those screens is
+        *almost* right.
+
+        The port is included whenever it is not 80, which is the only rule a browser does not
+        already apply by itself.
+        """
+
+        if self.port == HTTP_DEFAULT_PORT:
+            return f"http://{self.domain}"
+        return f"http://{self.domain}:{self.port}"
 
 
 class PathsConfig(_Section):

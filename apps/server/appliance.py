@@ -56,6 +56,7 @@ from encore.services import (
     QueueService,
     SSEPublisher,
 )
+from encore.services.errors import WeakCredentialError
 from encore.services.health_service import HealthSource
 from encore.services.logging_service import LogTail
 from encore.services.statistics_service import StatisticsService
@@ -124,6 +125,11 @@ class Appliance:
     logs: LogTail = field(repr=False)
     logger: logging.Logger
     clock: Clock
+    # What to seed the credential with on first boot, if anything (SAPRS 12.6, ADR-015). Not an
+    # input to the wiring: it is held until `become_ready`, because writing `runtime.db` is the
+    # appliance thread's work and nobody else's (ADR-012). `repr=False` because an object that
+    # appears in a traceback should not be carrying the room's password.
+    admin_password: str | None = field(default=None, repr=False)
     library_store: LibraryStore = field(repr=False)
     runtime_store: RuntimeStore = field(repr=False)
     subscriptions: list[Subscription] = field(default_factory=list, repr=False)
@@ -155,6 +161,10 @@ class Appliance:
         """
 
         self.appliance.assert_current("startup")
+        # First, because it is the only thing in startup that writes `runtime.db` for a reason
+        # the operator chose rather than a guest caused, and because a fact published to a
+        # session-less admin panel is a fact nobody will ever read (ADR-015).
+        self._seed_credential()
         # Before the queue's, so the first fact `start()` may publish already has a listener
         # on the way out to the room (SAPRS 8.6's restart is the one moment the appliance
         # produces events before a guest asks for anything).
@@ -165,6 +175,40 @@ class Appliance:
         self.stats.start()
         self.queue.start()
         self.supervisor.start()
+
+    def _seed_credential(self) -> None:
+        """Honour `ENCORE_ADMIN_PASSWORD`, once, on a box that has no administrator.
+
+        Three rules, and the third is why this is a method on the appliance rather than a line
+        in `build()`:
+
+        * An existing credential always wins. A file in `/etc` that could set the appliance's
+            password would be a way to take a box over by editing a line in it, and an upgrade
+            that re-seeded a rotated credential would be worse than never seeding at all.
+        * A value too weak to accept is reported and skipped rather than fatal. A jukebox that
+            will not play because of a typo in an environment file is the worse failure: the
+            first-run page is still the way in, and it warns as loudly as ADR-013 requires.
+        * The write happens on the appliance thread, because it is a write to `runtime.db`, and
+            that rule is what makes the rest of this ordering safe to reason about (ADR-012).
+        """
+
+        password = self.admin_password
+        if password is None:
+            return
+        try:
+            seeded = self.admin.seed(password)
+        except WeakCredentialError:
+            self.logger.exception(
+                "ENCORE_ADMIN_PASSWORD was not used; this appliance has no administrator "
+                "until one is set at /admin (SAPRS 12.6)"
+            )
+            return
+        if not seeded:
+            # Debug, not info: this is the state of every boot after the first, and a line about
+            # it every restart is how an operator stops reading the journal.
+            self.logger.debug(
+                "ENCORE_ADMIN_PASSWORD ignored: this appliance already has an administrator"
+            )
 
     def stop(self) -> None:
         """Stop in the order that cannot deadlock: worker first, then what it touches.
@@ -247,6 +291,7 @@ def build(
     library_db: Path | None = None,
     runtime_db: Path | None = None,
     launch_engine: bool = True,
+    admin_password: str | None = None,
     logger: logging.Logger | None = None,
 ) -> Appliance:
     """Open the databases, construct the graph, hand back a stopped appliance.
@@ -261,6 +306,10 @@ def build(
         runtime_db: Override for `paths.runtime_db`.
         launch_engine: False to leave mpv alone — a composition that must not spawn a
             process on a machine without one.
+        admin_password: What to seed the administrator with on first boot, if anything
+            (ADR-015). A parameter rather than an `os.environ` read inside `become_ready`,
+            because a composition root that consults the environment behind its caller's back
+            is the reason a test passes on a laptop and fails in CI.
         logger: Where construction is reported.
 
     Raises:
@@ -367,6 +416,7 @@ def build(
         logs=logs,
         logger=log,
         clock=time,
+        admin_password=admin_password,
         library_store=library,
         runtime_store=runtime,
     )
