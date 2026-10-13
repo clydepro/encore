@@ -806,3 +806,116 @@ img {
   margin: 0.5rem 0 1rem;
   font-size: 0.85rem;
 }
+
+/* The printable QR sheet (SAPRS 9.11).
+
+Separate from the guest shell on purpose: this page is opened once, printed, and then looked at
+from three metres, so the rules that matter are paper margins and a code big enough to scan
+without aiming. `@media screen` keeps the phone case legible; `@media print` is the reason the
+file exists — a browser asked to print a dark theme prints a black rectangle.
+*/
+
+.qr-sheet {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 2rem 1rem;
+  background: var(--bg);
+}
+
+.qr-poster {
+  max-width: 34rem;
+  padding: 2rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--panel);
+  text-align: center;
+}
+
+.qr-poster__brand {
+  margin: 0;
+  font-size: 1.6rem;
+  letter-spacing: 0.04em;
+}
+
+.qr-poster__lead {
+  margin: 0.5rem 0 1.5rem;
+  color: var(--muted);
+}
+
+/* 296px is what `segno` renders at the default scale, and the width attribute in the template
+   matches it. The `min()` keeps the poster inside an A5 sheet without a browser resampling the
+   vector, which is the one way to make a QR code stop scanning. */
+.qr-poster__code {
+  width: min(296px, 70vw);
+  height: auto;
+  background: #fff;
+  border-radius: 0.5rem;
+}
+
+.qr-poster__url {
+  margin: 1.25rem 0 0.25rem;
+  font-size: 1.35rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.qr-poster__hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.qr-poster__facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.75rem;
+  margin: 1.5rem auto 0;
+  max-width: 22rem;
+  text-align: left;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.qr-poster__facts dt {
+  font-weight: 600;
+}
+
+.qr-poster__facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.qr-poster__print {
+  margin: 1.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+@media print {
+  /* Paper wants black on white and no chrome: a dark theme printed is a block of ink, and
+     the browser's own header would sit on top of the code. */
+  .qr-sheet {
+    background: #fff;
+    padding: 0;
+  }
+
+  .qr-poster {
+    border: none;
+    background: #fff;
+    color: #000;
+    padding: 0;
+  }
+
+  .qr-poster__url,
+  .qr-poster__lead,
+  .qr-poster__hint,
+  .qr-poster__print,
+  .qr-poster__facts {
+    color: #000;
+  }
+
+  @page {
+    margin: 15mm;
+  }
+}

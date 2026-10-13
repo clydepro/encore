@@ -245,6 +245,54 @@ class AdminService:
         self._failures.clear()
         return self._mint(now)
 
+    def seed(self, password: str) -> bool:
+        """Create the credential from the environment, if there is nothing to create it into.
+
+        This is the path ADR-013 said milestone 15 would provide and ADR-015 implements: the
+        appliance's first boot, with `ENCORE_ADMIN_PASSWORD` in its environment and no row in
+        `admin_state`, takes the password and becomes configurable without a browser being
+        pointed at it (SAPRS 12.6). Three things distinguish it from `setup`, and all three are
+        the reason it is a separate method rather than a flag on one:
+
+        * It is **idempotent**. A credential already present wins, always, and the environment
+            variable is then a stale line in a file — which is what `encore-install verify`
+            reports, not an exception at startup.
+        * It **mints no session**. Nobody is waiting for a login, and a token issued to a
+            process with no client attached would be a token in a log.
+        * It **logs at INFO, not WARNING**. The warning in `setup` is about a password chosen
+            over HTTP on a machine that may not be alone on its network; that is precisely what
+            did not happen here, and a boot that warns about its own security every time the
+            service restarts teaches an operator to ignore the one line worth reading.
+
+        The value is never logged, never written to a file, and never kept on the appliance
+        after this call returns.
+
+        Args:
+            password: Whatever `ENCORE_ADMIN_PASSWORD` held. Empty is not a request to seed.
+
+        Returns:
+            True if this boot created the credential, False if one already existed.
+
+        Raises:
+            WeakCredentialError: Too short to type on a shared network. Raised rather than
+                ignored because the alternative is an appliance that boots with no
+                administrator while its operator believes there is one.
+        """
+
+        if not password:
+            return False
+        if not self._acceptable(password):
+            raise WeakCredentialError(_WEAK)
+        with self._store.unit_of_work() as work:
+            if work.admin_state.is_configured():
+                return False
+            work.admin_state.set_password(password)
+        self._logger.info(
+            "the administrator credential was seeded from the environment (SAPRS 12.6, ADR-015);"
+            " the variable can be removed from the appliance now"
+        )
+        return True
+
     def change_password(self, *, current: str, new: str) -> None:
         """Rotate the credential, and revoke every session including this one.
 
