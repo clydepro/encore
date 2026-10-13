@@ -1,4 +1,4 @@
-# Handoff — after AIG step 14 (the administrative interface)
+# Handoff — after AIG step 15 (the installer)
 
 For whoever picks this up next. Read with
 [`current-phase.md`](current-phase.md) (what was done) and
@@ -6,173 +6,108 @@ For whoever picks this up next. Read with
 request → SAPRS → AIG → ADRs → AEP (AEP 2). This page is a pointer, not an authority, and it will
 be wrong faster than the SAPRS is.
 
-State as of this writing: **Phases 1–5 are merged (#20, #22, #24, #26, #27).** Phase 5 landed as
-[d688d9d](https://github.com/clydepro/encore/commit/d688d9d) for issue
-[#28](https://github.com/clydepro/encore/issues/28). (The branch is named for the pull request
-rather than the issue, which breaks CONTRIBUTING §2; `ai/current-phase.md` says why and why it
-was not renamed.) The appliance has two audiences now: a guest
-queues a song on a phone, and an operator signs in on a laptop, pauses the room, takes a request
-out of the middle of the queue, reads the log tail, notices that the library was rebuilt and picks
-the new one up without a restart. 1268 tests pass in the standard gate and 1311 with the slow
-suites untraced, 93.5% coverage, `ruff` and strict `mypy` clean
-across `encore/`, `apps/`, `tests/` and `tools/`.
+State as of this writing: **Phases 1–5 are merged (#20, #22, #24, #26, #27). Phase 6 is on
+`feat/32-installer` for issue #32, not yet merged.** The appliance now installs itself:
+`sudo ENCORE_ADMIN_PASSWORD='…' ./scripts/encore-install install`, from a clone, on a machine that
+had nothing on it a minute before. A guest scans a code printed by the appliance itself, an
+operator's password can be set before the box boots, and `encore-install verify` answers SAPRS
+13.11's acceptance list with a fix under every line that is not green.
 
-**Nothing here has met a browser on a phone.** That sentence was written in the last handoff about
-the guest interface and it is still true, and milestone 14 was the wrong place to fix it: the
-administrative interface is the one that *wants* a real browser, because the two things only a
-browser can tell you are whether `SameSite=Strict` survives a redirect and whether a native
-confirm dialog on the queue-clear button reads as help or as friction. Both are asserted as markup
-here, which is the honest substitute and not a proof.
+1491 tests pass in the standard gate, 93.5% coverage of `encore/`, `ruff` and strict `mypy` clean
+across `encore/`, `apps/`, `tests/` and `tools/`. Two new ADRs (014, 015) and one new regression
+file.
 
-Step 15 (the installer) has no issue yet. Open it before branching (CONTRIBUTING §2).
+**Nothing here has met a Raspberry Pi.** The sentence was written in the last handoff about the
+guest interface and about the administrative interface; now it is about the install itself, and it
+is a sharper problem, because everything in phase 6 is *about* a machine and every test in it runs
+on someone's laptop. The installer's host is a seam and its filesystem is real, so what is proven
+is that the plan and the bytes are right — not that `audio` group membership means what Debian
+thinks it means, or that `systemd-tmpfiles` behaves the way `tmpfiles_text` assumes, or that a Pi 4
+with 1 GB of RAM resolves this dependency graph inside a timeout. **Run the manual steps on
+hardware once before calling step 15 closed**, and file what surprised you; that checklist is
+`docs/Administrator-Guide.md`'s installation section, which the installer automates and which is
+authoritative in a way no test can be.
 
 ## Start here
 
-1. **`docs/adr/ADR-013-*.md`** — the phase's premise in eight minutes: the credential lives in
-   `runtime.db`, the sessions live in memory, and the two consequences that decision buys (a
-   restart signs you out; `Secure` cannot be set on a plain-HTTP appliance) are stated rather than
-   softened. It also names what was rejected: a token file, sessions in the database, and a CSRF
-   token.
-2. **`encore/services/admin_service.py`** — the whole of the authentication policy, with no HTTP
-   in it. Its two most important lines are the one that hashes and the one that raises the same
-   message for a wrong password and for no credential.
-3. **`encore/api/auth.py`** — the cookie and the origin check, and the dependency every protected
-   route reaches. Twelve rules in eighty lines; `tests/unit/test_api_auth.py` is the version of
-   that sentence you can check.
-4. **`encore/controllers/admin.py`** — the router split (`router` public, `secure` protected at
-   router level), the page/panel duality, and the `?panel=` convention that lets one action
-   handler answer ten screens.
-5. **`docs/Developer/Frontend.md`'s "Administrative pages"** — the refresh mechanism, which is one
-   dispatched event and a trigger attribute, and the reason there is no second SSE stream.
+1. **`docs/adr/ADR-014-*.md`** — why the installer is a third application rather than a bash
+   script, a module of the Server, or a wheel someone downloads first; and why the repository layout
+   grew a directory, which AIG 5 says needs an ADR to happen.
+2. **`apps/installer/layout.py`** — the only place in the package where an absolute path appears,
+   and the table the removal scopes and the deletion safety check are both derived from. Read this
+   before `plan.py`; everything else is commentary on it.
+3. **`apps/installer/plan.py`** — what the installer believes it is doing, as pure data. No
+   effects, no `exists()` calls, one function per lifecycle command. If you want to know whether a
+   second install does nothing, this is where the answer lives and `tests/unit/test_installer_plan.py`
+   is where it is asserted.
+4. **`apps/installer/execute.py`** — the only module that changes anything, and the one that
+   refuses a deletion outside `Layout.owned_roots`.
+5. **`docs/Administrator-Guide.md`'s installation section** — the manual steps, which are the
+   specification the installer is measured against. Where the two disagree, one of them has a bug
+   and it is not necessarily the installer's.
 
-Then `tests/integration/test_admin_interface.py`, which is this phase told as assertions.
+Then `tests/integration/test_installer_lifecycle.py`, which is this phase told as assertions, and
+`tests/e2e/test_installed_appliance.py`, which installs an appliance and then boots it.
 
 ## Things that will surprise you
 
-- **Nothing under `/admin` is public except the door, and the test that proves it reads the
-  OpenAPI document rather than the route table.** `controllers/admin.py` exports two routers so
-  that forgetting to protect a route is not a thing a contributor can do; FastAPI ≥ 0.140 keeps an
-  `include_router` as one opaque node, so the obvious way to enumerate routes silently finds
-  nothing. That is in `tests/regression/test_issue_28_administration_interface.py`, and it is the
-  kind of bug that looks like coverage.
-- **An action's response is the region that asked, named by `?panel=`.** The alternative was each
-  page knowing which other pages its buttons affect. A no-JavaScript browser gets a `303` and the
-  same command performed — performing it *before* choosing the markup is the fix for this phase's
-  worst bug, and the regression file explains why the browser branch passing hid it.
-- **A pause announces nothing.** Playing, finishing, skipping, advancing, recovering, reloading
-  and health are facts (`encore/events/`); pausing is not, and this phase deliberately did not
-  extend ADR-004's vocabulary to cover it. So a guest who *asks* sees `paused` and a guest who is
-  *watching* sees a bar that stopped moving. The Administrator Guide says so, in the section beside
-  the button.
-- **The statistics service is not imported by `encore/services/__init__.py`.** It needs
-  `StatisticKey` from the runtime repository's vocabulary, and importing it at package level pulls
-  SQLAlchemy into every configuration and domain test. The package docstring says so; do not
-  "tidy" the import back in.
-- **`library.db` really cannot be written, and a reload proves it rather than asserting it.**
-  `LibraryConnection` opens with `PRAGMA query_only` on an `immutable=1` URI (ADR-009), and
-  `reload()` is a reopen of that same handle — verification on the new handle, swap only on
-  success, object identity preserved so the repositories and `SearchService` notice the change.
-  Two consequences worth knowing before touching either: a failed reload leaves the running
-  library serving, and `LibraryStore.search`'s FTS verdict is updated *in place* because replacing
-  the object would leave search answering from a library nobody has.
-- **The log page is a ring buffer with a caption.** 400 flattened records in memory, redacted by
-  the same `record_fields` the journal formatters use, and no tracebacks — `LogRecord` holds
-  `exc_info`, which holds frames, which holds locals. The page prints `journalctl -u encore`
-  because the durable record is the journal's (AEP 16).
-- **Counters are incremented where the request is assembled**, in `api/views.py`, not inside
-  `SearchService` or `LibraryService`. Three routes share one context builder, and a counter in
-  the service would be a counter that counts a search twice on a page and not at all on the API.
-- **A failure is answered in the caller's own language, and the bridge makes that visible.**
-  `errors.respond()` gives a tool the envelope, a person who typed a URL the page shell, and an
-  HTMX swap a fragment — the same status and code in all three. The third of those needed a rule
-  in `encore-live.js`, because htmx's default `responseHandling` throws away a 4xx or 5xx body
-  before reading it, which had been silently unwriting every error fragment this repository has
-  ever sent. An expired administrative session is the one case that must not be *swapped*, so it
-  carries `HX-Redirect` too and the tab ends up at the sign-in page with `?next=` back. Both are
-  pinned in the regression file, including the vendored default.
-- **A locked appliance says when, twice.** `details.retry_after_seconds` for a client that parses
-  the envelope and a `Retry-After` header for a proxy, a `curl --retry` or anything generated from
-  the OpenAPI document. The lockout is refused before any hashing, and it is counted per appliance
-  rather than per address (ADR-007), so neither the timing nor the status tells a guesser whether
-  they were close.
-- **`assert response.status_code == 303` on an admin `GET` is what "not signed in" looks like in a
-  browser.** SAPRS 10.7 lists 401 and 303 as answers to different callers; the same failure answers
-  a person with a door and a tool with a code, and the split is in `errors.respond()`.
+- **The plan is pure and the state is an argument.** `plan.py` never touches the filesystem, and
+  the first draft did — four `Path.exists()` calls in the removal planner. They are now
+  `ApplianceState.present`, populated by `system.observe()`. The reason is not aesthetics: a plan
+  you can compute in a unit test is a plan you can review, and `--dry-run` is a lie if the planner
+  can see a file the executor cannot.
+- **`--root` renders staged paths into the files it writes**, so a staged tree is bootable rather
+  than merely present. That is how the e2e test works and it is also a safety property: a staged
+  unit file pointing at `/var/lib/encore` would be a test suite that writes to a production
+  database. `Layout.staged()` is idempotent for the same reason — a path already under the root is
+  returned unchanged — or the second install nests the prefix inside itself.
+- **A preserved configuration is reported by name, not respected silently.** An existing
+  `config.yaml` wins over every flag (13.8) and the run says `server.port is 9100 there, 8099
+  asked for`. The comparison is of *parsed values*, so a comment somebody added is not drift. The
+  distinction took two attempts to get right: bytes-made-equal hid real edits, and comparing the
+  file against the in-memory model made every staged install report a hundred path differences.
+- **`install --dry-run` is the plan command.** There was a sixth command, and it was removed: a
+  separate `plan` duplicates what install does and drifts from it, which is the failure mode this
+  whole phase is about.
+- **`--dry-run` does not need `--yes`.** 13.10's guard is about performing a deletion, and a rule
+  that blocked the rehearsal would only teach people to run the real thing to see what it says.
+- **`ENCORE_ADMIN_PASSWORD` is read by the Server, not by the installer.** The installer writes it
+  into `/etc/encore/environment` (mode `0600`) and that is the whole of its part; the appliance
+  seeds its own credential on first boot, on the appliance thread, because it is a write to
+  `runtime.db` and ADR-012's rule is what makes the rest of startup safe to reason about. A root
+  process inserting rows into a database the service owns is how an install ends with a `runtime.db`
+  whose journal is owned by root. `reset-credential` is the deliberate exception, and ADR-014 lists
+  it as debt.
+- **The QR code's URL is owned by one property.** `ServerConfig.guest_url` is read by `/qr`,
+  `/api/v1/info`, the page footer and the installer's report. There is no `?url=` parameter, and
+  there never will be — a QR endpoint that encoded a caller's string is an appliance that will
+  print a phishing code about itself, and the page is public on purpose.
+- **The QR page is public and cached, and both are arguments rather than oversights.** The address
+  is already on every guest page's footer; behind the session cookie it would be a code only the
+  operator can print. And SAPRS 10.10's two cache rules ("never cache mutable state", "cache
+  artwork") both misfit it: a code is immutable until a restart, which is the lifetime of an asset.
+- **The wheel is a deliverable and the test suite cannot see it.** `test_packaging.py` builds the
+  artifact and opens it. Everything in `pyproject.toml`'s `packages` list is checked against the
+  tree rather than against a list, so adding a package forces the same decision here. Note the
+  namespace exception: `apps` has no `__init__.py` on purpose and the test says why.
+- **`segno`, not a hand-rolled encoder.** A QR symbol is data encoding, Reed-Solomon over GF(256),
+  mask selection by penalty score and a format string, in that order, and a mistake in any of the
+  four produces an image that looks correct and does not scan — which surfaces at a party. The
+  dependency is pure Python, BSD, vendored nothing. The unit test asserts byte-equivalence with
+  what `segno` itself writes plus the standard module-count formula, because this segno version
+  ships no decoder and a raster round trip would drag Pillow into a test of a URL.
 
-## Known loose ends
+## If you pick up step 16 (Party Simulation)
 
-- **The first-run password is set over HTTP.** `AdminService.setup()` warns in the log when it
-  runs from a request, because the intended path for an install with an operator present is
-  `ENCORE_ADMIN_PASSWORD` at first boot. The warning is deliberate; the alternative was a setup
-  token, which is a second credential system.
-- **No `docs/api/openapi.json` is committed.** FastAPI generates it at `/openapi.json`, which is
-  the version that cannot go stale. Publishing a copy is a `scripts/` job and needs a decision
-  about whether CI fails when the committed file drifts.
-- **`fail_under` is still 0.** Actual coverage is 93.5%. Raise it on purpose, with the number in
-  `docs/Developer/Testing.md`, not as a diff in someone else's PR.
-- **There is no session list page.** The dashboard says how many sessions are open; a page that
-  listed them could say nothing more, because there are no addresses to show (ADR-007). If an
-  operator ever needs to kick one laptop out, the answer today is the password change, which ends
-  all sessions.
-- **`/admin/logs` reads memory, so it shows nothing from before a restart.** Correct for a tail and
-  confusing at 2 a.m.; the page says which it is, and `journalctl -u encore` is printed beside it.
-- **The `encore:change` refresh is a quarter-of-a-second coarse**, with htmx's `delay:250ms`
-  collapsing a skip's two frames into one repaint. A dashboard left open on a tablet therefore
-  redraws once per *burst*, which is the behaviour we want and which no test measures as latency —
-  the admin budgets in `tests/performance/test_http_latency.py` are page renders, not refreshes.
-- **Queue POST p95 is 37.6 ms and administrative pages are 5–17 ms** on the development machine,
-  untraced. The numbers in the docs are from this phase's runs; if milestone 15's Pi 4 testing
-  says otherwise, fix the numbers and the sentence beside them, not the budget.
-
-## If you are doing the installer
-
-- **`ENCORE_ADMIN_PASSWORD` is already honoured** — `apps/server/appliance.py` seeds the credential
-  on first start and logs once if it was already set. What the installer must do is write it into
-  the unit's environment (SAPRS 13.11: `ENCORE_HOME`, `ENCORE_CONFIG`, `XDG_CACHE_HOME`) and say in
-  the manual steps that the password is set at install time rather than at first sign-in.
-- **`GET /qr`** is the installer's, not this page's: the poster has to encode the URL the install
-  actually configured (`server.domain` or the `jukebox.local` mDNS name), and guessing it here
-  would print a QR code to a host that does not exist. The guest-facing pages have no admin link,
-  and the QR is the only address an operator will ever hand out.
-- **`library.db` publishing is the installer's other job**: `/admin/library` tells the operator to
-  publish a new library and gives them the reload button, but nothing in the Server writes
-  `library.db` or runs the Builder (ADR-001). The gap between those two sentences is a chapter of
-  the Administrator Guide and one flag of `encore-install`.
-- **The server refuses to start, loudly**, when `library.db` is missing or is not an Encore
-  library. An installer that reports success against an unbootable appliance is the failure that
-  code exists to make impossible.
-- **Migrations are forward-only and run at startup** (`runtime.db`), including the
-  `admin_state` table this phase added. An installer that offers a rollback needs to know that the
-  appliance does not have one.
-
-## If you are doing the Party Simulation driver
-
-- `tests/party_simulation/test_admin_in_the_room.py` added the operator to the shape of a party:
-  removals (waiting and current), clears, skips, a pause-and-resume, and a ledger that still
-  closes. The conservation arithmetic there is the part worth keeping when the driver grows — an
-  item that ends twice, or ends never, breaks the sum rather than a screenshot.
-- `profile.library_songs == 15_000` is asserted by `test_party_simulation.py` and is still not
-  reachable: the fixture corpus is seven tracks. The driver's first job is a generator fast enough
-  to be run in CI at that size, or a documented skip that says which half is measured.
-- HTTP in the simulation is now possible: `tests/support/http.py::started()` drives the shipped
-  composition root and `Stream` holds `/events` open. A guest that queues over HTTP and an
-  operator that removes over HTTP share one appliance thread, so a simulation that runs both is
-  testing ADR-012's serialization rather than a threaded free-for-all — which is the honest thing
-  to measure.
-
-## How to run this phase's work
-
-```bash
-scripts/check.sh              # 1268 tests, coverage, lint, types, docs links
-scripts/check.sh --slow       # + performance, real-mpv, e2e, untraced
-uv run pytest tests/integration/test_admin_interface.py -q    # the admin surface, end to end
-uv run pytest tests/e2e/test_admin_journey.py -q             # an operator's day, in order
-uv run pytest tests/unit/test_admin_service.py \
-             tests/unit/test_api_auth.py \
-             tests/unit/test_statistics_service.py \
-             tests/unit/test_library_reload.py -q            # the four new units
-./scripts/run-server.sh       # needs a built library; see apps/server/README.md
-```
-
-There is now a reason to start it by hand: `http://localhost:8080/admin` on a fresh appliance
-asks you to set a password, and everything after that is a page.
+- The installer's seams are the model for "test the thing that touches a machine": a pure planner,
+  an executor behind an interface, and a host that is an argument to `main()`. A simulation driver
+  wants the same shape — a scenario in, a ledger out — and `tests/party_simulation/` is closest to
+  `apps/installer/plan.py` in spirit than to anything in `encore/`.
+- `tests/integration/test_real_mpv.py` skips where mpv is absent and is the only place a real
+  player is driven. A party of 400 guests against a real mpv is a different test and it is allowed
+  to be slow and opt-in.
+- The 15,000-song corpus generator exists (`tests/support/`, used by the performance suite). What
+  does not exist is a scenario with hundreds of concurrent HTTP clients, which is the half of
+  milestone 16 the current simulations cannot fake their way through.
+- Coverage: `apps/installer` is not in coverage's `source`, and neither is `apps/server`. If that
+  is wanted, decide it in `docs/Developer/Testing.md` rather than by editing `fail_under` silently.

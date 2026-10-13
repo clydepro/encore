@@ -5,13 +5,12 @@ songs from your library on their own phones, and a strictly FIFO queue plays
 them through mpv. The box lives in a cupboard and needs no tending: the music,
 not the software, is the centre of attention.
 
-> **Status: pre-release — the appliance works, packaging it is what is left.**
-> AIG 21 steps 1–14 are done: build a library with the Builder, start the server,
-> browse and queue from a phone, hear strict-FIFO playback move on gaplessly, and
-> run the whole thing from `/admin`. What stands between this and `1.0.0` is the
-> installer (step 15), the Party Simulation driver (step 16) and the documentation
-> pass (step 17). Nothing here is installable with one command yet —
-> [Roadmap](#roadmap) is the status board, and
+> **Status: pre-release — the appliance installs itself.**
+> AIG 21 steps 1–15 are done: build a library with the Builder, install the box
+> with one command, browse and queue from a phone, hear strict-FIFO playback move
+> on gaplessly, and run the whole thing from `/admin`. What stands between this and
+> `1.0.0` is the Party Simulation driver (step 16) and the documentation pass
+> (step 17). [Roadmap](#roadmap) is the status board, and
 > [Project Bootstrap Kit](docs/ProjectBootstrapKit_PBK.md) is how the repository got
 > to be this shape.
 
@@ -82,8 +81,9 @@ Images will land in [`docs/images/`](docs/images/) and be referenced from the
 - One-tap queueing, including repeats of a track already in the queue.
 - Live Now Playing with album art and progress, pushed over SSE.
 - Up Next: the same queue every guest sees.
-- QR-code onboarding at `jukebox.home.arpa` — arrives with the installer, since a
-  QR has to encode the address the installer configured.
+- QR-code onboarding, printed from `/qr` on the appliance itself. It encodes the
+  address the appliance believes it lives at, which is the same value the API
+  reports and the footer prints (SAPRS 9.11, ADR-015).
 
 **Host and administrator**
 
@@ -133,7 +133,10 @@ Images will land in [`docs/images/`](docs/images/) and be referenced from the
 
 Two applications, one contract: the Builder produces `library.db` and never
 touches the server's state; the Server reads that file read-only and keeps every
-mutable fact in `runtime.db`.
+mutable fact in `runtime.db`. A third program arranges both on a machine:
+`apps/installer/` runs once, as root, and is not part of the appliance — it cannot
+start playback or serve a request, and it never rewrites your configuration
+(ADR-014).
 
 Inside the server, Clean Architecture with dependencies pointing inward
 (SAPRS 15.2):
@@ -155,41 +158,50 @@ SQLAlchemy 2.x, Pydantic, mpv JSON IPC, systemd. Chosen and justified in
 [ADR-004](docs/adr/ADR-004-internal-event-bus.md),
 [ADR-005](docs/adr/ADR-005-mpv-playback-engine.md) and, for storage, ADR-003 as
 superseded by
-[ADR-009](docs/adr/ADR-009-split-the-storage-access-layer-by-mutability.md).
+[ADR-009](docs/adr/ADR-009-split-the-storage-access-layer-by-mutability.md), and
+for the appliance's shape by
+[ADR-008](docs/adr/ADR-008-appliance-first-philosophy.md),
+[ADR-014](docs/adr/ADR-014-installer-is-a-third-application.md) and
+[ADR-015](docs/adr/ADR-015-first-boot-credential-seeding-and-the-guest-address.md).
 
 ## Installation
 
-> Not installable yet — the one-command `encore-install` is step 15. Everything it
-> would run exists: the Builder produces a library, and the server starts and
-> serves guests, an API, the live stream and the administrative interface
-> (steps 1–14). The commands below are the manual path, which is authoritative
-> (SAPRS 13.2) and is what the installer will automate.
+> One command, on the machine that will play the music. The manual path below it is
+> authoritative (SAPRS 13.2) and is what the installer automates, step for step.
 
 Target: Raspberry Pi 4, Raspberry Pi OS 64-bit (Debian 12 and Ubuntu 24.04 also
 supported).
 
 ```bash
-# 1. Build the library on a workstation
+# 1. Install the appliance
 git clone https://github.com/clydepro/encore.git && cd encore
-uv run python -m apps.builder.main --source /path/to/music --output ./dist-library
+sudo ENCORE_ADMIN_PASSWORD='a password you will remember' ./scripts/encore-install install  # pragma: allowlist secret
 
-# 2. Install the appliance
-curl -fsSL https://encore.example/install.sh | sudo bash   # automated, step 15
-# ...or follow docs/Administrator-Guide.md step by step   # manual, authoritative
+# 2. Build the library, on the machine that holds the music (ADR-010)
+encore-builder --music-dir /opt/music
 
-# 3. Start it
-sudo systemctl enable --now encore
+# 3. Check the acceptance list, and print the QR code for the wall
+sudo encore-install verify
+open http://jukebox.home.arpa:8080/qr
 ```
 
-Until step 15 lands, the manual path is the only path, and
-[the Administrator guide](docs/Administrator-Guide.md) is authoritative about it.
-Two of its steps are the ones the installer will eventually take over: creating the
-`encore` system user with the layout below, and providing `ENCORE_ADMIN_PASSWORD`,
-which an unattended install uses to seed the credential once and then forgets.
-Without it the appliance still works — `/admin` becomes a first-run page that
-accepts a password and logs a warning about having been set up over plain HTTP —
-which is the right behaviour for a person trying a box out and the wrong one for a
-box at a party.
+`encore-install` is idempotent: run it twice and the second run says so and changes
+nothing (SAPRS 13.7). It never overwrites `/etc/encore/config.yaml` if one already
+exists — it keeps yours and names the settings that disagreed (13.8) — and `remove`
+keeps the configuration, the databases, the artwork and your music unless you pay
+for them with `--purge-config` and `--purge-data` (13.10). `--dry-run` prints the
+plan; `--root /prefix` rehearses the whole install into a tree you can boot.
+
+The two steps a person still does by hand are the ones nothing else can decide:
+where your music is, and what the box should be called on the network.
+
+`ENCORE_ADMIN_PASSWORD` is read from the environment and has no flag — a
+command-line password would sit in `ps` output and shell history, which is a worse
+version of what SAPRS 12.6 exists to prevent. It is used once, on the appliance's
+first boot, and never overwrites a credential you have already set (ADR-015).
+Without it the appliance still works: `/admin` becomes a first-run page that
+accepts a password and logs a warning about having been set up over plain HTTP,
+which is right for a person trying a box out and wrong for a box at a party.
 
 Filesystem layout (SAPRS 13.3):
 
@@ -229,17 +241,17 @@ application on purpose: they share the event bus, the queue and the thread that
 owns SQLite and mpv, so an operator and a guest can never be shown two different
 jukeboxes.
 
-`scripts/check.sh` runs 1268 tests against real code (1311 with the scheduled
-performance, real-mpv and Party Simulation suites, on a machine that has mpv
-installed) at 93.5% coverage of `encore/`. What is left of the HTTP surface is the
-QR endpoint, and it arrives with the installer (milestone 15), because a code has
-to encode the address the installer would have configured.
+`scripts/check.sh` runs the suite against real code, at the coverage floor
+`docs/Developer/Testing.md` tracks. The installer is tested on a machine that is not
+a Raspberry Pi: its planner is pure and its host is a seam, so the installer's own
+tests install, re-install, upgrade, remove and verify a real filesystem tree without
+root, systemd or network access (ADR-014).
 
 Layout:
 
 ```text
 .github/     CI, issue/PR templates, labels, dependabot
-apps/        builder/ and server/ entry points
+apps/        builder/, server/ and installer/ entry points
 encore/      the package: api, config, controllers, domain, events, playback,
              repositories, search, services, templates, static, utilities
 tests/       unit, integration, regression, e2e, performance, party_simulation,
@@ -292,8 +304,9 @@ the same work into ten milestones.
 14. **Administrative interface. Done** — `encore/api/auth.py`,
     `encore/controllers/admin.py`, `encore/templates/admin/`,
     `encore/services/{admin,statistics}_service.py`.
-15. Installer. ← **next**
-16. Party Simulation.
+15. **Installer. Done** — `apps/installer/`, `encore-install`, `GET /qr`,
+    `ENCORE_ADMIN_PASSWORD` seeding (ADR-014, ADR-015).
+16. Party Simulation. ← **next**
 17. Documentation → `1.0.0`.
 
 What exists and what is scaffolding is kept current in

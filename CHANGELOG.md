@@ -14,6 +14,43 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Added
 
+- The installer (AIG 21 step 15, #32, ADR-014, ADR-015): `encore-install`, a third
+  application in `apps/installer/`, shipped as a console script and testable on a
+  machine that is not a Raspberry Pi. Five commands — `install`, `upgrade`,
+  `remove`, `verify`, `reset-credential` — and four exit codes, because "the
+  machine is not ready" and "the machine is fine and Encore is not" are answered
+  differently. `install` is idempotent in the strong sense: it observes the host,
+  plans only the differences, and an unchanged appliance produces an empty plan
+  and the sentence "nothing to do". It never overwrites an existing
+  `config.yaml`, and when your file disagrees with a flag it keeps yours and names
+  the setting (SAPRS 13.8). `remove` deletes the application and keeps the
+  configuration, the databases, the artwork and your music; `--purge-config` and
+  `--purge-data` are separate flags because they are separate acts (13.10), and
+  both need `--yes`. `--dry-run` prints the plan, and `--root /prefix` rehearses
+  the whole install into a self-contained tree that boots — which is how
+  `tests/e2e/test_installed_appliance.py` proves that an installed appliance
+  serves guests rather than merely existing.
+- `GET /qr` and `GET /qr.svg` (SAPRS 9.11): the printable QR page and the code
+  alone, rendered server-side as SVG by `segno`. Public, cached for a day, and
+  with no `?url=` parameter to make it an appliance that prints phishing codes
+  about itself.
+- `ENCORE_ADMIN_PASSWORD`, which the documentation had described since ADR-013 and
+  nothing had ever read. The appliance now seeds its administrator credential on
+  first boot, on the appliance thread, and never overwrites a credential an
+  operator has already set (ADR-015). The value reaches the installer only through
+  the environment — there is no `--admin-password` flag, because a flag would put
+  the appliance's only credential in every user's process list — and it appears in
+  no report, log or transcript.
+- `ServerConfig.guest_url`, the one expression of where a guest points a browser.
+  `/qr`, `/api/v1/info`, the page footer and the installer's report all read it.
+- `scripts/encore-install`, a bootstrap wrapper with no logic in it, for the
+  command that has to work before anything is installed.
+- Installer, packaging, QR and seeding tests: 133 unit (the planner is pure, so
+  ordering, idempotence, removal scopes and every acceptance verdict are answered
+  without a filesystem), 29 integration against a real staged tree with a scripted
+  host, 14 QR route tests that read the URL back out of the SVG rather than trust
+  the handler, and 9 end-to-end tests that install an appliance and then boot it.
+
 - The administrative interface (AIG 21 step 14, #28): sign-in and first-run
   password setup, a dashboard, playback controls, queue management, health,
   statistics, a log tail, a configuration summary, library information with a
@@ -467,6 +504,19 @@ The release process moves the section into a dated, bracketed version heading.
 - None.
 
 ### Fixed
+
+- The built wheel contained no server. `[tool.setuptools] packages` listed `encore`
+  and `apps.builder` and omitted `apps.server` and the two
+  `encore.repositories.*` subpackages, so an installed appliance had nothing to
+  start — while every test passed, because pytest imports from the checkout
+  (#32). `tests/unit/test_packaging.py` now builds the wheel and opens it, and
+  compares its contents against the source tree rather than against a list.
+- Templates and static files were not package data, so a wheel that did contain
+  the server would have started cleanly and answered 500 on the first page view
+  (#32).
+- `/api/v1/info` reported `http://{domain}/` whatever port the appliance was
+  listening on, which on the shipped default of 8080 is a URL that resolves and
+  refuses the connection (#32, ADR-015).
 
 - The dashboard answered its own transport buttons with a URL segment. The routes in
   `encore/controllers/admin.py` write their feedback sentences inline, all except the

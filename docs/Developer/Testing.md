@@ -77,6 +77,13 @@ destination (90% overall, 95% domain/queue/search, 90% playback/builder).
   that only looks like one (PBK 16): a builder test that passed against a fake
   container would be testing the fake.
 - `party_profiles.py` — loader for the load profiles below.
+- `installer.py` — the installer's two host seams and the shape of a request. `RecordingRunner`
+  captures argv, environment and working directory instead of spawning (13.6's "every command is
+  logged", made assertable); `FakeMachine` subclasses `RealMachine` so the *filesystem* stays real
+  while the answers about users, groups, systemd, ports and OS release are scripted; `synced()`
+  substitutes the outcome of `uv sync` for a command no test should run. The reason it is a
+  subclass rather than a fake is idempotence: only a real `stat` can show that the observer and the
+  executor agree about what a byte is.
 
 ## What unit tests may not do (SAPRS 14.4)
 
@@ -160,6 +167,56 @@ suite exists for, and it does not need 15,000 files to show up.
 
 What is not here: HTTP, SSE, browsing, and the 15,000-song corpus. `test_party_simulation.py`
 says so in its skip reason, and the full driver lands with milestone 16.
+
+## The installer (SAPRS Chapter 13, AIG 15)
+
+Five suites rather than one, because an installer makes five claims that can fail independently —
+and, unlike everything else in this repository, its subject is a machine it is not standing on.
+
+- `tests/unit/test_installer_layout.py` — SAPRS 13.3's table, the staging rule, the modes and
+  ownership of 13.5, the removal scopes of 13.10, and the fact that `owned_roots` is *derived* from
+  `removals` rather than maintained beside it. Two lists, one for planning a deletion and one for
+  allowing it, is a setup where a directory appears in the first and not the second.
+- `tests/unit/test_installer_plan.py` — the pure planner: order, second-run emptiness,
+  interrupted-install repair, drift versus recreation, all four removal-scope combinations, and
+  the upgrade's stop-before-backup-before-start. `ApplianceState` is built by hand in this file,
+  which is exactly why the integration suite exists.
+- `tests/unit/test_installer_checks.py`, `test_installer_content.py`,
+  `test_installer_config_file.py`, `test_installer_report.py` — the acceptance verdicts and their
+  fix sentences, the four rendered files (a `config.yaml` that is valid YAML and invalid Encore is
+  the failure worth a test), the four outcomes of meeting an existing configuration, and the
+  report's wording and JSON shape.
+- `tests/integration/test_installer_lifecycle.py` — the plan *executed* against a real tree:
+  files that exist at the modes claimed, a second install that changes no byte and no mtime, an
+  interrupted install that completes rather than repeats, the systemd transcript read off what was
+  recorded, and a symlink planted at an owned root refused rather than followed. Driven through
+  `main()` with a `FakeMachine`, because a test that reassembles `observe`/`plan_for`/`Executor`
+  is testing the reassembly.
+- `tests/e2e/test_installed_appliance.py` — installs an appliance, then boots it from the
+  `config.yaml` and environment file the installer wrote, signs in with the seeded password, and
+  checks the QR code against `/api/v1/info`. This is the only file in the suite that crosses the
+  boundary between two applications, which is where three of this milestone's findings lived.
+- `tests/unit/test_packaging.py` — the declarations in `pyproject.toml` in milliseconds, and the
+  built wheel in seconds: unpacked, compared against the source tree, with `entry_points.txt` read
+  as the last word on what `pip install` will put on a `PATH`.
+
+**The host is a seam, not a mock.** `tests/support/installer.py` gives the suite two doubles that
+are deliberately different in kind. `RecordingRunner` captures argv, environment and working
+directory instead of spawning, which is 13.6's "every command is logged" made testable.
+`FakeMachine` *subclasses* `RealMachine` and overrides only the answers about the host — users,
+groups, systemd, ports, OS release — while keeping the real filesystem. That asymmetry is the
+point: a fake filesystem that agrees with itself proves only that the installer planned what it
+already knew, and idempotence has to be discovered by observing the bytes the previous run wrote.
+Where a recorded command's *effect* is what later state depends on, `synced()` substitutes the
+outcome of `uv sync` (an environment with its entry points in it) and `real=(("rsync",),)` runs the
+copy for real. Both still record the invocation, so `ran("uv", "sync")` stays true.
+
+**No test here needs root, systemd, an `encore` account, or a free port**, and none of them makes
+an unprivileged process into one. The commands that would require it are recorded and asserted
+on. What this means in exchange, stated plainly: **the installer has never run on a Raspberry Pi.**
+ALSA device names, USB DACs, `audio` group membership as a particular release ships it, and the
+tmpfiles semantics `tmpfiles_text` assumes are all asserted against a scripted answer rather than
+against hardware. `docs/Administrator-Guide.md`'s manual steps are the bring-up checklist.
 
 ## The administrative interface (SAPRS 8.8, AIG 14)
 

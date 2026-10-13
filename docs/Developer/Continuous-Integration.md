@@ -36,7 +36,7 @@ and pre-commit/CI cannot disagree. If that is ever revisited it needs an ADR.
 
 ## Test
 
-Unit, integration and regression tests plus a coverage report uploaded as an
+Unit, integration, regression and end-to-end tests plus a coverage report uploaded as an
 artifact (`coverage.xml`), and an arm64 smoke job because the target device is a
 Raspberry Pi 4. Nightly runs the slow suites: performance and the baseline party.
 

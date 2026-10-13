@@ -210,8 +210,11 @@ Run them with `scripts/test.sh` or `uv run pytest tests/unit/test_fragments.py -
 
 ## What is not here
 
-- QR posters (milestone 15) — `GET /qr` is documented as pending in the
-  [API reference](../api/README.md).
+- A client-side QR generator. `GET /qr` renders the poster on the appliance, server-side, from
+  `ServerConfig.guest_url` ([API reference](../api/README.md), ADR-015): a code built in the browser
+  would be encoding the address the *browser* guessed, which is the one thing a printed code cannot
+  afford. The page is `templates/pages/qr.html`, and it is the only template that does not extend
+  the guest shell — a poster wants paper margins, not a navigation bar.
 - An administrative theme. The console reuses the guest stylesheet plus about ninety lines of
   `.admin-*`, and a second design system for a screen one person sees is not a thing this project
   needs.
