@@ -41,6 +41,11 @@ Repository facts you can rely on:
 - Tests live in tests/{unit,integration,regression,performance,party_simulation}
   and doubles in tests/support/. Markers are applied by directory.
 - Run scripts/check.sh before declaring completion.
+- In a pull request, disclose AI assistance with the template's checkbox and
+  nothing else. Do not write a signature line, a model name or an email address
+  into a commit message or a PR body: those are invented, not copied from
+  anywhere, and they are the part of a disclosure that can be wrong silently
+  (#30).
 ```
 
 ## Guardrails to repeat verbatim in every session (SAPRS 11.10)

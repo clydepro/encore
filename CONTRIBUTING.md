@@ -166,7 +166,12 @@ exception (SAPRS 15.14):
   left open.
 - Start the session from [`ai/prompts/standard-prompt-header.md`](ai/prompts/standard-prompt-header.md).
 - Use a task template from [`ai/task_templates/`](ai/task_templates/).
-- A human reviewed and understands every line, and says so in the PR.
+- A human reviewed and understands every line, and says so with the pull request
+  template's checkbox ("AI assistance disclosure"). That checkbox is the entire
+  disclosure: do not add commit trailers or pull-request lines naming a model or
+  restating an email address. Attribution already comes from the commit and the PR,
+  so a hand-written copy adds nothing that can be checked and one thing that cannot
+  ([#30](https://github.com/clydepro/encore/issues/30)).
 - Run the AI review pass in [`ai/prompts/code-review.md`](ai/prompts/code-review.md)
   before requesting a human review.
 - Respect what previous AI (or human) work already established (AEP 27): improve
