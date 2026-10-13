@@ -6,8 +6,9 @@ For whoever picks this up next. Read with
 request → SAPRS → AIG → ADRs → AEP (AEP 2). This page is a pointer, not an authority, and it will
 be wrong faster than the SAPRS is.
 
-State as of this writing: **Phases 1–5 are merged (#20, #22, #24, #26, #27). Phase 6 is on
-`feat/32-installer` for issue #32, not yet merged.** The appliance now installs itself:
+State as of this writing: **Phases 1–5 are merged (#20, #22, #24, #26, #27). Phase 6 is
+implemented and in review as [#33](https://github.com/clydepro/encore/pull/33), on
+`feat/32-installer`, for issue #32 — CI green, not yet merged.** The appliance now installs itself:
 `sudo ENCORE_ADMIN_PASSWORD='…' ./scripts/encore-install install`, from a clone, on a machine that
 had nothing on it a minute before. A guest scans a code printed by the appliance itself, an
 operator's password can be set before the box boots, and `encore-install verify` answers SAPRS

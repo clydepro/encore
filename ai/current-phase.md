@@ -1,6 +1,7 @@
 # Current Phase
 
-**Phase 6 — the installer (AIG step 15): in progress on
+**Phase 6 — the installer (AIG step 15): implemented, in review as
+[PR #33](https://github.com/clydepro/encore/pull/33) on
 [`feat/32-installer`](https://github.com/clydepro/encore/tree/feat/32-installer) for issue
 [#32](https://github.com/clydepro/encore/issues/32).** Phases 1–5 are merged:
 [PR #20](https://github.com/clydepro/encore/pull/20) (domain, bus, configuration),

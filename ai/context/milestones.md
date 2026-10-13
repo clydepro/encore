@@ -22,7 +22,7 @@ or too early.
 | 12 | HTMX | **Done — `encore/controllers/`, `encore/templates/`, `encore/static/`** |
 | 13 | SSE | **Done — `encore/services/sse_publisher.py`, `/events`** |
 | 14 | Administrative interface | **Done — `encore/api/auth.py`, `controllers/admin.py`, `templates/admin/`, `services/{admin,statistics}_service.py`** |
-| 15 | Installer | In progress (`feat/32-installer`, issue #32) |
+| 15 | Installer | In review ([#33](https://github.com/clydepro/encore/pull/33), `feat/32-installer`, issue #32) |
 | 16 | Party Simulation | Not started |
 | 17 | Documentation | Ongoing |
 
