@@ -1,8 +1,8 @@
 # Troubleshooting
 
-Status: **outline** — expanded by every milestone that can fail, and by every
-issue closed with a regression test. Organised symptom-first, because that is
-how someone searches it at a party.
+Status: **implemented, install to playback** — expanded by every milestone that
+can fail, and by every issue closed with a regression test. Organised
+symptom-first, because that is how someone searches it at a party.
 
 ## Before anything else
 
@@ -60,6 +60,57 @@ how someone searches it at a party.
 - An event subscriber crashed: the bus isolates it (SAPRS 11.9), so playback
   keeps running while one client's view goes stale.
 
+### The installer failed
+
+Start with the exit code; it says whose fault it is.
+
+| Code | Meaning | Do this |
+| ---- | ------- | ------- |
+| `0` | Worked, including "there was nothing to do" | Nothing |
+| `2` | The command line is wrong | Read the sentence. `--purge-config` with `install` is this code, not a warning |
+| `3` | The machine is not ready | Fix the machine, run it again. Nothing was changed |
+| `4` | The machine is fine; something about Encore is not | The check that failed is printed above a fix line |
+
+A `3` is the one that surprises people, and each of its five causes is named by a
+check rather than by a traceback:
+
+- **Not root, and not staging.** The installer never needs to be root to be
+  understood: `--root /tmp/rehearsal --dry-run` shows the whole plan from an
+  ordinary account. Run it that way first if you are wondering what it would do.
+- **No systemd.** A container has no PID 1 to register with. That is a
+  `--no-service` install and you start the appliance by hand; it is not a skipped
+  step, and the report says which.
+- **The port is taken.** `verify` names the port and the address. `--port` on the
+  command line changes what gets written; a `config.yaml` that already exists wins
+  and the run will tell you the setting it did not apply.
+- **`mpv` or `uv` is missing.** `mpv` is not optional — an appliance that cannot
+  play is a web server with a music directory. `apt install mpv python3-uv` and
+  re-run; the installer is idempotent, so re-running is the recovery.
+- **The music directory is not there.** A warning, not a failure. The Server never
+  scans a directory (ADR-010); only the Builder reads one, so an appliance with no
+  mounted library is correctly installed and empty.
+
+An install that stopped halfway is the case the whole design is built for. Re-run
+`install`: it observes the machine, plans only what is missing, and says so. If
+somehow you would rather see that plan first, `--dry-run` prints it and changes
+nothing.
+
+### The configuration was not applied
+
+Not an error, and the most common reason an appliance seems to ignore you. An
+existing `/etc/encore/config.yaml` always wins over a flag (SAPRS 13.8) — the
+installer keeps your file and names the settings that disagreed:
+
+```text
+keep /etc/encore/config.yaml as it is (SAPRS 13.8)
+  → server.port is 9100 there, 8099 asked for. Edit the file if you meant those changes.
+```
+
+If the file is *invalid* the run fails instead of quietly proceeding, and it says
+every offending key at once (12.5). It still will not overwrite the file, because
+replacing something you cannot read destroys the evidence and your intent at the
+same moment.
+
 ### The service will not start
 
 - Configuration is validated at startup and refuses to run half-configured
@@ -67,6 +118,13 @@ how someone searches it at a party.
 - `library.db` unreadable or from an incompatible build → health reports it, the
   server does not guess.
 - Port already in use, or `/var/lib/encore` permissions for the `encore` user.
+  `sudo encore-install verify` checks both, and every other item on SAPRS 13.11's
+  acceptance list, with a fix under each line that is not green.
+- If the sign-in page says no administrator has signed in here yet when you are
+  sure `ENCORE_ADMIN_PASSWORD` was set: the value is read on the *first* boot only,
+  and never overwrites a credential that already exists (ADR-015). A too-weak value
+  is skipped with a line in the journal rather than being fatal. `encore-install
+  reset-credential` puts the first-run page back.
 
 ### Library build problems
 

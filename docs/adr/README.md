@@ -23,6 +23,8 @@ what was rejected.
 | ADR-011  | The Queue Commands Playback; Playback Notifies the Queue  | Accepted               |
 | ADR-012  | One Appliance Thread; The Event Loop Belongs to HTTP      | Accepted               |
 | ADR-013  | Administrator Credential in runtime.db, Session in Memory | Accepted               |
+| ADR-014  | The Installer Is a Third Application                      | Accepted               |
+| ADR-015  | First-Boot Seeding, and One Owner for the Guest Address   | Accepted               |
 
 ## Format
 
