@@ -131,6 +131,34 @@ async def state_of(app: Any) -> str:
         return str((await client.get("/api/v1/playing")).json()["state"])
 
 
+async def settled_state(app: Any, client: Any, wanted: str, *, tries: int = 20) -> str:
+    """Wait, on the appliance's own thread, for a state to be true.
+
+    Every command in this file is asynchronous in at least one direction: a queued song becomes
+    `playing` on the tick that notices the load, and a `skip` passes through `loading` on its way
+    back to `playing`. Asserting immediately after the POST passes on an idle machine and fails
+    under coverage tracing, which is a property of the tracer rather than of Encore — and a
+    regression test that fails for that reason eventually gets deleted, which is how this file's
+    bug came back once already.
+
+    Bounded, and it advances the appliance itself rather than sleeping, so a command that is
+    genuinely stuck fails here naming the state it is stuck in rather than after a timeout.
+    """
+
+    seen = ""
+    for _ in range(tries):
+        seen = str((await client.get("/api/v1/playing")).json()["state"])
+        if seen == wanted:
+            return seen
+        await call_async(app.state.jukebox.appliance, app.state.jukebox.tick_once)
+    return seen
+
+
+async def title_of(client: Any) -> str:
+    now = (await client.get("/api/v1/playing")).json()["song"]
+    return "" if now is None else str(now["title"])
+
+
 async def state_of_client(client: Any) -> str:
     return str((await client.get("/api/v1/playing")).json()["state"])
 
@@ -175,20 +203,47 @@ async def test_every_command_on_the_dashboard_moves_the_appliance(app: Any) -> N
     Looped rather than split because the defect was not in a command — it was in the branch all
     the commands shared, which is where bugs that appear five times in a review as "covered"
     live.
+
+    One client, one lifespan, one `running()`: starting and stopping the appliance per command
+    made each iteration read a state that a fresh startup had already changed, which is a property
+    of the test rather than of the software. Each command is set up from a state its documentation
+    names, and `settled_state` is what makes "the appliance moved" a fact instead of a race.
     """
 
     # `idle`, not `stopped`: the state vocabulary is the engine's (`PlaybackState`), and a
     # stopped appliance is one with nothing loaded rather than one that failed.
     expect = {"pause": "paused", "resume": "playing", "skip": "playing", "stop": "idle"}
 
-    for command, wanted in expect.items():
-        await ask_for(app)
-        async with running(app) as client:
-            await sign_in(client)
+    async with running(app) as client:
+        await sign_in(client)
+        for command, wanted in expect.items():
+            # Music first, and un-paused: the previous iteration leaves a state behind (`pause`
+            # leaves `paused`, `stop` leaves `idle`), and a command tested on the residue of the
+            # last one is not the command in the documentation.
+            await client.post("/admin/playback/resume?panel=dashboard", headers=HTMX)
+            await client.post("/queue?song_id=1", headers=HTMX)
+            await client.post("/queue?song_id=2", headers=HTMX)
+            started = await settled_state(app, client, "playing")
+            assert started == "playing", f"nothing reached the speakers before {command}"
+            before = await title_of(client)
+
+            if command == "resume":
+                # Resume from a pause, because that is the only thing it can mean.
+                await client.post("/admin/playback/pause?panel=dashboard", headers=HTMX)
+                assert await settled_state(app, client, "paused") == "paused"
+
             answer = await client.post(f"/admin/playback/{command}?panel=dashboard", headers=HTMX)
-            seen = (await client.get("/api/v1/playing")).json()["state"]
-        assert answer.status_code == 200, command
-        assert seen == wanted, f"{command} redrew the panel and left it {seen}"
+            assert answer.status_code == 200, command
+            seen = await settled_state(app, client, wanted)
+            assert seen == wanted, f"{command} redrew the panel and left it {seen}"
+
+            if command == "skip":
+                # `playing` is the state a skip lands in whether or not it skipped, so the
+                # evidence for this one is the track, not the tense.
+                assert await title_of(client) != before, "skip left the same song on the speakers"
+
+        # The queue the loop filled is nobody's to leave behind.
+        await client.post("/admin/queue/clear?panel=queue", headers=HTMX)
 
 
 async def test_the_no_javascript_branch_performs_the_same_command(app: Any) -> None:

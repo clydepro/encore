@@ -22,7 +22,7 @@ or too early.
 | 12 | HTMX | **Done — `encore/controllers/`, `encore/templates/`, `encore/static/`** |
 | 13 | SSE | **Done — `encore/services/sse_publisher.py`, `/events`** |
 | 14 | Administrative interface | **Done — `encore/api/auth.py`, `controllers/admin.py`, `templates/admin/`, `services/{admin,statistics}_service.py`** |
-| 15 | Installer | Not started ← **next** |
+| 15 | Installer | In review ([#33](https://github.com/clydepro/encore/pull/33), `feat/32-installer`, issue #32) |
 | 16 | Party Simulation | Not started |
 | 17 | Documentation | Ongoing |
 
@@ -248,8 +248,11 @@ them (`container.py` still builds config and logging only — the wiring belongs
 
 ## Explicitly not implemented
 
-- **The installer**, `encore-install`, systemd units, `GET /qr` (milestone 15). The mechanism
-  `ENCORE_ADMIN_PASSWORD` seeds a credential with; the install that sets it is not written.
+- **An install verified on a Raspberry Pi.** `encore-install` is implemented and tested against a
+  real staged filesystem (ADR-014), including the systemd commands, which are recorded rather than
+  run. What no test proves is sound reaching a speaker on real hardware — ALSA device names, USB
+  DACs, the mpv socket under the `encore` account on a machine with a `13.5` group in it. That is
+  the bring-up checklist, and it is milestone 15's remaining work rather than its design.
 - **The full Party Simulation driver** (milestone 16). The shape of a party with an operator in it
   is simulated and its ledger asserted; 15,000 songs and hundreds of HTTP guests are not.
 
@@ -264,7 +267,6 @@ them (`container.py` still builds config and logging only — the wiring belongs
 - `EventBus` persistence: events are in-process only (SAPRS 11.5). The Builder
   publishes `BuildCompleted` on a bus it creates and discards, because there is no
   server to subscribe to it yet.
-- The installer and `encore-install`.
 
 ## Where a new feature goes now
 

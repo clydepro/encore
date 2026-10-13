@@ -7,37 +7,125 @@ asked about it at a party.
 
 ## Mental model
 
-Two applications, two databases, one appliance:
+Two programs do the work, a third sets them up, two databases hold the results,
+and one appliance runs them:
 
 ```text
 music files → Library Builder → library.db (immutable) → Encore Server → mpv → speakers
                                             runtime.db (queue, history, stats) ↗
 ```
 
-You build the library elsewhere, publish the database, then run the server and
-forget about it (ADR-001, ADR-006, ADR-008).
+The Installer is where the arrow starts. It runs once, as root, arranges the
+filesystem and the service, and exits; it is not part of the appliance and the
+Server never runs it (ADR-014). You build the library elsewhere, publish the
+database, then run the server and forget about it (ADR-001, ADR-006, ADR-008).
 
 ## Installation
 
-Authoritative steps are the manual ones (SAPRS 13.2); `encore-install` automates
-the same sequence. Target: Raspberry Pi 4 on Raspberry Pi OS 64-bit, Debian 12
-or Ubuntu 24.04.
+One command, on the machine that will play the music:
 
-Outline:
+```bash
+git clone https://github.com/clydepro/encore.git && cd encore
+sudo ENCORE_ADMIN_PASSWORD='a password you will remember' ./scripts/encore-install install  # pragma: allowlist secret
+```
 
-1. Create the `encore` system user and the filesystem layout of SAPRS 13.3
-   (`/opt/encore`, `/etc/encore`, `/var/lib/encore`, `/var/cache/encore`).
-2. `uv sync --frozen` into `/opt/encore/venv`.
-3. Write `/etc/encore/config.yaml` from
-   [`examples/config.yaml`](../examples/config.yaml).
-4. Publish `library.db` + artwork built by the Builder — see
-   [Building the library](#building-the-library). The Installer does not do this
-   for you: it needs a music directory that only you know the location of.
-5. Install and enable the systemd units; verify the `jukebox` mDNS name.
-6. Open `http://encore.local:8080/admin` on a phone or laptop on the same
-   network, set the administrator password (see
-   [Signing in](#signing-in)), confirm health is green, and print the QR code —
-   which is milestone 15's `GET /qr`, and not there yet.
+It creates the service user, lays out the filesystem, installs the code and its
+dependencies, writes `config.yaml`, the environment file, the systemd unit and
+the tmpfiles rule, then starts Encore and tells you what to do next. Run it
+again and it does nothing — that is the property everything else about it
+depends on (SAPRS 13.7).
+
+The manual steps below are the authoritative ones (SAPRS 13.2); the installer
+automates exactly this sequence, and where the two disagree the manual steps are
+the bug report. Do them by hand if you would rather see what the machine is
+being told, if you are packaging for a distribution, or if you do not trust a
+program you did not read, which is a reasonable position about software that
+runs as root.
+
+**Target:** Raspberry Pi 4 on Raspberry Pi OS 64-bit, Debian 12 or Ubuntu 24.04.
+
+### The one-command installer
+
+| Command | What it does |
+| ------- | ------------ |
+| `install` | Everything above. Idempotent; re-running repairs a half-finished install |
+| `upgrade` | Stop, replace the code, back up `runtime.db`, start. Your configuration, library, queue and history survive |
+| `verify` | SAPRS 13.11's acceptance list, printed with a fix for every line that is not green. Changes nothing |
+| `remove` | Deletes the application. Keeps the configuration, the databases and the music unless you say otherwise |
+| `reset-credential` | Clears the operator credential so the first-run page comes back. Needs `--yes` |
+
+Flags worth knowing:
+
+- `--dry-run` prints the plan and changes nothing. `remove --dry-run` does not
+  need `--yes`, because describing a deletion is not one.
+- `--root /prefix` rehearses the whole install into a self-contained tree. Every
+  rendered file names the staged paths, which means the tree is bootable, which
+  is how the test suite proves an installed appliance works (`tests/e2e`).
+- `--no-service` skips systemd. For containers, and for the rehearsal above.
+- `--domain jukebox.home.arpa`, `--port 8080`, `--music-dir /opt/music`,
+  `--hostname jukebox`, `--log-format json|console`.
+- `--json` for a provisioning system: the plan, the results, the acceptance
+  list, and `guest_url`, in one machine-readable object.
+
+Exit codes: `0` worked, `2` the command line was wrong, `3` a prerequisite is
+unmet (fix the machine, run it again), `4` the machine is fine and something
+about Encore is not. Warnings never change the code — an appliance with no
+library is correctly installed and waiting, not broken.
+
+`ENCORE_ADMIN_PASSWORD` is read from the environment and has no command-line
+equivalent on purpose: a flag would put the appliance's only credential in every
+user's process list and in somebody's shell history (SAPRS 12.6). It is used
+once, on the appliance's first boot, and never overwrites a password an operator
+has already set (ADR-015).
+
+### The manual steps
+
+1. Create the service account and the groups (SAPRS 13.5):
+
+   ```bash
+   sudo useradd --system --home-dir /var/lib/encore --shell /usr/sbin/nologin encore
+   sudo usermod -aG audio encore
+   ```
+
+2. Create the layout of SAPRS 13.3, with the ownership and modes of 13.5:
+
+   ```bash
+   sudo mkdir -p /opt/encore /etc/encore /var/lib/encore/artwork \
+                /var/cache/encore/temp /var/log/encore
+   sudo chown root:encore /opt/encore /etc/encore /var/cache/encore
+   sudo chown encore:encore /var/lib/encore /var/log/encore
+   sudo chmod 750 /var/lib/encore /var/lib/encore/artwork /var/log/encore
+   sudo chmod 700 /var/cache/encore/temp
+   ```
+
+3. Install the code and its dependencies into a dedicated environment. Nothing
+   goes into system Python (SAPRS 13.4):
+
+   ```bash
+   sudo git clone https://github.com/clydepro/encore.git /opt/encore/application
+   sudo -u encore UV_PROJECT_ENVIRONMENT=/opt/encore/venv \
+        uv sync --frozen --no-dev --project /opt/encore/application
+   ```
+
+4. Write `/etc/encore/config.yaml` from
+   [`examples/config.yaml`](../examples/config.yaml), and
+   `/etc/encore/environment` at mode `0600` with `ENCORE_HOME`, `ENCORE_CONFIG`
+   and, if you want the box configured before it boots, `ENCORE_ADMIN_PASSWORD`.
+
+5. Install the unit (SAPRS 13.6) and the tmpfiles rule that keeps the mpv socket
+   directory from being cleaned away, then `systemctl daemon-reload`, `enable`
+   and `start encore`.
+
+6. Publish a library. The installer does not do this for you: it needs a music
+   directory that only you know the location of (ADR-010).
+
+   ```bash
+   encore-builder --music-dir /opt/music
+   ```
+
+7. Open `http://encore.local:8080/admin`, check that health is green, and print
+   the QR code at `/qr` (SAPRS 9.11). If `ENCORE_ADMIN_PASSWORD` was set the
+   credential already exists; if not, the first-run page asks you to create one.
 
 ## Building the library
 
@@ -114,10 +202,18 @@ to sign in, because a separate setup route would be a page nobody tests twice
 (ADR-013). Ten characters is the minimum; a shorter one is refused with a sentence
 about the length rather than a rule you have to guess.
 
-If the installer set `ENCORE_ADMIN_PASSWORD` for an unattended install, the first
-sign-in *is* that password, the credential is written on first use, and the
-environment variable is then forgotten — the value lives in `runtime.db`, hashed,
-and nothing reads the environment again. Leaving it set is harmless and untidy.
+If the installer set `ENCORE_ADMIN_PASSWORD`, the credential already exists by the
+time that page renders: the appliance's first boot reads the variable, hashes it
+into `runtime.db`, and forgets it. Nothing is written on first sign-in — the value
+lives in the database, and nothing reads the environment again afterwards. Leaving
+the variable set is harmless and untidy, and `encore-install verify` will name it
+as a stale line rather than complain about it, because a file in `/etc` that could
+set this password would be a way to take over a machine by editing a line in it:
+after the first boot, the row in `admin_state` wins, always (ADR-015).
+
+A password too weak to store is reported in the journal and skipped rather than
+fatal. The box still comes up, the first-run page is still there, and you find out
+now rather than at the point where you needed the jukebox.
 
 What a session is worth:
 
@@ -222,12 +318,33 @@ resuming and stopping are all announced.
   keeps playing — its path was resolved when it was queued.
 - **Restart the appliance**: `systemctl restart encore` — the queue survives
   because it lives in `runtime.db`.
+- **Upgrade Encore**: `sudo encore-install upgrade`. It stops the service, replaces
+  the code, re-resolves the dependencies, copies `runtime.db` to
+  `runtime.db.pre-upgrade`, and starts again — the migrations are forward-only and
+  that copy is the way back, which the appliance will not take for you. Your
+  configuration is not touched, and if it disagrees with a flag you passed, the run
+  says so by name (SAPRS 13.8, 13.9).
+- **Check an install**: `sudo encore-install verify` prints 13.11's acceptance list
+  with a fix under every line that is not green. It changes nothing and is safe to
+  run during a party.
+- **Uninstall**: `sudo encore-install remove` deletes the application and keeps
+  everything hard to reproduce — the configuration, the databases, the artwork and
+  your music. `--purge-config` and `--purge-data` are separate flags because they
+  are separate acts, and both need `--yes`. The service account is left behind: a
+  stray account is a security review finding, and deleting one you did not create
+  is not an installer's business.
+- **Lost the password**: `sudo encore-install reset-credential` stops the service,
+  clears the credential row, and starts it again. The first-run page comes back.
+  The queue, the history and the music are untouched (ADR-013).
 - **mpv dies**: the Supervisor restarts it and publishes `PlaybackRecovered`; if
   the recovery counter keeps climbing, check `Troubleshooting.md`.
 - **Disk**: artwork cache and `runtime.db` grow; both are safe to compact while
   the server is stopped.
 - **Backups**: `library.db` (rebuildable), `runtime.db` (history), and
-  `/etc/encore/config.yaml` (small, precious).
+  `/etc/encore/config.yaml` (small, precious). `/etc/encore/environment` belongs in
+  the same copy: it holds the credential you seeded, at mode `0600`, and a restored
+  appliance with no environment file is an appliance whose operator is locked out of
+  it by their own backup.
 
 ## Security posture
 
@@ -255,12 +372,13 @@ resuming and stopping are all announced.
 
 ## Known gaps during bootstrap
 
-Milestones 1–14 work: configuration, the domain model, the event bus, both
+Milestones 1–15 work: configuration, the domain model, the event bus, both
 databases with their repositories, the Library Builder, search, playback, the
-queue, the HTTP runtime, the guest interface, the live stream, and the
-administrative interface. Not yet implemented: the installer (milestone 15), the
-full-scale Party Simulation driver (16) and QR code generation, which is the
-installer's `/qr` route rather than this page's.
+queue, the HTTP runtime, the guest interface, the live stream, the administrative
+interface, and the installer — which is where the "one command from a clean SD
+card" claim now lives, along with `GET /qr` and the `ENCORE_ADMIN_PASSWORD`
+seeding this page has always described. Not yet implemented: the full-scale Party
+Simulation driver (16).
 
 The lists above are what exists; where a commitment is still open it says so, so
 that documentation and code land together (AEP 11).

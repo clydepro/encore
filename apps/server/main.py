@@ -4,6 +4,10 @@ Thin, because a server's job is to bind a socket and not to decide anything. Con
 comes from the same `config.yaml` the Builder read, so a library built against one
 `paths.music_dir` cannot be played against another (ADR-010).
 
+One environment variable is read here: `ENCORE_ADMIN_PASSWORD`, and only so the appliance can
+seed a credential on a box that has none (SAPRS 12.6, ADR-015). It is handed to `build()` and
+forgotten — nothing else in the process sees it, and no log line contains it.
+
 The order is the interesting part, and it is all failure ordering:
 
 1. Configuration, then logging — a config that cannot be read is printed rather than
@@ -29,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -109,7 +114,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     log = logging.getLogger("encore.main")
 
     try:
-        appliance = build(config, launch_engine=not arguments.no_playback)
+        appliance = build(
+            config,
+            launch_engine=not arguments.no_playback,
+            admin_password=os.environ.get("ENCORE_ADMIN_PASSWORD") or None,
+        )
     except (StoreNotFoundError, LibraryContractError, RuntimeContractError, StoreError):
         # The library the installer said it built is not readable: the traceback is the
         # diagnosis, and systemd has somewhere to put it.
@@ -123,6 +132,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             "port": config.server.port,
             "domain": config.server.domain,
             "playback": not arguments.no_playback,
+            # The presence of the variable, never its value: this is the one line in the boot
+            # that a curious operator will read, and ADR-015's whole argument is that the
+            # credential is spent once and then should not be lying around.
+            "credential_seeded": bool(os.environ.get("ENCORE_ADMIN_PASSWORD")),
         },
     )
     try:

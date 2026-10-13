@@ -47,6 +47,10 @@
         <span class="shell__dot" aria-hidden="true">·</span>
         <span>{{ domain }}</span>
         <span class="shell__dot" aria-hidden="true">·</span>
+        {# `/qr` is a page and not a fragment: it is the thing an operator prints, and the only
+        route on the box whose whole content is an address the guest already sees here. #}
+        <a href="/qr">QR</a>
+        <span class="shell__dot" aria-hidden="true">·</span>
         <a href="/docs">API</a>
       </p>
     </footer>

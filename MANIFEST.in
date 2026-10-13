@@ -1,0 +1,9 @@
+# Data files that are not Python modules but are part of the application (issue #32).
+#
+# Templates and static assets are resolved relative to the installed `encore` package by
+# `encore/api/html.py`, so a distribution without them imports fine and fails on the first
+# page view. The unit tests run against the source tree, which is how this stayed invisible
+# until the installer milestone made "installed" a thing that happens.
+recursive-include encore/templates *.html
+recursive-include encore/static *
+include examples/config.yaml

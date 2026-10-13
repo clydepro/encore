@@ -194,7 +194,10 @@ async def info(jukebox: Juke) -> dict[str, Any]:
     return {
         "name": "Encore",
         "version": jukebox.version,
-        "url": f"http://{jukebox.config.server.domain}/",
+        # `guest_url` rather than an f-string, so that the address in this document, the one in
+        # the page footer and the one the QR code encodes cannot disagree — which they did when
+        # this line said `http://{domain}/` about a box listening on 8080 (issue #32).
+        "url": jukebox.config.server.guest_url,
         "songs": counts.get("songs", 0),
         "albums": counts.get("albums", 0),
         "artists": counts.get("artists", 0),

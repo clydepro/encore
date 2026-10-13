@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  {#
+  The printable page (SAPRS 9.11). Standalone rather than extended from `shell.html`, and the
+  reason is the printer: a poster wants one code, one address and nothing else, and the guest
+  shell would put a navigation bar and a live-updating now-playing panel on a sheet of paper
+  that is meant to still be correct next month.
+
+  The image is a link to `/qr.svg` rather than the SVG inlined. Both render; the link means the
+  page and the image can be cached on the same terms and that a browser's "open image in new
+  tab" gives somebody a printable asset. Inlining would also need the escape-suppressing filter,
+  and `tests/unit/test_templates.py` is built to notice one anywhere in this tree: the SVG comes
+  from `segno` over a URL this server configured, which is not a reason to start marking strings
+  as trusted in templates.
+  #}
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Encore — scan to queue a song</title>
+    <link rel="stylesheet" href="/static/css/encore.css">
+    <link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+  </head>
+  <body class="qr-sheet">
+    <main class="qr-poster">
+      <h1 class="qr-poster__brand">Encore</h1>
+      <p class="qr-poster__lead">Point your camera at this code to queue a song.</p>
+
+      <img class="qr-poster__code" src="/qr.svg" width="296" height="296"
+           alt="QR code linking to {{ url }}">
+
+      <p class="qr-poster__url"><a href="{{ url }}">{{ url }}</a></p>
+      <p class="qr-poster__hint">
+        Same network, port {{ port }}. If the code will not scan, type the address above.
+      </p>
+
+      <dl class="qr-poster__facts">
+        <dt>Address</dt>
+        <dd>{{ domain }}:{{ port }}</dd>
+        <dt>Hostname</dt>
+        <dd>{{ hostname }}</dd>
+      </dl>
+
+      <p class="qr-poster__print">
+        Print this page, or take a picture of it. Encore {{ version }}.
+      </p>
+    </main>
+  </body>
+</html>

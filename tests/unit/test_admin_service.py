@@ -379,3 +379,102 @@ def test_sessions_are_reported_without_being_inspected(store: RuntimeStore) -> N
     listed = admin.sessions()
     assert [item.token for item in listed] == [session.token]
     assert listed[0].signed_in_at == START
+
+
+# -- seeding from the environment (SAPRS 12.6, ADR-015) --------------------------------
+
+
+def test_the_environment_can_create_the_credential(store: RuntimeStore) -> None:
+    """The path that turns "point a browser at /admin" into a provisioning step.
+
+    An appliance imaged in a workshop and brought to a house with no laptop for the jukebox is
+    the case 12.6's `ENCORE_ADMIN_PASSWORD` exists for, and until milestone 15 nothing read it.
+    """
+
+    admin = service(store)
+    assert admin.seed(PASSWORD) is True
+    assert admin.is_configured()
+    assert admin.login(PASSWORD) is not None
+
+
+def test_seeding_is_idempotent_and_never_overwrites(store: RuntimeStore) -> None:
+    """The second boot must not reset a password somebody changed.
+
+    The failure mode this prevents is the bad one: an operator sets their own password on
+    Monday, the service restarts on Tuesday, and `ENCORE_ADMIN_PASSWORD` — still in
+    `/etc/encore/environment` because nobody removed it — puts the workshop default back.
+    """
+
+    admin = service(store)
+    admin.seed(PASSWORD)
+    admin.change_password(current=PASSWORD, new=ROTATED)
+
+    later = service(store)
+    assert later.seed("a password from a stale environment file") is False
+    assert later.login(ROTATED) is not None
+
+
+def test_seeding_nothing_does_nothing(store: RuntimeStore) -> None:
+    """An unset variable is not a request to create an empty credential."""
+
+    admin = service(store)
+    assert admin.seed("") is False
+    assert not admin.is_configured()
+
+
+def test_a_weak_seed_is_refused_rather_than_ignored(store: RuntimeStore) -> None:
+    """Booting with no administrator while the operator believes there is one is worse than a crash.
+
+    The appliance still starts — `apps/server/appliance.py` logs this and carries on — but the
+    service's own answer is an exception, so the reason ends up in one line in the journal rather
+    than in a support conversation a week later.
+    """
+
+    admin = service(store)
+    with pytest.raises(WeakCredentialError):
+        admin.seed("short")
+    assert not admin.is_configured()
+
+
+def test_seeding_mints_no_session(store: RuntimeStore) -> None:
+    """A token issued to a process with no client attached is a token waiting to be logged.
+
+    `setup` returns a session because a browser is waiting for one; `seed` has nobody to give it
+    to, and an in-memory session created at boot would also mean the first sign-in did not have to
+    authenticate anything.
+    """
+
+    admin = service(store)
+    admin.seed(PASSWORD)
+    assert admin.sessions() == ()
+
+
+def test_the_seeded_password_never_reaches_the_database_file(
+    store: RuntimeStore, runtime_path: Path
+) -> None:
+    """The same rule as `setup`, asserted again because seeding arrives by a different path."""
+
+    service(store).seed(PASSWORD)
+    assert PASSWORD.encode() not in runtime_path.read_bytes()
+
+
+def test_seeding_is_not_an_authentication_attempt(store: RuntimeStore) -> None:
+    """A boot-time seed must not consume the failure window, and must not be consumed by it.
+
+    The ordering is the point. Guesses made before the appliance had a credential are already in
+    `admin_state`; a seed that reset them would be a way for an unauthenticated caller to clear a
+    lockout by waiting for a restart, and a seed that *counted* as a failure would lock an
+    operator out of a box they had not yet signed in to.
+    """
+
+    admin = service(store)
+    for _ in range(2):
+        with pytest.raises(AuthenticationError):
+            admin.login(WRONG)
+
+    assert admin.seed(PASSWORD) is True
+
+    for _ in range(2):
+        with pytest.raises(AuthenticationError):
+            admin.login(WRONG)
+    assert admin.login(PASSWORD) is not None
