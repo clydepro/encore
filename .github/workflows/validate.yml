@@ -24,7 +24,7 @@ jobs:
       python: ${{ steps.pin.outputs.python }}
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: astral-sh/setup-uv@v10.3.0
         with:
           enable-cache: true
       - id: pin
@@ -42,7 +42,7 @@ jobs:
     needs: dependencies
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: astral-sh/setup-uv@v10.3.0
         with:
           enable-cache: true
       - run: uv sync --frozen --all-groups
@@ -59,7 +59,7 @@ jobs:
     needs: dependencies
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: astral-sh/setup-uv@v10.3.0
         with:
           enable-cache: true
       - run: uv sync --frozen --all-groups
@@ -76,7 +76,7 @@ jobs:
         python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: astral-sh/setup-uv@v10.3.0
         with:
           enable-cache: true
       - run: uv sync --frozen --all-groups --python ${{ matrix.python-version }}
