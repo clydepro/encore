@@ -29,8 +29,10 @@ from typing import Any
 
 import pytest
 
+from apps.installer.execute import Executor
 from apps.installer.layout import Layout
 from apps.installer.main import EXIT_OK, EXIT_PREREQUISITES, EXIT_USAGE, EXIT_VERIFICATION, main
+from apps.installer.plan import DaemonReload, EnableService, StartService
 from apps.installer.system import CommandResult, OsRelease, ServiceState
 from tests.support.installer import FakeMachine, RecordingRunner, StubHttpProbe, synced
 
@@ -404,23 +406,54 @@ class TestIdempotence:
 
 
 class TestServiceIntegration:
-    def test_the_commands_are_the_ones_the_guide_prints(self, tmp_path: Path, capsys: Any) -> None:
+    def test_the_commands_are_the_ones_the_guide_prints(self) -> None:
         """13.6's "every command is logged", read off the transcript.
 
         Asserted as exact argv rather than as "systemctl was mentioned": the difference between
         `systemctl enable encore.service` and `systemctl enable --now` is invisible to the loose
         version and decides whether the box comes back after a power cut.
+
+        Run against the executor directly, and it is worth saying why: the only way to reach these
+        commands through `main()` used to be a staged install, and a staged install no longer asks
+        the host to do anything (#44). An argv assertion written through a rehearsal was asserting
+        that rehearsals change machines.
         """
 
-        recorder = RecordingRunner(effects=synced(), real=_REAL_COMMANDS)
-        host = pi(systemd=True, user=True, unit=ServiceState(), recorder=recorder)
-        code, _ = invoke(
-            tmp_path, "install", "--music-dir", str(tmp_path / "m"), capsys=capsys, machine=host
+        recorder = RecordingRunner()
+        Executor(
+            recorder,
+            layout=Layout(),
+        ).apply(
+            (
+                DaemonReload(),
+                EnableService(service="encore", detail="start Encore at boot"),
+                StartService(service="encore", detail="start Encore"),
+            )
         )
         transcript = recorder.transcript()
         assert "systemctl daemon-reload" in transcript, transcript
         assert "systemctl enable encore" in transcript, transcript
-        assert code in (EXIT_OK, EXIT_VERIFICATION)
+        assert "systemctl start encore" in transcript, transcript
+
+    def test_a_rehearsal_asks_nothing_of_this_machine(self, tmp_path: Path, capsys: Any) -> None:
+        """#44, end to end: `--root` changes the prefix and nothing else.
+
+        The recorder is the point, not the assertion: `systemctl` would have run here as real
+        commands against the CI host's PID 1, and the only reason it never did is that this machine
+        has no `encore.service` for them to fail on.
+        """
+
+        recorder = RecordingRunner(effects=synced(), real=_REAL_COMMANDS)
+        host = pi(systemd=True, user=True, unit=ServiceState(), recorder=recorder)
+        code, payload = invoke(
+            tmp_path, "install", "--music-dir", str(tmp_path / "m"), capsys=capsys, machine=host
+        )
+        assert not recorder.ran("systemctl"), recorder.transcript()
+        assert (tmp_path / "etc/systemd/system/encore.service").is_file(), (
+            "the unit file is still written — the rehearsal is still an appliance"
+        )
+        assert "systemctl" in json.dumps(payload["notes"]), payload["notes"]
+        assert code in (EXIT_OK, EXIT_VERIFICATION), payload
 
     def test_no_service_means_no_systemd_at_all(self, tmp_path: Path, capsys: Any) -> None:
         recorder = RecordingRunner(effects=synced(), real=_REAL_COMMANDS)

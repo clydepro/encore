@@ -158,15 +158,25 @@ def _platform(state: ApplianceState) -> Check:
 
 
 def _service_manager(state: ApplianceState, options: Options) -> Check:
+    """13.6's prerequisite, and only that: does this machine have a service manager?
+
+    The unit's own state is a different question, asked by `_service`, and the first install on a
+    healthy Pi answers "no unit" and "systemd is running" in the same instant. Conflating them is
+    #43: the check decided a machine was not installable because the thing `install` was there to
+    do had not been done yet, and its advice — `--no-service` — was the one answer that leaves an
+    appliance that never comes back after a power cut.
+    """
+
     if not options.service:
         return Check(name="service manager", verdict=Verdict.OK, detail="not needed (--no-service)")
-    if state.service.installed or state.service.active or not state.service.detail:
+    if state.systemd_running:
         return Check(name="service manager", verdict=Verdict.OK, detail="systemd is running")
     return Check(
         name="service manager",
         verdict=Verdict.FAIL,
-        detail=state.service.detail,
-        fix="Install with --no-service and start the server by hand (SAPRS 13.2).",
+        detail=state.service.detail or "systemd is not running on this machine",
+        fix="Install with --no-service and start the server by hand (SAPRS 13.2): "
+        "scripts/run-server.sh, or set the Environment= lines in the unit file.",
     )
 
 
@@ -413,6 +423,18 @@ def _service(state: ApplianceState, options: Options) -> tuple[Check, ...]:
     if not options.service:
         return ()
     service = state.service
+    if not state.systemd_running:
+        # The three lines below are a machine where the unit is missing; this is a machine where
+        # there is nowhere for a unit to be, and saying "run the installer" about a container with
+        # no PID 1 to register with is the circular advice #43's report was.
+        return (
+            Check(
+                name="unit",
+                verdict=Verdict.WARN,
+                detail="there is no systemd here to install a unit into",
+                fix="Install with --no-service (SAPRS 13.2); the unit file is still written.",
+            ),
+        )
     return (
         Check(
             name="unit",

@@ -429,14 +429,17 @@ def test_a_generated_unit_names_the_venv_it_built_not_the_one_it_ran_from(tmp_pa
 # -- upgrade ----------------------------------------------------------------
 
 
-def test_an_upgrade_stops_the_service_before_it_changes_anything(tmp_path: Path) -> None:
+def test_an_upgrade_stops_the_service_before_it_changes_anything() -> None:
     """13.9 step 1, first. Replacing files a running process has open is how an upgrade ends up
-    with half of one release and half of another loaded in the same interpreter."""
+    with half of one release and half of another loaded in the same interpreter.
 
-    state = installed(
-        stage(tmp_path), service=ServiceState(installed=True, enabled=True, active=True)
-    )
-    plan = upgrade_plan(options(stage(tmp_path), service=True), state, EncoreConfig())
+    Production layout, not a staged one: stopping a service is a host effect, and a rehearsal is
+    forbidden from doing it (#44) — so a test written against `stage(tmp_path)` would be asserting
+    an action the planner no longer emits.
+    """
+
+    state = installed(production, service=ServiceState(installed=True, enabled=True, active=True))
+    plan = upgrade_plan(options(production, service=True), state, EncoreConfig())
     assert action_kinds(plan.actions)[0] == StopService.__name__
 
 
@@ -449,11 +452,11 @@ def test_an_upgrade_backs_up_runtime_before_the_migrations_run(tmp_path: Path) -
     """
 
     state = installed(
-        stage(tmp_path),
+        production,
         service=ServiceState(installed=True, enabled=True, active=True),
-        present={**{final: True for final, _ in stage(tmp_path).removals}, RUNTIME_DB: True},
+        present={**{final: True for final, _ in production.removals}, RUNTIME_DB: True},
     )
-    plan = upgrade_plan(options(stage(tmp_path), service=True), state, EncoreConfig())
+    plan = upgrade_plan(options(production, service=True), state, EncoreConfig())
     backups = [a for a in plan.actions if isinstance(a, BackupRuntimeDatabase)]
     assert len(backups) == 1
     assert backups[0].destination.name == "runtime.db.pre-upgrade"
@@ -471,26 +474,24 @@ def test_an_upgrade_of_a_box_that_never_booted_has_nothing_to_back_up(tmp_path: 
     assert not [a for a in plan.actions if isinstance(a, BackupRuntimeDatabase)]
 
 
-def test_an_uptodate_upgrade_is_a_restart_and_nothing_else(tmp_path: Path) -> None:
+def test_an_uptodate_upgrade_is_a_restart_and_nothing_else() -> None:
     """`start` on a running service would be a no-op that reports success while the old code
 
     keeps playing — so a running, unchanged appliance gets stopped and restarted instead."""
 
     plan = upgrade_plan(
-        options(stage(tmp_path), service=True),
-        installed(stage(tmp_path), present={RUNTIME_DB: False}),
+        options(production, service=True),
+        installed(production, present={RUNTIME_DB: False}),
         EncoreConfig(),
     )
     assert action_kinds(plan.actions) == [StopService.__name__, RestartService.__name__]
 
 
-def test_an_upgrade_reenables_a_service_that_fell_out_of_the_boot_order(tmp_path: Path) -> None:
+def test_an_upgrade_reenables_a_service_that_fell_out_of_the_boot_order() -> None:
     """`systemctl disable` during an experiment is invisible until the power comes back on."""
 
-    state = installed(
-        stage(tmp_path), service=ServiceState(installed=True, enabled=False, active=False)
-    )
-    plan = upgrade_plan(options(stage(tmp_path), service=True), state, EncoreConfig())
+    state = installed(production, service=ServiceState(installed=True, enabled=False, active=False))
+    plan = upgrade_plan(options(production, service=True), state, EncoreConfig())
     assert EnableService.__name__ in action_kinds(plan.actions)
 
 
@@ -502,8 +503,8 @@ def test_an_uptodate_upgrade_moves_no_files(tmp_path: Path) -> None:
     """
 
     plan = upgrade_plan(
-        options(stage(tmp_path), service=True),
-        installed(stage(tmp_path)),
+        options(production, service=True),
+        installed(production),
         EncoreConfig(),
     )
     assert not [
@@ -552,13 +553,11 @@ def test_removal_says_what_it_declined_to_delete(tmp_path: Path) -> None:
     assert "userdel" in joined, "the service account is left alone and must be reported"
 
 
-def test_removal_stops_and_disables_before_deleting_the_unit(tmp_path: Path) -> None:
+def test_removal_stops_and_disables_before_deleting_the_unit() -> None:
     """Deleting the unit file from under a running service leaves a process no tool can stop."""
 
-    state = installed(
-        stage(tmp_path), service=ServiceState(installed=True, enabled=True, active=True)
-    )
-    plan = remove_plan(options(stage(tmp_path), service=True), state)
+    state = installed(production, service=ServiceState(installed=True, enabled=True, active=True))
+    plan = remove_plan(options(production, service=True), state)
     order = action_kinds(plan.actions)
     assert order[0] == StopService.__name__
     assert order[1] == DisableService.__name__
@@ -571,10 +570,79 @@ def test_removal_on_an_absent_machine_plans_no_deletions(tmp_path: Path) -> None
     assert not [a for a in plan.actions if isinstance(a, DeletePath)]
 
 
+# -- the host's service manager, and a rehearsal's lack of one (SAPRS 13.6, #44) ----
+
+
+def test_a_rehearsal_asks_this_machine_to_do_nothing(tmp_path: Path) -> None:
+    """`systemctl` talks to PID 1, and a prefix is not a machine.
+
+    Before #44 this planned `daemon-reload`, `enable encore` and `start encore` — three host
+    effects in the command whose entire purpose is to have none, and the reason is visible in the
+    file next door: the same plan already declines to run `useradd` for the same reason. The unit
+    file is still written, still staged, still checked by the e2e suite that boots it; what is
+    withdrawn is the ask, and it is reported rather than skipped.
+    """
+
+    layout = stage(tmp_path)
+    plan = install_plan(options(layout, service=True), empty(layout), EncoreConfig())
+    asked = [a for a in plan.actions if isinstance(a, DaemonReload | EnableService | StartService)]
+    assert not asked, [a.detail for a in asked]
+    assert any("systemctl" in note for note in plan.notes), plan.notes
+    units = [
+        a for a in plan.actions if isinstance(a, EnsureFile) and a.path.name == "encore.service"
+    ]
+    assert units, "the rehearsal still produces a whole appliance"
+    assert units[0].path == layout.staged("/etc/systemd/system/encore.service")
+
+
+def test_a_rehearsal_does_not_stop_a_service_it_did_not_start(tmp_path: Path) -> None:
+    """The three commands that reach for the host, answered the same way.
+
+    `upgrade` and `remove` are the sharp ones: on a machine where Encore is installed and playing,
+    a rehearsal used to silence the party. Asserted together because they are three call sites of
+    one rule, and a rule applied in two of three places is the bug.
+    """
+
+    layout = stage(tmp_path)
+    running = installed(
+        layout,
+        service=ServiceState(installed=True, enabled=True, active=True),
+        present={**{final: True for final, _ in layout.removals}, RUNTIME_DB: True},
+    )
+    plans = {
+        "upgrade": upgrade_plan(
+            options(layout, command=Command.UPGRADE, service=True), running, EncoreConfig()
+        ),
+        "remove": remove_plan(options(layout, command=Command.REMOVE, service=True), running),
+        "reset": reset_credential_plan(
+            options(layout, command=Command.RESET_CREDENTIAL, service=True), running
+        ),
+    }
+    for name, plan in plans.items():
+        touched = [a for a in plan.actions if isinstance(a, StopService | StartService)]
+        assert not touched, f"{name}: {[a.detail for a in touched]}"
+        assert any("systemctl" in note for note in plan.notes), f"{name}: {plan.notes}"
+
+
+def test_the_real_install_still_registers_the_service() -> None:
+    """The other half of #44, because the easy way to fix a rehearsal is to break the appliance.
+
+    A machine that runs this command as root, un-staged, must still get its unit registered: 13.6's
+    "start at boot" is the requirement a suppressed `systemctl enable` would fail silently.
+    """
+
+    plan = install_plan(options(production, service=True), empty(production), EncoreConfig())
+    assert action_kinds(plan.actions)[-3:] == [
+        DaemonReload.__name__,
+        EnableService.__name__,
+        StartService.__name__,
+    ]
+
+
 # -- reset-credential --------------------------------------------------------
 
 
-def test_reset_credential_stops_the_service_before_touching_the_database(tmp_path: Path) -> None:
+def test_reset_credential_stops_the_service_before_touching_the_database() -> None:
     """A row deleted from a live WAL database is a corruption, not a password reset.
 
     This is ADR-013's "approved maintenance" in the literal sense: the appliance is stopped, the
@@ -583,11 +651,11 @@ def test_reset_credential_stops_the_service_before_touching_the_database(tmp_pat
     """
 
     state = installed(
-        stage(tmp_path),
+        production,
         service=ServiceState(installed=True, enabled=True, active=True),
-        present={**{final: True for final, _ in stage(tmp_path).removals}, RUNTIME_DB: True},
+        present={**{final: True for final, _ in production.removals}, RUNTIME_DB: True},
     )
-    plan = reset_credential_plan(options(stage(tmp_path), service=True), state)
+    plan = reset_credential_plan(options(production, service=True), state)
     order = action_kinds(plan.actions)
     assert order[0] == StopService.__name__
     assert order[1] == "ForgetCredential"

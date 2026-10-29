@@ -26,6 +26,7 @@ them afterwards.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from apps.installer.config_file import Decision, decide
@@ -48,6 +49,7 @@ __all__ = [
     "InstallApplication",
     "KeepExistingConfig",
     "Plan",
+    "Planning",
     "PreserveConfig",
     "RepairPaths",
     "RestartService",
@@ -268,6 +270,22 @@ class ForgetCredential(Action):
 # -- plans ---------------------------------------------------------------
 
 
+class Planning(StrEnum):
+    """Why a plan holds the actions it holds.
+
+    `actions` alone cannot say it, because an empty list means three different things: the machine
+    already matches the request (13.7's idempotence, which is a result), this command asks questions
+    rather than making changes (`verify`), or the run never got as far as looking (a prerequisite
+    failed). The report printed all three as the first of those sentences, which is how #43's
+    output told an operator their machine was already installed and, four lines later, that a
+    prerequisite was unmet.
+    """
+
+    PLANNED = "planned"
+    NOT_ASKED = "not-asked"
+    BLOCKED = "blocked"
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Plan:
     """A complete answer to "what will you do?".
@@ -275,14 +293,18 @@ class Plan:
     Attributes:
         command: What was asked for.
         actions: In execution order. Empty means the machine already matches the request,
-            which is a result rather than an absence of one.
+            which is a result rather than an absence of one — unless `planning` says otherwise.
         notes: Anything the report should say that is not an action — a preserved
             configuration, a group that does not exist, a rollback copy that will be made.
+        planning: Which of the three kinds of answer this is. Defaulted, because a plan built by
+            the planner is `PLANNED` by definition; it is `main.py`'s two early exits that have to
+            say which kind of nothing they are reporting.
     """
 
     command: Command
     actions: tuple[Action, ...] = ()
     notes: tuple[str, ...] = ()
+    planning: Planning = Planning.PLANNED
 
     @property
     def is_empty(self) -> bool:
@@ -295,6 +317,10 @@ class Plan:
         that says "eleven actions performed" without an order is a report nobody can check.
         """
 
+        if self.planning is Planning.BLOCKED:
+            return "no plan — a prerequisite is unmet, so the machine was not examined (13.7)"
+        if self.planning is Planning.NOT_ASKED:
+            return "no plan — this command answers questions rather than changing the machine"
         if not self.actions:
             return "nothing to do — the machine already matches this request (SAPRS 13.7)"
         return "\n".join(
@@ -328,6 +354,7 @@ def plan_for(
         return reset_credential_plan(options, state)
     return Plan(
         command=options.command,
+        planning=Planning.NOT_ASKED,
         notes=(f"{options.command.value} asks questions; it does not act",),
     )
 
@@ -377,12 +404,14 @@ def install_plan(
     written = _file_actions(layout, state, options, config, notes=notes, requested=requested)
     actions.extend(written)
 
-    if options.service:
+    if not options.service:
+        notes.append("No systemd integration (--no-service). Start it with scripts/run-server.sh.")
+    elif registers_host_service(options):
         actions.extend(
             _service_actions(state, unit_changed=_touched(written, layout.staged(layout.unit_file)))
         )
     else:
-        notes.append("No systemd integration (--no-service). Start it with scripts/run-server.sh.")
+        notes.append(host_service_note(layout))
 
     return Plan(command=options.command, actions=tuple(actions), notes=tuple(notes))
 
@@ -408,7 +437,7 @@ def upgrade_plan(
     actions: list[Action] = []
     notes: list[str] = []
 
-    if state.service.active:
+    if state.service.active and registers_host_service(options):
         actions.append(StopService(service="encore", detail="stop Encore (SAPRS 13.9 step 1)"))
 
     application = layout.staged(layout.application)
@@ -436,7 +465,9 @@ def upgrade_plan(
     written = _file_actions(layout, state, options, config, notes=notes, requested=requested)
     actions.extend(written)
 
-    if options.service:
+    if not options.service:
+        pass
+    elif registers_host_service(options):
         actions.extend(
             _service_actions(
                 state,
@@ -444,6 +475,8 @@ def upgrade_plan(
                 restart=state.service.active,
             )
         )
+    else:
+        notes.append(host_service_note(layout))
 
     return Plan(command=options.command, actions=tuple(actions), notes=tuple(notes))
 
@@ -469,10 +502,13 @@ def remove_plan(options: Options, state: ApplianceState) -> Plan:
     actions: list[Action] = []
     notes: list[str] = []
 
-    if options.service and state.service.active:
-        actions.append(StopService(service="encore", detail="stop the appliance"))
-    if options.service and state.service.installed:
-        actions.append(DisableService(service="encore", detail="remove it from the boot order"))
+    if registers_host_service(options):
+        if state.service.active:
+            actions.append(StopService(service="encore", detail="stop the appliance"))
+        if state.service.installed:
+            actions.append(DisableService(service="encore", detail="remove it from the boot order"))
+    elif options.service and (state.service.active or state.service.installed):
+        notes.append(host_service_note(layout, appliance="systemctl disable --now encore"))
 
     kept: set[str] = set()
     for final, scope in layout.removals:
@@ -521,26 +557,32 @@ def reset_credential_plan(options: Options, state: ApplianceState) -> Plan:
             notes=(f"{database} does not exist; there is no credential to forget.",),
         )
     actions: list[Action] = []
+    notes = [
+        "The next visit to /admin asks for a new password. Sessions live in memory, so a "
+        "restart ends any that were open when the row was cleared (ADR-013).",
+    ]
+    # The stop is here because the appliance owns the database this writes to. In a rehearsal the
+    # appliance owns the *host's* database, which is not the file being touched, so stopping it is a
+    # host effect bought for nothing — #44 in its most musical form.
+    host_service = state.service.active and registers_host_service(options)
     if state.service.active:
-        actions.append(
-            StopService(service="encore", detail="stop the appliance, which owns the database")
-        )
+        if host_service:
+            actions.append(
+                StopService(service="encore", detail="stop the appliance, which owns the database")
+            )
+        elif options.service:
+            notes.append(
+                host_service_note(layout, appliance="systemctl stop encore, then start it again")
+            )
     actions.append(
         ForgetCredential(
             database=database,
             detail=f"clear the administrator row in {database} (SAPRS 12.6, ADR-013)",
         )
     )
-    if options.service and state.service.active:
+    if options.service and host_service:
         actions.append(StartService(service="encore", detail="start it again"))
-    return Plan(
-        command=options.command,
-        actions=tuple(actions),
-        notes=(
-            "The next visit to /admin asks for a new password. Sessions live in memory, so a "
-            "restart ends any that were open when the row was cleared (ADR-013).",
-        ),
-    )
+    return Plan(command=options.command, actions=tuple(actions), notes=tuple(notes))
 
 
 # -- shared steps --------------------------------------------------------
@@ -764,10 +806,48 @@ def _config_action(
     ]
 
 
+#: What the appliance itself runs to bring its unit up. A constant because install and upgrade
+#: quote the same sentence and `remove` quotes its mirror.
+REGISTRATION = "systemctl daemon-reload && systemctl enable --now encore"
+
+
+def registers_host_service(options: Options) -> bool:
+    """Whether this run may talk to this machine's service manager.
+
+    One function, because three commands do it and #44 is what happens when the rule is written per
+    call site: `systemctl` asks PID 1 about `encore.service`, and a unit file staged under a prefix
+    is not what it will find. A rehearsal's `daemon-reload`, `enable`, `start`, `stop` and `disable`
+    therefore change nothing about the tree being rehearsed and everything about the host running it
+    — on a machine where Encore is installed and playing, `remove --root /tmp/x --yes` stops the
+    appliance. Staging already declines to run `useradd` for this same reason, and `next_steps`
+    already refuses to print `systemctl start encore` for a rehearsal; the plan was the half that
+    had not been told.
+    """
+
+    return options.service and not options.staged
+
+
+def host_service_note(layout: Layout, *, appliance: str = REGISTRATION) -> str:
+    """The sentence that replaces those actions, so a rehearsal does not skip a step in silence.
+
+    `appliance` is the command the machine that *is* the appliance will run, which differs between
+    installing it and removing it; the reason for the rehearsal to say anything at all is that a
+    skipped step nobody mentions is how 13.6 becomes a silent flag.
+    """
+
+    return (
+        "The host's service manager was not asked to do anything: `systemctl` talks to this "
+        f"machine, and a rehearsal rooted at {layout.root} is not this machine. On the appliance: "
+        f"{appliance}."
+    )
+
+
 def _service_actions(
     state: ApplianceState, *, unit_changed: bool, restart: bool = False
 ) -> list[Action]:
     """Tell, enable, start — and none of them when nothing changed.
+
+    Every caller is behind `registers_host_service`, which is why a rehearsal never reaches here.
 
     `restart` is the upgrade's answer to a service that is already running: `start` would be a
     no-op, and a no-op that leaves the old code loaded while the report says "started" is how

@@ -57,6 +57,9 @@ def machine(layout: Layout, **values: Any) -> ApplianceState:
         "layout": layout,
         "os_release": OsRelease(id="raspbian", pretty_name="Raspberry Pi OS (12)"),
         "service": ServiceState(installed=True, enabled=True, active=False),
+        # Stated, not defaulted: #43 was a check that inferred this fact from the one above it, so
+        # a fixture that leaves it to a dataclass default cannot describe the machine that broke.
+        "systemd_running": True,
         "binaries": {"mpv": MPV, "uv": UV},
         "user_exists": account is not None,
         "service_user": account,
@@ -283,9 +286,48 @@ def test_raspbian_inherits_debian(tmp_path: Path) -> None:
 
 def test_no_systemd_fails_only_when_the_unit_was_asked_for(tmp_path: Path) -> None:
     layout = layout_of(tmp_path)
-    absent = machine(layout, service=ServiceState(detail="systemd is not running on this machine"))
+    absent = machine(layout, systemd_running=False)
     assert verdict_of(assess_box(layout, absent, service=True), "service manager") is Verdict.FAIL
     assert verdict_of(assess_box(layout, absent, service=False), "service manager") is Verdict.OK
+
+
+def test_systemd_with_no_unit_yet_is_a_result_not_a_prerequisite(tmp_path: Path) -> None:
+    """#43, in the one line that caused it: a first install on a machine that has systemd.
+
+    `systemctl is-active encore` answers `inactive` and `systemctl cat` finds no file, which is what
+    every healthy Pi looks like one minute before its first install. The old check read that pair as
+    "there is no service manager here" and refused to run, so the assertion worth keeping is that
+    the manager's state and the unit's state are different facts, asked separately.
+    """
+
+    layout = layout_of(tmp_path)
+    first_install = machine(
+        layout,
+        service=ServiceState(detail="inactive"),
+        systemd_running=True,
+        user_exists=False,
+        service_user=None,
+    )
+    checks = assess_box(layout, first_install, service=True)
+    assert verdict_of(checks, "service manager") is Verdict.OK
+    assert not blocked(checks), [check.line() for check in checks if check.blocking]
+    # The unit's own absence is still reported, as a warning: `verify` needs the line, and
+    # `install` needs to not mistake it for a machine that cannot host a unit at all.
+    assert verdict_of(checks, "unit") is Verdict.WARN
+
+
+def test_a_machine_without_systemd_is_told_to_decline_the_step_not_to_retry_it(
+    tmp_path: Path,
+) -> None:
+    """A fix has to be an act, not the command that just failed.
+
+    On a container the old text was `unit: not installed → sudo encore-install install`, which is
+    #43's circular sentence moved down one row of the same table.
+    """
+
+    layout = layout_of(tmp_path)
+    checks = assess_box(layout, machine(layout, systemd_running=False), service=True)
+    assert "--no-service" in finding(checks, "unit")
 
 
 def test_a_missing_mpv_fails_and_names_the_package(tmp_path: Path) -> None:
