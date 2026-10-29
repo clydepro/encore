@@ -83,9 +83,13 @@ check rather than by a traceback:
 - **The port is taken.** `verify` names the port and the address. `--port` on the
   command line changes what gets written; a `config.yaml` that already exists wins
   and the run will tell you the setting it did not apply.
-- **`mpv` or `uv` is missing.** `mpv` is not optional — an appliance that cannot
-  play is a web server with a music directory. `apt install mpv python3-uv` and
-  re-run; the installer is idempotent, so re-running is the recovery.
+- **`mpv` or `uv` is missing.** Usually. Sometimes what is missing is the
+  directory they are in — see
+  [the installer says uv is missing, and it isn't](#the-installer-says-uv-is-missing-and-it-isnt),
+  which is the first question to ask because it costs one line instead of a
+  package install. `mpv` is not optional: an appliance that cannot play is a web
+  server with a music directory. `apt install mpv` and re-run; the installer is
+  idempotent, so re-running is the recovery.
 - **The music directory is not there.** A warning, not a failure. The Server never
   scans a directory (ADR-010); only the Builder reads one, so an appliance with no
   mounted library is correctly installed and empty.
@@ -94,6 +98,53 @@ An install that stopped halfway is the case the whole design is built for. Re-ru
 `install`: it observes the machine, plans only what is missing, and says so. If
 somehow you would rather see that plan first, `--dry-run` prints it and changes
 nothing.
+
+### The installer says uv is missing, and it isn't
+
+`uv` installed with the astral script goes into `~/.local/bin`. The install
+command runs under `sudo`, and `sudo` replaces `PATH` with its `secure_path` —
+`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin` — which contains
+no home directory at all. A correctly installed `uv` is therefore invisible to a
+correctly invoked installer. This is not a rare configuration; it is what the two
+sets of instructions in this repository say to do, in that order (#38).
+
+The installer searches your `PATH`, then `~/.local/bin`, `~/bin` and
+`~/.cargo/bin` for both your own home and the home of `SUDO_USER` — the account
+that typed `sudo`. A `--root` rehearsal that still cannot find it is a machine
+where `uv` is genuinely absent:
+
+```bash
+sudo encore-install install --root /tmp/rehearsal --no-service --dry-run \
+  | grep binaries
+#   ok    binaries: mpv at /usr/bin/mpv, uv at /home/you/.local/bin/uv
+```
+
+Every failure line prints the directories it searched, so the answer to "is this
+machine broken or is my PATH short" is in the report rather than in an hour of
+`echo $PATH`. If you need to name the location yourself:
+
+```bash
+sudo PATH="$PATH" ./scripts/encore-install install     # pass your PATH through
+```
+
+That last form is a workaround, not the intended path; if it is the only thing
+that works on your machine, the search list above is missing a directory and that
+is worth an issue.
+
+### An install with `--root` leaves ownership unset
+
+A line like this in a rehearsal's report is not a failure, and the install exits 0:
+
+```text
+ownership not set (no 'encore' account in a staged install)
+```
+
+`--root` rehearses an install on a machine it must not change, so the plan skips
+`useradd` (SAPRS 13.7). The ownership step then has no account to name, and
+reporting that as a machine fault would make the rehearsal fail for describing
+itself (#41). On a real appliance the account is created in the same run and the
+`chown` succeeds; if it *fails* there, that is the serious case — the service
+cannot read its own configuration — and the install stops rather than continuing.
 
 ### The configuration was not applied
 

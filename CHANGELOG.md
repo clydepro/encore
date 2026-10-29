@@ -505,6 +505,31 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Fixed
 
+- `encore-install` reported that `uv` was missing on a machine that had it (#38).
+  The astral installer writes `~/.local/bin`; `sudo` replaces `PATH` with its
+  `secure_path`, which names no home directory; `RealMachine.which` searched only
+  `PATH`, so a correctly installed tool was invisible to a correctly invoked
+  installer — the two instructions in this repository, followed in order, produce
+  this. One function now owns where a host binary can be (`search_path`: your
+  `PATH`, then `~/.local/bin`, `~/bin` and `~/.cargo/bin` for both `HOME` and
+  `SUDO_USER`'s home), and both the check and the child process ask it, because a
+  check that searches one list while the command resolves through another is how
+  the next version of this bug becomes a 127 in the middle of a plan. The failure
+  line prints the directories it searched. `scripts/encore-install` — bash,
+  before any Python can run — keeps its own three-line copy of the same list, with
+  a comment naming the owner.
+- A rehearsal run as root aborted at the first action (#41). `--root` skips
+  `useradd`, so `chown root:encore` names an account the plan deliberately never
+  created, and `Executor._ownership` judged a failed `chown` by `os.geteuid()`
+  alone: right about the process, wrong about the machine. The decision now comes
+  from the observed state (`ApplianceState.root` and `.user_exists`), which is how
+  that module was meant to work, and a rehearsal reports ownership as left unset and
+  exits 0. On a real appliance, where the account exists, a failed `chown` is still
+  fatal — fixing this must not mean a machine that cannot read its own
+  configuration shrugs. Neither half was covered before: the lifecycle suite never
+  ran as root, and the recorder answered every `chown` with success. It now refuses
+  one naming an account the machine does not have, which turned 19 tests red and is
+  the reason they are worth more afterwards.
 - The built wheel contained no server. `[tool.setuptools] packages` listed `encore`
   and `apps.builder` and omitted `apps.server` and the two
   `encore.repositories.*` subpackages, so an installed appliance had nothing to
