@@ -517,7 +517,9 @@ The release process moves the section into a dated, bracketed version heading.
   the next version of this bug becomes a 127 in the middle of a plan. The failure
   line prints the directories it searched. `scripts/encore-install` — bash,
   before any Python can run — keeps its own three-line copy of the same list, with
-  a comment naming the owner.
+  a comment naming the owner. Getting Started now says where that install
+  puts `uv`, because the fault lived between two documents rather than inside
+  either one.
 - A rehearsal run as root aborted at the first action (#41). `--root` skips
   `useradd`, so `chown root:encore` names an account the plan deliberately never
   created, and `Executor._ownership` judged a failed `chown` by `os.geteuid()`
