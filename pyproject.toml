@@ -201,6 +201,12 @@ ignore = [
     # module, and the point of the test is that nothing else is imported (AIG 4).
     "S603",
 ]
+"tests/regression/test_issue_38_installer_path.py" = [
+    # The child process is `scripts/encore-install`, this repository's own wrapper, invoked with
+    # an argv built from `tmp_path` and no shell — and running it as a subprocess is the test.
+    # #38 lives in how bash finds uv, which no in-process assertion can reach.
+    "S603",
+]
 "apps/builder/**" = [
     "PLC0415", # an offline build imports its optional collaborators where they are used
 ]

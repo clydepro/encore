@@ -195,12 +195,28 @@ class Executor:
         layout: For the deletion scope check, which needs to know where the appliance is.
         dry_run: Record every action as skipped and touch nothing. Distinct from an empty plan:
             `--dry-run` describes what would have happened to a machine that is otherwise real.
+        privileged: Whether this process can change ownership at all — `ApplianceState.root`,
+            observed rather than asked of the OS, so the executor has no side channel.
+        account_exists: Whether the service account the ownership names
+            (`ApplianceState.user_exists`). A rehearsal plans no `useradd`, so on a rehearsal this
+            is False, and a `chown` to a group that does not exist is not a machine that will not
+            let the service read its own configuration — it is the rehearsal working (#41).
     """
 
-    def __init__(self, runner: CommandRunner, *, layout: Layout, dry_run: bool = False) -> None:
+    def __init__(
+        self,
+        runner: CommandRunner,
+        *,
+        layout: Layout,
+        dry_run: bool = False,
+        privileged: bool = True,
+        account_exists: bool = True,
+    ) -> None:
         self._runner = runner
         self._layout = layout
         self._dry_run = dry_run
+        self._privileged = privileged
+        self._account_exists = account_exists
 
     def apply(self, actions: Sequence[Action]) -> Execution:
         """Perform `actions` in order, stopping at the first failure."""
@@ -421,24 +437,39 @@ class Executor:
     def _ownership(self, path: Path, *, owner: str, group: str) -> tuple[Status, str]:
         """Set who owns a path, and decide whether failing to do so is fatal.
 
-        The split is the whole reason a rehearsal can rehearse. `chown` needs root; `mkdir` and
-        `chmod` do not, so a non-root run against a staging root gets a real filesystem with
-        real modes and a note saying the ownership is still the operator's. Run as root, the same
-        failure is a machine that will not let the service read its own configuration, and
-        nothing after it is worth attempting.
+        The split is the whole reason a rehearsal can rehearse. `chown` needs privileges `mkdir`
+        and `chmod` do not, so a run that cannot set ownership gets a real filesystem with real
+        modes and a note saying the ownership is still the operator's. Where the same failure *is*
+        a machine that will not let the service read its own configuration, nothing after it is
+        worth attempting.
+
+        Two questions decide which of those this is, and the first draft asked only one of them
+        (#41). "Am I root?" is not "can this ownership be set?" — that also needs the group to
+        exist, and a `--root` rehearsal run *by* root is the case where the answers differ: the
+        plan skipped `useradd`, so `chown root:encore` names an account nobody created, and
+        treating that as a fatal machine fault aborts the first action of the documented
+        verification command. Both answers come from the observed state, because this module's rule
+        is that it asks the machine nothing directly.
         """
 
         result = self._runner.run(["chown", f"{owner}:{group}", str(path)])
         if result.ok:
             return Status.DONE, ""
-        if os.geteuid() == 0:
+        if self._privileged and self._account_exists:
             return (
                 Status.FAILED,
                 f"{path}: {result.output()}\n         → sudo chown {owner}:{group} {path}",
             )
+        if not self._privileged:
+            return (
+                Status.DONE,
+                f"{path}: ownership not set (not root). On the appliance: "
+                f"chown {owner}:{group} {path}",
+            )
         return (
             Status.DONE,
-            f"{path}: ownership not set (not root). On the appliance: chown {owner}:{group} {path}",
+            f"{path}: ownership not set (no {self._layout.user!r} account in a staged install). "
+            f"On the appliance: chown {owner}:{group} {path}",
         )
 
     # -- the application and its environment -----------------------------

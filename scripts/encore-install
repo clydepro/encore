@@ -17,17 +17,51 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-if ! command -v uv >/dev/null 2>&1; then
+# Find uv. `command -v` alone is not enough and the reason is #38: the documented way to install
+# uv is the astral script, which writes `~/.local/bin`, and the documented way to run this script
+# is `sudo` — which replaces PATH with its `secure_path`. So a correctly-installed uv is invisible
+# to a correctly-invoked installer, and the message below blamed a missing tool that was there.
+#
+# The candidate list mirrors `USER_BIN_DIRS` in `apps/installer/system.py`, which owns the rule;
+# keep the two in step. This file has to resolve uv before any Python exists to ask, which is the
+# one legitimate reason for it to have a copy of anything.
+if command -v uv >/dev/null 2>&1; then
+  UV_BIN="$(command -v uv)"
+else
+  UV_BIN=""
+  # `SUDO_USER`'s home as well as `HOME`: under sudo, `HOME` is /root and uv is in the caller's.
+  for home in "${HOME:-/root}" "$(getent passwd "${SUDO_USER:-}" 2>/dev/null | cut -d: -f6)"; do
+    for dir in .local/bin bin .cargo/bin; do
+      if [[ -x "$home/$dir/uv" ]]; then
+        UV_BIN="$home/$dir/uv"
+        break 2
+      fi
+    done
+  done
+fi
+
+if [[ -z "$UV_BIN" ]]; then
   cat >&2 <<'MISSING'
-uv is required to install Encore (AIG 3), and this machine does not have it.
+uv is required to install Encore (AIG 3), and this machine does not have it where this command
+looked.
 
   curl -LsSf https://astral.sh/uv/install.sh | sh
 
 Then re-run this. `uv` is the only thing the bootstrap needs: the installer itself is in this
 repository and resolves its dependencies into /opt/encore/venv, not into your system Python.
+
+If uv is already installed: the astral installer puts it in ~/.local/bin, and `sudo` does not
+copy that onto root's PATH. Either run this as the user who installed uv (sudo keeps SUDO_USER's
+home in mind), or name the directory explicitly:
+
+  sudo PATH="$PATH" ./scripts/encore-install install
 MISSING
   exit 3  # EXIT_PREREQUISITES, the same value `apps/installer/main.py` uses
 fi
+
+# The directory that held uv goes on PATH, so the installer and everything it spawns resolve the
+# tool the same way this script did. One answer, from here to `uv sync`.
+export PATH="$PATH:$(dirname "$UV_BIN")"
 
 # The credential has exactly one route in, and it is not a flag: see ADR-015 and SAPRS 12.6. A
 # `--admin-password` would put it in `ps` output and shell history, which is a worse version of the
@@ -37,4 +71,4 @@ if [[ -n "${ENCORE_ADMIN_PASSWORD:-}" && "$(id -u)" == "0" ]]; then
   export ENCORE_ADMIN_PASSWORD
 fi
 
-exec uv run --frozen --no-dev python -m apps.installer.main "$@"
+exec "$UV_BIN" run --frozen --no-dev python -m apps.installer.main "$@"

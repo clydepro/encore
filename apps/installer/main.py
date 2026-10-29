@@ -214,7 +214,12 @@ def main(  # noqa: PLR0911 - one return per exit code
     if options.dry_run:
         return _finish(options, plan, config, checks, code=EXIT_OK)
 
-    execution = Executor(runner, layout=options.layout).apply(plan.actions)
+    execution = Executor(
+        runner,
+        layout=options.layout,
+        privileged=state.root,
+        account_exists=state.user_exists,
+    ).apply(plan.actions)
     after = _assess(options, config, _observe(host, options, config, http=http))
     code = EXIT_OK if execution.succeeded else EXIT_PREREQUISITES
     if code is EXIT_OK and options.command in {Command.INSTALL, Command.UPGRADE}:

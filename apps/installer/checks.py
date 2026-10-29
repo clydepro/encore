@@ -175,23 +175,29 @@ def _binaries(state: ApplianceState, options: Options) -> Check:
     if not missing:
         found = ", ".join(f"{name} at {path}" for name, path in sorted(state.binaries.items()))
         return Check(name="binaries", verdict=Verdict.OK, detail=found)
+    # The detail names the directories searched, which is the difference between an operator
+    # installing a package and an operator wasting an evening on one they already have. #38 was
+    # this message's fault as much as the resolution's: "not found", on a machine where uv was
+    # two directories away and root had never been told about them.
+    detail = f"not found on this machine: {', '.join(missing)}"
+    if state.search_path:
+        detail = f"{detail} (looked in {state.search_path})"
     # A missing binary stops an install, and stops nothing else. `verify` is asked about an
     # appliance that is already running: an absent `uv` there is a note about the next upgrade,
     # and failing a healthy party over it would be the checker insulting the checked.
     if options.dry_run or options.command is Command.VERIFY:
-        return Check(
-            name="binaries",
-            verdict=Verdict.WARN,
-            detail=f"not found on this machine: {', '.join(missing)}",
-        )
+        return Check(name="binaries", verdict=Verdict.WARN, detail=detail)
     fixes = {
         "mpv": "sudo apt-get install -y mpv  (SAPRS 7.7, ADR-005)",
-        "uv": "curl -LsSf https://astral.sh/uv/install.sh | sh  (AIG 3)",
+        # Installs into `~/.local/bin`, which the search path covers for both the installing
+        # user and, through `SUDO_USER`, the one who ran sudo (#38).
+        "uv": "curl -LsSf https://astral.sh/uv/install.sh | sh  (AIG 3), as the user who will "
+        "run the installer — then sudo -E, or add that ~/.local/bin to root's PATH",
     }
     return Check(
         name="binaries",
         verdict=Verdict.FAIL,
-        detail=f"not found: {', '.join(missing)}",
+        detail=detail,
         fix=fixes.get(missing[0], ""),
     )
 
