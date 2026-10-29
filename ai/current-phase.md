@@ -2,9 +2,12 @@
 
 **Phase 6 — the installer (AIG step 15): merged** as
 [#33](https://github.com/clydepro/encore/pull/33) for issue
-[#32](https://github.com/clydepro/encore/issues/32), then fixed twice by its own documented command
-([#38](https://github.com/clydepro/encore/issues/38),
-[#41](https://github.com/clydepro/encore/issues/41) — see "What running it as root found" below).
+[#32](https://github.com/clydepro/encore/issues/32), then fixed four times by its own documented
+command ([#38](https://github.com/clydepro/encore/issues/38),
+[#41](https://github.com/clydepro/encore/issues/41),
+[#43](https://github.com/clydepro/encore/issues/43),
+[#44](https://github.com/clydepro/encore/issues/44) — see "What running it as root found" and
+"What running it on a machine with systemd found" below).
 **Phase 7 — the dependency-alert chore — merged as
 [#40](https://github.com/clydepro/encore/pull/40), closing
 [#39](https://github.com/clydepro/encore/issues/39).** Phases 1–5 are merged:
@@ -29,6 +32,7 @@ branch was named for it, then the code was written. The lesson from phase 5's ba
 | Upgrade with a rollback copy | `plan.upgrade_plan`, `execute.BackupRuntimeDatabase` (SQLite's backup API, not `cp`) | SAPRS 13.9 |
 | Removal in three scopes | `layout.removals`, `plan.remove_plan`, `--purge-config`, `--purge-data` | SAPRS 13.10 |
 | Acceptance list as a command | `checks.assess`, `encore-install verify`, exit code 4 | SAPRS 13.11 |
+| A rehearsal that rehearses | `plan.registers_host_service`, `systemd_running`, `Plan.planning`; `test_issue_43_service_manager.py` (8) | SAPRS 13.7, #41, #43, #44 |
 | The administrator credential | `AdminService.seed()` from `ENCORE_ADMIN_PASSWORD`, on first boot, on the appliance thread | SAPRS 12.6, ADR-013, ADR-015 |
 | QR onboarding | `utilities/qr.py`, `controllers/qr.py`, `templates/pages/qr.html` — `GET /qr`, `GET /qr.svg` | SAPRS 9.11, ADR-015 |
 | The address, owned by one property | `ServerConfig.guest_url`, read by `/qr`, `/api/v1/info`, the footer and the installer's report | SAPRS 1.4, 12.2 |
@@ -106,6 +110,43 @@ The first two are artifacts of the boundary between applications. That is worth 
 for whoever picks up step 16: **a bug that lives between two packages is invisible to the test
 suite of either one**, and the only cure is a test that crosses.
 
+## What running it on a machine with systemd found (#43, #44)
+
+The first `sudo encore-install install` — not staged, not `--no-service`, on a host with systemd as
+PID 1 — exited 3 with `FAIL service manager: inactive`, above a report whose opening line was
+`nothing to do`. Step 15's documented command had now been run in three of its four shapes: staged,
+`--no-service`, and neither. Only the last one was the appliance.
+
+**#43 — the check answered the wrong question.** `ServiceState.detail` held both "there is no
+systemd here" and "here is what systemctl said about the unit", and `checks.py` decided the
+prerequisite by which one was non-empty. On a first install the unit's absence prints `inactive`,
+so a healthy Pi was declared unusable and the advice was `--no-service`, which is the option that
+leaves a box that never comes back after a power cut. The fact the check needed was already being
+observed inside `RealMachine.service()` (`/run/systemd/system`) and then thrown away; it is now a
+field of its own, `ApplianceState.systemd_running`, asked of the machine separately. A machine with
+no systemd still refuses, and still correctly.
+
+**#43's second half was the prose.** An empty `Plan` meant three things — 13.7's idempotence (a
+result), `verify` (never plans), and "we stopped before planning" — and the report printed all
+three as the first one. `Plan.planning` now names which, in text and as `"planning"` in `--json`.
+
+**#44 is what fixing #43 let anyone reach.** `--root` ran `systemctl daemon-reload`, `enable`,
+`start` — and in `upgrade`/`remove`, `stop` and `disable` — against the *host*, because `systemctl`
+cannot be aimed at a prefix. So a rehearsal of an upgrade silenced the appliance people were
+listening to while copying files into a directory that has nothing to do with it. Staging already
+declined to run `useradd` for exactly this reason, and `next_steps` already refused to print
+`systemctl start encore` for a rehearsal; the plan was the third copy of the rule that had not been
+told. One predicate decides it now (`plan.registers_host_service`, all four commands), and the
+rehearsal reports the command to run on the real machine instead of quietly skipping it.
+
+**The finding, for the fourth time.** #38 was an observation the fake could not make about a path,
+and #41 a command the recorder always answered yes to; #43 was a *combination* the type could not
+express (`systemd=True` implied `detail=""`, so no test could say "systemd here, and no unit yet"),
+and #44 a rule stated in two of three places. The general form: a state field that carries two facts
+lets every consumer choose which one it meant, and the double only ever builds the ones that agree.
+If two questions can disagree on a machine, they get two fields — `docs/Developer/Testing.md` has
+the sentence, and #43's regression file asserts the real `systemctl` answers rather than a fake's.
+
 ## What running it as root found (#38, #41)
 
 Step 15 merged with the installer never having run in a root shell. It has now, twice, and it failed
@@ -152,10 +193,14 @@ simulator whose guests never fail is the same trap with a bigger number in front
    with a scripted host; what no test proves is sound reaching a speaker — ALSA device names, USB
    DACs, the mpv socket under the `encore` account on a machine with a real `audio` group. The
    manual steps in `docs/Administrator-Guide.md` are the checklist; run them once on hardware
-   before calling step 15 closed. #38 and #41 were what the first attempt at that found, and there
-   will be more where those came from. Run `pytest tests/regression/test_issue_38_installer_path.py`
-   as root while you are there: it is the one file in the suite that asks the machine to be a
-   machine, and off hardware one of its five tests never runs at all.
+   before calling step 15 closed. #38, #41, #43 and #44 were what the attempts at that found — four
+   failures, all four invisible to 1500-odd tests — and there will be more where those came from.
+   On the Pi, run the four shapes, not one: `install` as root, `install --root /tmp/x` as root,
+   `install --no-service`, and `verify` after each. The second one is the #44 assertion, and it is
+   the easy one to skip: after it, `systemctl is-active encore` must answer the same thing it
+   answered before. Run `pytest tests/regression/test_issue_38_installer_path.py` as root while you
+   are there: it is the one file in the suite that asks the machine to be a machine, and off
+   hardware one of its five tests never runs at all.
 2. **Party Simulation driver (milestone 16)** — the 15,000-song corpus, hundreds of guests,
    HTTP-fronted clients. `tests/party_simulation/test_admin_in_the_room.py` added the operator to
    the shape of a party; the scale is still missing.
@@ -165,7 +210,10 @@ simulator whose guests never fail is the same trap with a bigger number in front
    in `docs/Developer/Testing.md` rather than by editing the config silently.
 4. **`--root` as a packaging convention.** Staging is DESTDIR-like and applies to every documented
    path, including `/usr/lib/tmpfiles.d`. If Encore is ever packaged for a distribution, that rule
-   wants an escape hatch, and ADR-014 says it should be an ADR rather than a flag.
+   wants an escape hatch, and ADR-014 says it should be an ADR rather than a flag. The rule now has
+   a name (`plan.registers_host_service`) and one exception's worth of evidence behind it (#44);
+   anything else that asks PID 1 to do something belongs behind that predicate too, and
+   `install --source` is the second case, for the reason 13.7's staged note already gives.
 5. **`reset-credential`'s direct SQL.** It is the installer's one write to `runtime.db`, documented
    in ADR-014's debt list. If a second runtime write is ever needed here, the shape is wrong and
    the answer is a maintenance mode of the Server, not more SQL in the installer.

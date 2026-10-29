@@ -242,8 +242,8 @@ them (`container.py` still builds config and logging only — the wiring belongs
 - Test infrastructure: fixtures, temp SQLite helpers, mock mpv, Party Simulation
   profiles + loader, a performance target registry with all five of its budgets measured rather
   than promised, an ASGI driver that can hold an SSE response open, and a synthetic media generator
-  that writes real silent MP3/FLAC containers with valid tags and embedded covers. 1512 tests in the
-  standard gate, 1564 with the slow suites.
+  that writes real silent MP3/FLAC containers with valid tags and embedded covers. 1526 tests in the
+  standard gate, 1578 with the slow suites.
 - Architecture guardrail tests and `tools/check_links.py`.
 
 ## Explicitly not implemented

@@ -77,9 +77,13 @@ check rather than by a traceback:
 - **Not root, and not staging.** The installer never needs to be root to be
   understood: `--root /tmp/rehearsal --dry-run` shows the whole plan from an
   ordinary account. Run it that way first if you are wondering what it would do.
-- **No systemd.** A container has no PID 1 to register with. That is a
-  `--no-service` install and you start the appliance by hand; it is not a skipped
-  step, and the report says which.
+- **No systemd.** A container has no PID 1 to register with, and neither does
+  WSL1. That is a `--no-service` install and you start the appliance by hand; it is
+  not a skipped step, and the report says which. Note that this is a question about
+  the *machine*: an appliance that has no `encore.service` yet is a machine waiting
+  for this command, not a prerequisite failure — see
+  [the installer says the service manager is missing, and it is there](#the-installer-says-the-service-manager-is-missing-and-it-is-there)
+  if that is what you are reading.
 - **The port is taken.** `verify` names the port and the address. `--port` on the
   command line changes what gets written; a `config.yaml` that already exists wins
   and the run will tell you the setting it did not apply.
@@ -98,6 +102,46 @@ An install that stopped halfway is the case the whole design is built for. Re-ru
 `install`: it observes the machine, plans only what is missing, and says so. If
 somehow you would rather see that plan first, `--dry-run` prints it and changes
 nothing.
+
+### The installer says the service manager is missing, and it is there
+
+```text
+FAIL  service manager: inactive
+       → Install with --no-service and start the server by hand (SAPRS 13.2).
+```
+
+On a machine whose PID 1 is systemd, that line means the installer found no
+`encore.service` — which is true, and is what you were about to ask it to create.
+Issue #43 was this sentence: the check decided the *machine* was unusable from an
+answer about the *unit*, on the first install, on the platform the specification
+names as primary. Fixed; if you are on a release that still prints it, ignore it
+and run the command without `--no-service`, or upgrade the installer. Do not work
+around it with `--no-service`, because that is the option that leaves an appliance
+that never comes back after a power cut.
+
+The same report used to open with `nothing to do — the machine already matches this
+request`, four lines above `a prerequisite is unmet`. Both sentences describe an
+empty plan, and an empty plan meant three different things: nothing to do (13.7's
+idempotence, which is a result), this command asks questions (`verify`), or nothing
+was planned because the machine failed a check first. The report now distinguishes
+them, in text and in `--json` as `"planning": "planned" | "not-asked" | "blocked"`.
+
+### A rehearsal did not register the service
+
+`--root` installs into a tree, and `systemctl` cannot be pointed at a tree — it
+asks PID 1 about `encore.service` and finds whatever the host has. So a rehearsal
+writes the unit file and asks nothing of the machine (#44), and says so:
+
+```text
+The host's service manager was not asked to do anything: on the appliance,
+systemctl daemon-reload && systemctl enable --now encore.
+```
+
+That is the rehearsal working, not a step that failed. It is the same rule that
+already stops `--root` from creating a service account: a command that changes a
+prefix must not change the machine standing under it — including `upgrade --root`,
+which used to stop a running appliance before copying files into a directory it does
+not own.
 
 ### The installer says uv is missing, and it isn't
 
