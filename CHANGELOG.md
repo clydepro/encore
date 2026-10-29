@@ -678,6 +678,19 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Security
 
+- The open Dependabot alerts, closed (#39): Pillow 12.3.0 → 13.0.0, certifi
+  2026.7.22 → 2026.10.23, and — development-only, in a contributor's `uv sync` and
+  never in `/opt/encore/venv` — virtualenv 21.14.5 → 21.15.1 and filelock
+  4.0.12 → 4.2.4. Lockfile bumps, as `.github/dependabot.yml`'s
+  `lockfile-only` strategy intends: `pillow>=10.4` in `pyproject.toml` stays a
+  statement of the minimum that works, and 13.0.0 is what resolves against it.
+  The floor is unchanged deliberately — Pillow 12 still encodes artwork
+  correctly, and raising a floor to close an alert says the older version is
+  unsafe to depend on, which is a different claim from the one GHSA makes.
+  `apps/builder/artwork.py` uses `open`, `load`, `size`, `resize`, `convert` and
+  `save`, all stable across the major boundary, and the suite asserts decoded
+  dimensions rather than bytes, so nothing here rests on a JPEG encoder holding
+  still.
 - The administrative interface, and the credential model behind it (ADR-013). One
   appliance-wide password, hashed with Argon2id through `passlib` and stored in
   `runtime.db` — never in the image, never in a template, never in a log, and the
