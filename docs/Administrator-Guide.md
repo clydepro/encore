@@ -42,13 +42,15 @@ being told, if you are packaging for a distribution, or if you do not trust a
 program you did not read, which is a reasonable position about software that
 runs as root.
 
-**What the machine needs first:** `mpv`, and `uv`. If you followed
-[Getting Started](Developer/Getting-Started.md) to install `uv`, that script puts
-it in `~/.local/bin` and `sudo` does not carry that directory into root's `PATH`.
-The installer looks in both accounts' `~/.local/bin`, `~/bin` and `~/.cargo/bin`
-as well as your `PATH`, and prints the list when it cannot find anything, so a
-"uv is missing" message tells you whether it is missing or merely somewhere root
-cannot see (#38).
+**What the machine needs first:** `mpv`, `uv`, and a running systemd. If you
+followed [Getting Started](Developer/Getting-Started.md) to install `uv`, that
+script puts it in `~/.local/bin` and `sudo` does not carry that directory into
+root's `PATH`. The installer looks in both accounts' `~/.local/bin`, `~/bin` and
+`~/.cargo/bin` as well as your `PATH`, and prints the list when it cannot find
+anything, so a "uv is missing" message tells you whether it is missing or merely
+somewhere root cannot see (#38). What it does *not* need is an already-installed
+`encore.service`: that is the thing `install` writes, and a machine with systemd and
+no unit is a first install rather than a failed prerequisite (#43).
 
 **Target:** Raspberry Pi 4 on Raspberry Pi OS 64-bit, Debian 12 or Ubuntu 24.04.
 
@@ -69,10 +71,15 @@ Flags worth knowing:
 - `--root /prefix` rehearses the whole install into a self-contained tree. Every
   rendered file names the staged paths, which means the tree is bootable, which
   is how the test suite proves an installed appliance works (`tests/e2e`). It also
-  skips `useradd`, so a rehearsal run as root reports `ownership not set (no
-  'encore' account in a staged install)` and exits 0 — that line is the rehearsal
-  describing itself, not a machine fault (#41).
-- `--no-service` skips systemd. For containers, and for the rehearsal above.
+  asks nothing of the machine: no `useradd`, and — since #44 — no `systemctl`
+  either, because `systemctl` speaks to this machine's PID 1 and a prefix is not a
+  machine. Two report lines come out of that, and both are the rehearsal
+  describing itself rather than a fault: `ownership not set (no 'encore' account
+  in a staged install)` (#41) and `the host's service manager was not asked to do
+  anything`, which prints the registration command to run on the real appliance.
+- `--no-service` skips systemd integration entirely. For a machine without it (a
+  container, WSL1) the installer refuses and says so; on such a machine this flag is
+  the decision, not a workaround.
 - `--domain jukebox.home.arpa`, `--port 8080`, `--music-dir /opt/music`,
   `--hostname jukebox`, `--log-format json|console`.
 - `--json` for a provisioning system: the plan, the results, the acceptance

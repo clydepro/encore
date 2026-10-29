@@ -212,6 +212,18 @@ exactly that command on a real one (#41). The runner now refuses a `chown` namin
 machine says is absent, and the 19 tests that changed behaviour as a result are the point — an
 accidentally-green fake is not a check, and the fix was to the fake rather than to the assertion.
 
+**A double that cannot describe a machine cannot test on it.** #43 is the same failure from the
+other side. `FakeMachine(service=ServiceState(...))` had no way to say "systemd is running and
+there is no unit yet": `systemd=True` set `detail=""` and `systemd=False` set it to a sentence,
+so the field carried the manager's answer, `checks.py` inferred the manager from it, and every
+state the fake could build agreed with the inference. The bug needed a *combination* the type did
+not have, which is why the fix added `ApplianceState.systemd_running` and gave the fake
+`systemd_running()` reading its own `systemd` flag. The rule for the next state field: if two
+questions can disagree on a machine, they get two fields, and a check may not answer one with the
+other. That is also why `tests/unit/test_installer_checks.py::machine` now states
+`systemd_running` explicitly instead of letting the dataclass default answer it: a fixture whose
+combinations arrive from defaults will eventually ship the default that is wrong.
+
 **A skip is not coverage.** `test_a_real_root_rehearsal_completes` runs only when the process is
 root, so no CI run on this repository has ever executed it — and it was wrong: its
 `RecordingRunner` had no `effects`, so `uv sync` was recorded, produced no environment, and the

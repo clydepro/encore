@@ -505,6 +505,34 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Fixed
 
+- `sudo encore-install install` refused to run on a machine that had systemd and
+  did not yet have `encore.service` (#43) — which is every machine, on the first
+  install, on the platform SAPRS 13.1 names as primary. `ServiceState.detail` held
+  two facts ("there is no service manager" and "here is what systemctl said about
+  the unit") and `checks.py` decided the prerequisite from which one happened to be
+  non-empty, so the installer declined to install the unit because the unit was not
+  installed, and advised `--no-service`, the one answer that leaves an appliance that
+  never comes back after a power cut. The manager is now its own observed fact
+  (`Machine.systemd_running`, `ApplianceState.systemd_running`) and a missing unit is
+  what it always was: a warning on `verify`, and the plan's business on `install`.
+  A machine with no systemd still refuses, and now says why. The same report's
+  opening line was `nothing to do — the machine already matches this request`, four
+  lines above `a prerequisite is unmet`: an empty `Plan` stood for idempotence, for
+  `verify`, and for "never planned", so `Plan.planning` names which of the three it
+  is and `--json` carries it as `"planning"`. The 13.7 idempotence sentence is
+  unchanged, because it was right where it belonged.
+- A rehearsal asked this machine to change itself (#44). `systemctl` has no notion
+  of a prefix: it speaks to PID 1 about `encore.service`, so `install --root /tmp/x`
+  ran `daemon-reload`, `enable` and `start` against the host (where they fail,
+  because there is no such unit), and `upgrade --root` and `remove --root` ran
+  `stop`/`disable` against a running appliance — silencing the party to change a
+  directory nobody was listening to. One predicate now decides it
+  (`plan.registers_host_service`, used by all four commands), the staged plan emits
+  the registration command as a note instead, and the unit file is still written,
+  still staged, still booted by the e2e suite. Staging already declined to run
+  `useradd`; this is the same rule applied to the step that was missed, and it was
+  unreachable before #43 was fixed, which is why it is its own issue rather than a
+  line in that one.
 - `encore-install` reported that `uv` was missing on a machine that had it (#38).
   The astral installer writes `~/.local/bin`; `sudo` replaces `PATH` with its
   `secure_path`, which names no home directory; `RealMachine.which` searched only
