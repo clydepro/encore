@@ -22,7 +22,7 @@ or too early.
 | 12 | HTMX | **Done — `encore/controllers/`, `encore/templates/`, `encore/static/`** |
 | 13 | SSE | **Done — `encore/services/sse_publisher.py`, `/events`** |
 | 14 | Administrative interface | **Done — `encore/api/auth.py`, `controllers/admin.py`, `templates/admin/`, `services/{admin,statistics}_service.py`** |
-| 15 | Installer | In review ([#33](https://github.com/clydepro/encore/pull/33), `feat/32-installer`, issue #32) |
+| 15 | Installer | **Done — `apps/installer/`, `scripts/encore-install`, ADR-014/015 (#32, #38, #41)** |
 | 16 | Party Simulation | Not started |
 | 17 | Documentation | Ongoing |
 
@@ -242,8 +242,8 @@ them (`container.py` still builds config and logging only — the wiring belongs
 - Test infrastructure: fixtures, temp SQLite helpers, mock mpv, Party Simulation
   profiles + loader, a performance target registry with all five of its budgets measured rather
   than promised, an ASGI driver that can hold an SSE response open, and a synthetic media generator
-  that writes real silent MP3/FLAC containers with valid tags and embedded covers. 1268 tests in the
-  standard gate (1309 with the slow suites).
+  that writes real silent MP3/FLAC containers with valid tags and embedded covers. 1512 tests in the
+  standard gate, 1564 with the slow suites.
 - Architecture guardrail tests and `tools/check_links.py`.
 
 ## Explicitly not implemented
@@ -253,6 +253,13 @@ them (`container.py` still builds config and logging only — the wiring belongs
   run. What no test proves is sound reaching a speaker on real hardware — ALSA device names, USB
   DACs, the mpv socket under the `encore` account on a machine with a `13.5` group in it. That is
   the bring-up checklist, and it is milestone 15's remaining work rather than its design.
+- **An install run as root, until late.** The checklist above was written from a laptop, and the
+  first time the documented command ran in a root shell it failed twice — `uv` "missing" from a
+  `PATH` that sudo had trimmed (#38), then a `chown` to an account a rehearsal had deliberately not
+  created (#41). Both are fixed and both are covered, but the lesson is not about PATH: *a fake that
+  agrees with whatever it is asked is not a check*, and `RecordingRunner` answered every `chown`
+  with success while the real command failed. Everything the suite asserts about a machine it
+  cannot see is provisional in exactly this way.
 - **The full Party Simulation driver** (milestone 16). The shape of a party with an operator in it
   is simulated and its ledger asserted; 15,000 songs and hundreds of HTTP guests are not.
 

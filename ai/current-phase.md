@@ -1,9 +1,12 @@
 # Current Phase
 
-**Phase 6 — the installer (AIG step 15): implemented, in review as
-[PR #33](https://github.com/clydepro/encore/pull/33) on
-[`feat/32-installer`](https://github.com/clydepro/encore/tree/feat/32-installer) for issue
-[#32](https://github.com/clydepro/encore/issues/32).** Phases 1–5 are merged:
+**Phase 6 — the installer (AIG step 15): merged** as
+[#33](https://github.com/clydepro/encore/pull/33) for issue
+[#32](https://github.com/clydepro/encore/issues/32), then fixed twice by its own documented command
+([#38](https://github.com/clydepro/encore/issues/38),
+[#41](https://github.com/clydepro/encore/issues/41) — see "What running it as root found" below).
+**Phase 7 — dependency alerts — is open as
+[#39](https://github.com/clydepro/encore/issues/39) / [#40](https://github.com/clydepro/encore/pull/40).** Phases 1–5 are merged:
 [PR #20](https://github.com/clydepro/encore/pull/20) (domain, bus, configuration),
 [PR #22](https://github.com/clydepro/encore/pull/22) (repositories, Builder — closed #19),
 [PR #24](https://github.com/clydepro/encore/pull/24) (search, playback, queue — closed #23),
@@ -102,13 +105,45 @@ The first two are artifacts of the boundary between applications. That is worth 
 for whoever picks up step 16: **a bug that lives between two packages is invisible to the test
 suite of either one**, and the only cure is a test that crosses.
 
+## What running it as root found (#38, #41)
+
+Step 15 merged with the installer never having run in a root shell. It has now, twice, and it failed
+twice — both times in the gap between the fake the tests used and the machine the code is for.
+
+**#38 — `uv` is missing, on a machine that has it.** The astral installer writes `~/.local/bin`;
+`sudo` replaces `PATH` with its `secure_path`, which names no home directory. `RealMachine.which`
+searched `PATH` only, so the two documented instructions, followed in order, produce an installer
+that tells you to install something you installed. The fix is one function — `search_path` — that
+owns "where a host binary can be", asked by both the check and `SubprocessRunner`, because the
+deeper bug was a question and a command resolving through two different lists: that version fails
+with a 127 in the middle of a plan instead of a prerequisite message before it. Candidate
+directories are appended, never prepended: a home directory that can shadow `/usr/bin/mpv` is a
+privilege escalation waiting for somebody to install a tool. `scripts/encore-install` keeps a
+three-line bash copy of the same list, because it has to find uv before any Python exists to ask —
+the only duplication in the milestone, commented as such.
+
+**#41 — `chown` to an account the rehearsal skipped.** `--root` plans no `useradd` (13.7), so
+`chown root:encore` names a group that does not exist, and `Executor._ownership` decided fatality
+from `os.geteuid()`: right about the process, wrong about the machine. The decision now comes from
+observed state (`ApplianceState.root`, `.user_exists`), which is what that module's own docstring
+always claimed. On a real appliance a failed `chown` is still fatal, and that half is asserted too —
+the fix must not mean a machine that cannot read its own configuration shrugs.
+
+**The finding worth carrying into step 16.** `RecordingRunner` answered every unrecognised command
+with success, so every test in the suite saw a `chown` that worked. Changing that one default turned
+19 tests red. This is the general form of the sentence in `ai/HANDOFF.md` about bugs living between
+two packages: **a double that agrees with whatever it is asked is not a check**, and the more of the
+machine a suite stands in for, the more the fiction needs at least one way to say no. A party
+simulator whose guests never fail is the same trap with a bigger number in front of it.
+
 ## What the next phase inherits
 
 1. **A Raspberry Pi bring-up checklist.** The installer is tested against a real staged filesystem
    with a scripted host; what no test proves is sound reaching a speaker — ALSA device names, USB
    DACs, the mpv socket under the `encore` account on a machine with a real `audio` group. The
    manual steps in `docs/Administrator-Guide.md` are the checklist; run them once on hardware
-   before calling step 15 closed.
+   before calling step 15 closed. #38 and #41 were what the first attempt at that found, and there
+   will be more where those came from.
 2. **Party Simulation driver (milestone 16)** — the 15,000-song corpus, hundreds of guests,
    HTTP-fronted clients. `tests/party_simulation/test_admin_in_the_room.py` added the operator to
    the shape of a party; the scale is still missing.

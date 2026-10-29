@@ -6,17 +6,18 @@ For whoever picks this up next. Read with
 request → SAPRS → AIG → ADRs → AEP (AEP 2). This page is a pointer, not an authority, and it will
 be wrong faster than the SAPRS is.
 
-State as of this writing: **Phases 1–5 are merged (#20, #22, #24, #26, #27). Phase 6 is
-implemented and in review as [#33](https://github.com/clydepro/encore/pull/33), on
-`feat/32-installer`, for issue #32 — CI green, not yet merged.** The appliance now installs itself:
+State as of this writing: **Phases 1–6 are merged (#20, #22, #24, #26, #27, #33). Step 15 then
+broke twice on the command in its own documentation — #38 and #41, both fixed — and the open work is
+the dependency-alert chore [#40](https://github.com/clydepro/encore/pull/40) for issue #39.** The
+appliance now installs itself:
 `sudo ENCORE_ADMIN_PASSWORD='…' ./scripts/encore-install install`, from a clone, on a machine that
 had nothing on it a minute before. A guest scans a code printed by the appliance itself, an
 operator's password can be set before the box boots, and `encore-install verify` answers SAPRS
 13.11's acceptance list with a fix under every line that is not green.
 
-1491 tests pass in the standard gate, 93.5% coverage of `encore/`, `ruff` and strict `mypy` clean
-across `encore/`, `apps/`, `tests/` and `tools/`. Two new ADRs (014, 015) and one new regression
-file.
+1512 tests pass in the standard gate (1564 with the slow suites), 93.6% coverage of `encore/`,
+`ruff` and strict `mypy` clean across `encore/`, `apps/`, `tests/` and `tools/`. Two new ADRs (014,
+015) and three regression files.
 
 **Nothing here has met a Raspberry Pi.** The sentence was written in the last handoff about the
 guest interface and about the administrative interface; now it is about the install itself, and it
@@ -43,7 +44,12 @@ authoritative in a way no test can be.
    is where it is asserted.
 4. **`apps/installer/execute.py`** — the only module that changes anything, and the one that
    refuses a deletion outside `Layout.owned_roots`.
-5. **`docs/Administrator-Guide.md`'s installation section** — the manual steps, which are the
+5. **`apps/installer/system.py`** — the two seams, and the questions the machine is allowed to be
+   asked. `search_path` is the one owner of "where a host binary is" (#38) and
+   `observe()` is the one place anything is looked up, once, so `execute.py` decides effects and
+   never facts. When a step there starts calling `os.geteuid()` or `Path.exists()` directly, the
+   test double has already started lying.
+6. **`docs/Administrator-Guide.md`'s installation section** — the manual steps, which are the
    specification the installer is measured against. Where the two disagree, one of them has a bug
    and it is not necessarily the installer's.
 
@@ -91,6 +97,13 @@ Then `tests/integration/test_installer_lifecycle.py`, which is this phase told a
   artifact and opens it. Everything in `pyproject.toml`'s `packages` list is checked against the
   tree rather than against a list, so adding a package forces the same decision here. Note the
   namespace exception: `apps` has no `__init__.py` on purpose and the test says why.
+- **A double that never says no is not a check.** #38 and #41 were both found by running the
+  installer's own documented command in a root shell, and both had been invisible to a green suite.
+  #41's is the sharpest: `RecordingRunner` answered every unrecognised command with success,
+  including `chown root:encore` on a machine the test had just declared had no `encore` group — so
+  the rehearsal rehearsed an ownership change that never happens, and 19 tests changed behaviour
+  when the fake was given that one way to refuse. The general form, for whatever suite you write
+  next: a fake's defaults are assertions too, and the ones nobody chose are the ones that lie.
 - **`segno`, not a hand-rolled encoder.** A QR symbol is data encoding, Reed-Solomon over GF(256),
   mask selection by penalty score and a format string, in that order, and a mistake in any of the
   four produces an image that looks correct and does not scan — which surfaces at a party. The

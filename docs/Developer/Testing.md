@@ -181,6 +181,11 @@ and, unlike everything else in this repository, its subject is a machine it is n
   interrupted-install repair, drift versus recreation, all four removal-scope combinations, and
   the upgrade's stop-before-backup-before-start. `ApplianceState` is built by hand in this file,
   which is exactly why the integration suite exists.
+- `tests/unit/test_installer_system.py` — the module that touches the real machine, which had no
+  file of its own until #38 showed what that cost: `search_path` (the one owner of "where a host
+  binary is"), what it must never do (shadow a system directory with a home one), and what a child
+  process inherits. Asserted against `RealMachine` with environments as literals, because a seam
+  that is only ever tested through its own double proves the double.
 - `tests/unit/test_installer_checks.py`, `test_installer_content.py`,
   `test_installer_config_file.py`, `test_installer_report.py` — the acceptance verdicts and their
   fix sentences, the four rendered files (a `config.yaml` that is valid YAML and invalid Encore is
@@ -199,6 +204,13 @@ and, unlike everything else in this repository, its subject is a machine it is n
 - `tests/unit/test_packaging.py` — the declarations in `pyproject.toml` in milliseconds, and the
   built wheel in seconds: unpacked, compared against the source tree, with `entry_points.txt` read
   as the last word on what `pip install` will put on a `PATH`.
+
+**A double has to be able to fail.** `RecordingRunner` answers anything it does not recognise with
+success, which is right for a recorder and was wrong for `chown`: a rehearsal whose machine had no
+`encore` group was `chown root:encore`-ing its way through every test while `main` aborted on
+exactly that command on a real one (#41). The runner now refuses a `chown` naming an account the
+machine says is absent, and the 19 tests that changed behaviour as a result are the point — an
+accidentally-green fake is not a check, and the fix was to the fake rather than to the assertion.
 
 **The host is a seam, not a mock.** `tests/support/installer.py` gives the suite two doubles that
 are deliberately different in kind. `RecordingRunner` captures argv, environment and working
