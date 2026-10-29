@@ -13,6 +13,11 @@ gates in a few minutes.
   curl -LsSf https://astral.sh/uv/install.sh | sh
   ```
 
+  It installs into `~/.local/bin`, which is not on `sudo`'s `PATH`: a per-user `uv` is
+  invisible to a root shell unless something looks for it. The installer does
+  (`apps/installer/system.py`'s `search_path`, [#38](https://github.com/clydepro/encore/issues/38));
+  a `sudo ./scripts/bootstrap.sh` does not, and should not be run that way.
+
 - Python 3.12+ is fetched by `uv` if your machine does not have it; the pin lives
   in `.python-version`. You never need to install Python by hand.
 - Optional, for the markdown autofix in `scripts/format.sh`: Node 18+ (`npx`).
