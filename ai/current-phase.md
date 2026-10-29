@@ -2,12 +2,13 @@
 
 **Phase 6 — the installer (AIG step 15): merged** as
 [#33](https://github.com/clydepro/encore/pull/33) for issue
-[#32](https://github.com/clydepro/encore/issues/32), then fixed four times by its own documented
-command ([#38](https://github.com/clydepro/encore/issues/38),
+[#32](https://github.com/clydepro/encore/issues/32), then fixed five times by the commands in its own
+documentation ([#38](https://github.com/clydepro/encore/issues/38),
 [#41](https://github.com/clydepro/encore/issues/41),
 [#43](https://github.com/clydepro/encore/issues/43),
-[#44](https://github.com/clydepro/encore/issues/44) — see "What running it as root found" and
-"What running it on a machine with systemd found" below).
+[#44](https://github.com/clydepro/encore/issues/44),
+[#46](https://github.com/clydepro/encore/issues/46) — see "What an installed appliance found" and
+the two "running it" sections below).
 **Phase 7 — the dependency-alert chore — merged as
 [#40](https://github.com/clydepro/encore/pull/40), closing
 [#39](https://github.com/clydepro/encore/issues/39).** Phases 1–5 are merged:
@@ -33,6 +34,7 @@ branch was named for it, then the code was written. The lesson from phase 5's ba
 | Removal in three scopes | `layout.removals`, `plan.remove_plan`, `--purge-config`, `--purge-data` | SAPRS 13.10 |
 | Acceptance list as a command | `checks.assess`, `encore-install verify`, exit code 4 | SAPRS 13.11 |
 | A rehearsal that rehearses | `plan.registers_host_service`, `systemd_running`, `Plan.planning`; `test_issue_43_service_manager.py` (8) | SAPRS 13.7, #41, #43, #44 |
+| An environment the service can actually execute | `Layout.python`, `interpreter_of`, `interpreter_blocker`, `Machine.resolve`; `test_issue_46_venv_interpreter.py` (9) | SAPRS 13.4, #46 |
 | The administrator credential | `AdminService.seed()` from `ENCORE_ADMIN_PASSWORD`, on first boot, on the appliance thread | SAPRS 12.6, ADR-013, ADR-015 |
 | QR onboarding | `utilities/qr.py`, `controllers/qr.py`, `templates/pages/qr.html` — `GET /qr`, `GET /qr.svg` | SAPRS 9.11, ADR-015 |
 | The address, owned by one property | `ServerConfig.guest_url`, read by `/qr`, `/api/v1/info`, the footer and the installer's report | SAPRS 1.4, 12.2 |
@@ -110,6 +112,49 @@ The first two are artifacts of the boundary between applications. That is worth 
 for whoever picks up step 16: **a bug that lives between two packages is invisible to the test
 suite of either one**, and the only cure is a test that crosses.
 
+## What an installed appliance found (#46)
+
+Step 15 was run on a real machine for the first time — not staged, not `--no-service`, `install`
+then `systemctl start encore` — and the appliance did not come up:
+
+```text
+encore.service: Failed at step EXEC spawning /opt/encore/venv/bin/encore-server: Permission denied
+```
+
+**#46 — the interpreter was in `/root`, and the acceptance list was green.** A console script names
+the program the kernel actually runs, and `uv` had downloaded that program into the home of whoever
+called it (Encore needs 3.12, Debian 12 ships 3.11). Under `sudo` that is `/root/.local/share/uv/`
+`python`, behind a `drwx------` the account in `User=` cannot search. The venv is correct, its
+entry point is `0755`, and `checks._environment` tested `st_mode & 0o111` — a true answer to the
+wrong question, which is why `verify` printed fifteen OK lines over a service that could not start.
+Three separate things were missing, and all three are in now:
+
+1. **Placement.** `/opt/encore/python` (a `Layout` path, in `directories` and in the application
+   removal scope) plus `uv python install --install-dir` and `uv sync --python <path>`. The env
+   variable alone does *not* work: `uv` also searches a data directory beside its own binary, and
+   #38 deliberately resolved that binary to the operator's `~/.local/bin`. Verified on the host —
+   with `UV_PYTHON_INSTALL_DIR` set and the appliance directory populated, `uv sync` still relinked
+   the venv to `/home/matt/.local/share/uv/python/…` until the interpreter was named explicitly.
+2. **Observation.** `interpreter_of` (a shebang is a machine fact) and `interpreter_blocker` (the
+   DAC walk the kernel makes, component by component, for *that* account), gathered once by
+   `observe()`. `stat` is an `lstat` throughout this installer, so `Machine.resolve` is the
+   separate question that follows the link — the second half of why no mode check could see this.
+3. **Repair.** An unreachable interpreter counts as drift. Without that, the installer that fixed
+   #46 would print 13.7's `nothing to do — the machine already matches this request` on every
+   machine #46 had already broken, because the lockfile stamp matches perfectly well.
+
+And one thing that was nearly wrong in the fix: the first cut made the finding a *prerequisite*
+failure, so `install` refused to run — `a prerequisite is unmet, so nothing was changed` — over the
+defect its own run repairs. It is a WARN on `install`/`upgrade` and a FAIL on `verify` now, which is
+the distinction #43 drew, applied to the opposite error.
+
+**The finding, for the fifth time.** #38 asked the wrong *account* about a path; #41 asked a
+command that always answered yes; #43 inferred one fact from another; #44 stated a rule in two of
+three places; #46 asked the right question about the wrong *subject* — the file, when the answer
+belongs to the user. The general form: **`mode & 0o111` is not "can this be executed".** Any check
+in this repository that ends in a permission bit is asking about an inode while the product's
+question is about an identity, and the two differ by the whole path above the file.
+
 ## What running it on a machine with systemd found (#43, #44)
 
 The first `sudo encore-install install` — not staged, not `--no-service`, on a host with systemd as
@@ -139,13 +184,15 @@ declined to run `useradd` for exactly this reason, and `next_steps` already refu
 told. One predicate decides it now (`plan.registers_host_service`, all four commands), and the
 rehearsal reports the command to run on the real machine instead of quietly skipping it.
 
-**The finding, for the fourth time.** #38 was an observation the fake could not make about a path,
-and #41 a command the recorder always answered yes to; #43 was a *combination* the type could not
+**The finding, five times over.** #38 was an observation the fake could not make about a path, and
+issue #41 a command the recorder always answered yes to; #43 was a *combination* the type could not
 express (`systemd=True` implied `detail=""`, so no test could say "systemd here, and no unit yet"),
-and #44 a rule stated in two of three places. The general form: a state field that carries two facts
-lets every consumer choose which one it meant, and the double only ever builds the ones that agree.
-If two questions can disagree on a machine, they get two fields — `docs/Developer/Testing.md` has
-the sentence, and #43's regression file asserts the real `systemctl` answers rather than a fake's.
+issue #44 a rule stated in two of three places, and #46 the wrong *subject* in the question — the file's
+mode, when the answer belongs to the user. Each one was invisible to the same 1500 tests for the
+same kind of reason, so the rule for anything new that touches a machine: name the identity the
+claim is about, ask it once in `observe()`, and if two questions can disagree on a host they get two
+fields. `docs/Developer/Testing.md` has the wording, and the regression files for #43 and #46 assert
+against the real `systemctl` and the real kernel rather than against a double's opinion.
 
 ## What running it as root found (#38, #41)
 
@@ -198,9 +245,12 @@ simulator whose guests never fail is the same trap with a bigger number in front
    On the Pi, run the four shapes, not one: `install` as root, `install --root /tmp/x` as root,
    `install --no-service`, and `verify` after each. The second one is the #44 assertion, and it is
    the easy one to skip: after it, `systemctl is-active encore` must answer the same thing it
-   answered before. Run `pytest tests/regression/test_issue_38_installer_path.py` as root while you
-   are there: it is the one file in the suite that asks the machine to be a machine, and off
-   hardware one of its five tests never runs at all.
+   answered before. Then check what #46 was, because no staged test can: `sudo -u encore
+   /opt/encore/venv/bin/python -c 'print(1)'` must print, and `namei -l "$(readlink -f
+   /opt/encore/venv/bin/python)"` must not stop in anybody's home. Run
+   `pytest tests/regression/test_issue_38_installer_path.py tests/regression/test_issue_46_venv_interpreter.py`
+   as root while you are there: those are the files that ask the machine to be a machine, and off
+   hardware their root-only tests never run at all.
 2. **Party Simulation driver (milestone 16)** — the 15,000-song corpus, hundreds of guests,
    HTTP-fronted clients. `tests/party_simulation/test_admin_in_the_room.py` added the operator to
    the shape of a party; the scale is still missing.

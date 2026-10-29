@@ -505,6 +505,26 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Fixed
 
+- An installed appliance could not start, and the acceptance list said it was fine (#46).
+  `Failed at step EXEC … Permission denied` / `status=203/EXEC` is a statement about the
+  *interpreter*, not the file named in `ExecStart`: a console script's first line tells the
+  kernel which program to run, and `uv` puts that program wherever the account that ran the
+  install keeps its downloads. Encore requires Python 3.12 and Debian 12 ships 3.11, so on
+  the primary platform every install downloaded one — into `/root/.local/share/uv/python`
+  under `sudo`, behind a `drwx------` the service account cannot search. `install` had asked
+  `uv sync` for a venv location and nothing else, `_environment` had tested the entry point's
+  `0o111` bits (true, and beside the point), and so `verify` printed fifteen green lines over
+  a dead service. Three changes: the appliance now installs its own interpreter under the new
+  `/opt/encore/python` and *names* it on the `uv sync` command line (`UV_PYTHON_INSTALL_DIR`
+  alone is not enough — `uv` also searches a data directory beside the `uv` binary, which #38
+  deliberately made the operator's); "can the account in `User=` reach what `ExecStart`
+  names" is an observed fact (`interpreter_blocker`, the DAC walk the kernel makes) rather
+  than a guess from a mode bit; and an unreachable interpreter counts as drift, so the older
+  release's machines are repaired by re-running `install` instead of being told the machine
+  already matches. It is a warning on `install`/`upgrade` and a failure on `verify`: a
+  finding the requested change can fix is not a prerequisite, and the first cut of this check
+  made it one, producing the #43 sentence from the opposite direction — "a prerequisite is
+  unmet, so nothing was changed", over the defect that run existed to repair.
 - `sudo encore-install install` refused to run on a machine that had systemd and
   did not yet have `encore.service` (#43) — which is every machine, on the first
   install, on the platform SAPRS 13.1 names as primary. `ServiceState.detail` held
