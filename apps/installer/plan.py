@@ -31,7 +31,13 @@ from pathlib import Path
 
 from apps.installer.config_file import Decision, decide
 from apps.installer.content import config_text, environment_text, tmpfiles_text, unit_text
-from apps.installer.layout import SCOPE_CONFIGURATION, SCOPE_DATA, Layout, ManagedFile
+from apps.installer.layout import (
+    PYTHON_VERSION,
+    SCOPE_CONFIGURATION,
+    SCOPE_DATA,
+    Layout,
+    ManagedFile,
+)
 from apps.installer.options import Command, Options
 from apps.installer.system import ApplianceState
 from encore.config.models import EncoreConfig
@@ -186,10 +192,17 @@ class SyncEnvironment(Action):
 
     `--frozen` is what makes it reproducible: the lockfile is the answer and nothing resolves
     at install time. `--no-dev` keeps pytest and ruff off an appliance.
+
+    `python_dir` is the third half of "the appliance's own", and the half #46 was missing: where a
+    downloaded CPython goes. `UV_PYTHON_INSTALL_DIR` alone does not decide it — uv also searches a
+    data directory next to the `uv` binary, which #38 deliberately made the operator's — so the
+    interpreter is *named* on the command line, and named from here.
     """
 
     application: Path
     venv: Path
+    python_dir: Path
+    version: str = PYTHON_VERSION
     offline: bool = False
 
 
@@ -682,14 +695,21 @@ def _code_actions(
                 detail=f"install the application into {application}{step}",
             )
         )
-    if not state.environment_matches:
+    if not state.environment_matches or state.interpreter_blocker is not None:
         step = " (SAPRS 13.9 step 2)" if upgrade else " (SAPRS 13.4)"
+        reason = (
+            f" — the environment links to {state.interpreter}, which {options.layout.user} cannot "
+            f"reach (#46)"
+            if state.interpreter_blocker is not None
+            else ""
+        )
         actions.append(
             SyncEnvironment(
                 application=application,
                 venv=venv,
+                python_dir=options.layout.staged(options.layout.python),
                 offline=options.offline,
-                detail=f"install Python dependencies into {venv}{step}",
+                detail=f"install Python dependencies into {venv}{step}{reason}",
             )
         )
     return actions

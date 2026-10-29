@@ -521,21 +521,43 @@ class Executor:
         The stamp is not bookkeeping for this program's benefit — it is the only way to know
         that the environment matches `uv.lock` without running a resolver, and running a
         resolver on every install is what `--frozen` exists to avoid (SAPRS 15.1).
+
+        The interpreter is named rather than discovered, which is the whole of #46. Debian 12 ships
+        Python 3.11 and the project needs 3.12, so there is a download involved on the primary
+        platform, and `uv` takes the first interpreter it *finds*: it searches `UV_PYTHON_INSTALL_DIR`
+        and also a data directory beside the `uv` binary — which #38 deliberately resolved to the
+        operator's `~/.local/bin`. Setting the environment variable alone demonstrably left the venv
+        linked into somebody's home, so the appliance's own interpreter is installed under
+        `python_dir` and passed to `uv sync --python`, which is what makes `venv/bin/python` point at
+        something `User=encore` can walk to.
         """
 
-        argv = ["uv", "sync", "--frozen", "--no-dev", "--project", str(application)]
+        interpreter, refusal = self._interpreter(action, offline=offline)
+        if refusal is not None:
+            return refusal
+        argv = [
+            "uv",
+            "sync",
+            "--frozen",
+            "--no-dev",
+            "--project",
+            str(application),
+            *(("--python", str(interpreter)) if interpreter is not None else ()),
+        ]
         if offline:
             argv.append("--offline")
-        result = self._command(
-            action, argv, env={"UV_PROJECT_ENVIRONMENT": str(venv)}, cwd=application
-        )
+        env = {
+            "UV_PROJECT_ENVIRONMENT": str(venv),
+            "UV_PYTHON_INSTALL_DIR": str(action.python_dir),
+        }
+        result = self._command(action, argv, env=env, cwd=application)
         if not result.ok:
             return Result(
                 action=action,
                 status=Status.FAILED,
                 detail=result.detail,
                 finding=f"cd {application} && uv sync --frozen --no-dev "
-                f"(UV_PROJECT_ENVIRONMENT={venv})",
+                f"(UV_PROJECT_ENVIRONMENT={venv} UV_PYTHON_INSTALL_DIR={action.python_dir})",
             )
         lock = application / "uv.lock"
         try:
@@ -548,7 +570,63 @@ class Executor:
                 detail=f"{venv} synced, but the stamp could not be written: {error.strerror or error}",
                 finding="The next `upgrade` will sync these dependencies again, harmlessly.",
             )
-        return Result(action=action, status=Status.DONE, detail=f"{venv} is in sync with {lock}")
+        named = f" from {interpreter}" if interpreter is not None else ""
+        return Result(
+            action=action, status=Status.DONE, detail=f"{venv} is in sync with {lock}{named}"
+        )
+
+    def _interpreter(
+        self, action: SyncEnvironment, *, offline: bool
+    ) -> tuple[Path | None, Result | None]:
+        """Which interpreter the environment should be built from, and why it could not be said.
+
+        Returns `(path, None)` on success, `(None, None)` only in the one case where naming an
+        interpreter is impossible — `--offline`, where the appliance's own cannot be downloaded and
+        `uv` is left to choose — and `(None, Result)` when the download was needed and failed.
+        """
+
+        directory = action.python_dir
+        if (installed := self._installed_interpreter(action)) is not None:
+            return installed, None
+        if offline:
+            return None, None
+        requested = self._runner.run(
+            ["uv", "python", "install", action.version, "--install-dir", str(directory)]
+        )
+        if not requested.ok:
+            return None, Result(
+                action=action,
+                status=Status.FAILED,
+                detail=f"uv could not install Python {action.version} into {directory}: "
+                f"{requested.output()}",
+                finding=f"sudo uv python install {action.version} --install-dir {directory}  "
+                "# the download is the appliance's own interpreter (#46); a machine that already "
+                "has a usable 3.12 can be installed with --offline and uv will find it",
+            )
+        return self._installed_interpreter(action), None
+
+    def _installed_interpreter(self, action: SyncEnvironment) -> Path | None:
+        """The newest CPython already inside the appliance's own interpreter directory.
+
+        `cpython-3.12.16-linux-aarch64-gnu/bin/python3.12`, with the stable
+        `cpython-3.12-linux-aarch64-gnu` alias beside it. The alias is skipped: both name the same
+        interpreter, and a plan that reports one path rather than a symlink to it is a plan an
+        operator can read. If `uv` ever changes this layout the glob finds nothing, the download runs
+        again, and the acceptance check in `checks.py` is what says so.
+
+        This asks whether a file is there, which is the whole of the question an executor gets to
+        ask. "Is it reachable by the service account" is an observation, and it lives in `observe()`
+        — the same fact is what makes `plan.py` decide a sync is needed at all, and asking it twice
+        from two places is two answers waiting to disagree (#43).
+        """
+
+        pattern = f"cpython-*/bin/python{action.version}"
+        found = sorted(
+            path
+            for path in action.python_dir.glob(pattern)
+            if path.is_file() and not path.is_symlink()
+        )
+        return found[-1] if found else None
 
     # -- databases -------------------------------------------------------
 

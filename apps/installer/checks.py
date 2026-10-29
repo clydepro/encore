@@ -220,9 +220,33 @@ def _environment(state: ApplianceState, options: Options) -> Check:
     venv with no `encore-server` in it means the sync ran and produced nothing, which the
     appliance will not notice until somebody starts it and systemd reports a success that lasted
     forty milliseconds.
+
+    And a third way it fails, which the mode bits cannot see (#46): the entry point is there and
+    executable, and the *interpreter its shebang names* is somewhere the account in `User=` cannot
+    walk to. Debian 12 ships Python 3.11 and the project needs 3.12, so `uv` downloads one into
+    whoever ran the install — root, whose `/root` is `drwx------`. systemd's answer is
+    `status=203/EXEC`, and every bit check on the way there says the file is fine.
     """
 
     venv = options.layout.staged(options.layout.venv)
+    if state.interpreter_blocker is not None:
+        account = options.layout.user
+        # Whether this is a prerequisite depends on who is being asked to fix it, which is the
+        # distinction #43 taught and #46 re-tests: an unreachable interpreter is a fact about the
+        # appliance, and `install`/`upgrade` are the commands that change it. Blocking on it would
+        # make the installer refuse to repair the exact machine it broke — "a prerequisite is
+        # unmet, so nothing was changed" printed above an appliance that needed precisely that run.
+        # For `verify` and `remove` nothing downstream can help, so those get the failure.
+        repairs = options.command in {Command.INSTALL, Command.UPGRADE}
+        return Check(
+            name="environment",
+            verdict=Verdict.WARN if repairs else Verdict.FAIL,
+            detail=f"{account} cannot reach {state.interpreter}, so {venv}/bin/encore-server "
+            f"cannot be executed by the service: {state.interpreter_blocker} does not let "
+            f"{account} through" + (" — this run will rebuild the environment" if repairs else ""),
+            fix=f"sudo encore-install install  # puts the downloaded interpreter in "
+            f"{options.layout.staged(options.layout.python)} (SAPRS 13.4, #46)",
+        )
     if state.environment_runnable:
         return Check(
             name="environment", verdict=Verdict.OK, detail=f"{venv}/bin/encore-server is there"

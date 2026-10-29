@@ -25,7 +25,7 @@ import shutil
 import socket
 import stat
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -131,6 +131,81 @@ def _candidate_homes(environ: Mapping[str, str]) -> tuple[str, ...]:
         if record.pw_dir and record.pw_dir not in homes:
             homes.append(record.pw_dir)
     return tuple(homes)
+
+
+def interpreter_of(shebang: str | None) -> Path | None:
+    """The interpreter a script names for itself, or None where the question has no answer.
+
+    A console script is not a program; it is a one-line instruction to the kernel about which
+    program to run. `/opt/encore/venv/bin/encore-server` is executable by everyone and tells the
+    kernel to run `venv/bin/python`, which is a symlink, which is where #46 lives. An env-style
+    shebang resolves through the invoking account's `PATH`, which is not a question about this
+    filesystem, so it is answered with None rather than with a guess.
+    """
+
+    if shebang is None or not shebang.startswith("#!"):
+        return None
+    named = shebang.removeprefix("#!").split(maxsplit=1)[:1]
+    if not named or not named[0].startswith("/") or named[0].rsplit("/", 1)[-1] == "env":
+        return None
+    return Path(named[0])
+
+
+def interpreter_blocker(machine: Machine, target: Path, account: ServiceAccount) -> Path | None:
+    """The first component of `target` that `account` cannot get through, or None if it can.
+
+    This is the kernel's rule, stated as data: a file is executable by an identity only if every
+    directory above it is searchable by that identity, and `mode & 0o111` on the file itself is
+    silent about both. `/opt/encore/venv/bin/encore-server` carries `0755` and the appliance still
+    dies at exec, because the interpreter behind its shebang sits under `/root`, which is
+    `drwx------` (#46).
+
+    Args:
+        machine: Asked for each component's owner, group and mode — never for a verdict, so the
+            arithmetic below is the only place it is written.
+        target: The interpreter, still a symlink. `stat` follows it, which is what the kernel does
+            at exec time.
+        account: Whose permissions matter, because `User=` in the unit names this identity and no
+            other. A root-installed process is not the process that runs the appliance.
+    """
+
+    for component in _components(target):
+        state = machine.stat(component)
+        if not state.exists:
+            return component
+        # A directory has to be searchable; the file itself has to be readable as well, because
+        # the kernel reads a script's shebang before it decides what to exec.
+        if _grants(state, account=account, readable=component == target, executable=True):
+            continue
+        return component
+    return None
+
+
+def _components(target: Path) -> tuple[Path, ...]:
+    """`/`, each directory above `target`, and `target` — the walk the kernel makes."""
+
+    prefixes = tuple(Path(*target.parts[: index + 1]) for index in range(len(target.parts) - 1))
+    return (*prefixes, target)
+
+
+def _grants(state: PathState, *, account: ServiceAccount, readable: bool, executable: bool) -> bool:
+    """Whether one identity holds the requested bits on one path, by the DAC rule.
+
+    Owner, then group, then other — first match wins, which is why a `0750 root:encore` directory
+    grants nothing to an `encore` process whose primary group is `encore` and whose supplementary
+    groups do not include it. ACLs and capabilities are not consulted; where they would matter this
+    returns a false negative, and a false negative here reads as "the appliance cannot start", so
+    the cost of being wrong is a warning the operator can dismiss rather than a green line over a
+    dead service.
+    """
+
+    if state.owner == account.name:
+        triad = (state.mode >> 6) & 0o7
+    elif state.group == account.group or state.group in account.groups:
+        triad = (state.mode >> 3) & 0o7
+    else:
+        triad = state.mode & 0o7
+    return not (readable and not triad & 0o4) and not (executable and not triad & 0o1)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -323,6 +398,14 @@ class ServiceAccount:
     shell: str
     home: str
     groups: tuple[str, ...] = ()
+    group: str = ""
+    """The account's primary group, by name.
+
+    Needed to answer a traversal question (#46): `drwx------` on a home directory stops everybody
+    except the owner, but a `drwx--S---` shared directory does not, and the difference is the group
+    the account belongs to. A name rather than a gid because every path fact in this module carries
+    group *names*, and comparing a gid to a name is how a check quietly starts answering always-no.
+    """
 
     @property
     def can_log_in(self) -> bool:
@@ -378,6 +461,16 @@ class Machine(Protocol):
     def group_exists(self, name: str) -> bool: ...
 
     def stat(self, path: Path) -> PathState: ...
+
+    def resolve(self, path: Path) -> Path:
+        """Where a path actually ends up, symlinks followed.
+
+        Separate from `stat` because `stat` deliberately does *not* follow them (a symlink planted
+        at an owned root must be visible as a symlink, or `remove` would delete what it points at),
+        and the kernel executing a shebang does. #46 hides in the difference: `venv/bin/python` is a
+        symlink, and the directory that stops the service account is at the other end of it.
+        """
+        ...
 
     def read(self, path: Path) -> str | None: ...
 
@@ -446,6 +539,7 @@ class RealMachine:
             name=entry.pw_name,
             shell=entry.pw_shell,
             home=entry.pw_dir,
+            group=_name_of_gid(entry.pw_gid),
             groups=tuple(group.gr_name for group in grp.getgrall() if name in group.gr_mem),
         )
 
@@ -469,6 +563,12 @@ class RealMachine:
             group=_name_of_gid(info.st_gid),
             mode=stat.S_IMODE(info.st_mode),
         )
+
+    def resolve(self, path: Path) -> Path:
+        # `os.path.realpath` rather than `Path.resolve`: the latter raises on a broken symlink
+        # chain with `strict=True` and, on older CPython, complains about an unreadable directory —
+        # and an unreadable directory is the answer this module is looking for.
+        return Path(os.path.realpath(path))
 
     def read(self, path: Path) -> str | None:
         try:
@@ -626,6 +726,12 @@ class ApplianceState:
     # lockfile means the sync was skipped, and a missing `bin/encore-server` means the sync ran
     # and produced nothing — the second is a broken install, the first is an ordinary upgrade.
     environment_runnable: bool = False
+    # What the entry point's shebang resolves to, and the first component of that path the service
+    # account cannot get through — None for "reachable", None also for "not asked". #46: a venv
+    # whose interpreter sits inside `/root` is executable by the account that built it and by nobody
+    # named in `User=`, so every mode check passes and the unit dies at exec.
+    interpreter: Path | None = None
+    interpreter_blocker: Path | None = None
     # Whether each path named by the lifecycle tables is there, keyed by *documented* path.
     # `remove` and `upgrade` need existence, and getting it from `Path.exists()` inside a pure
     # planner would make a plan a function of the moment it ran rather than of the state
@@ -680,6 +786,7 @@ def observe(
     service = machine.service(SERVICE_NAME)
     code_matches, environment_matches = _source_matches(machine, layout, source)
     runnable = machine.stat(staged(f"{layout.venv}/bin/encore-server")).exists
+    interpreter, blocker = _interpreter(machine, layout, staged)
     runtime_db = f"{layout.state}/runtime.db"
     return ApplianceState(
         layout=layout,
@@ -717,11 +824,45 @@ def observe(
         application_matches=code_matches,
         environment_matches=environment_matches,
         environment_runnable=runnable if source is not None else True,
+        interpreter=interpreter,
+        interpreter_blocker=blocker,
         present={
             final: machine.stat(staged(final)).exists
             for final in dict.fromkeys([*[entry[0] for entry in layout.removals], runtime_db])
         },
     )
+
+
+def _interpreter(
+    machine: Machine, layout: Layout, staged: Callable[[str | Path], Path]
+) -> tuple[Path | None, Path | None]:
+    """Where the entry point's interpreter is, and whether the service account can reach it.
+
+    Asked only of a machine that has both halves: an entry point, and the account `User=` names.
+    A staged rehearsal has no account (13.5's `useradd` is skipped, #41) and a first install has no
+    entry point yet, and answering "unreachable" in either would plan a re-sync on every run — the
+    mistake is not asking the question, it is inventing an answer.
+
+    The staging rule is the same one `EnsureOwnership` follows, and for the same reason: a prefix
+    under `/tmp` is traversable by whoever made it and by no service account on earth, so the
+    question "can `encore` execute this" is not yet about this tree. It becomes a question on the
+    appliance, where `root` is `/` and the modes are the ones 13.5 set.
+    """
+
+    script = staged(f"{layout.venv}/bin/encore-server")
+    named = interpreter_of(machine.read(script))
+    if named is None:
+        return None, None
+    # The name in the shebang is a symlink into wherever `uv` put the download; the walk the kernel
+    # makes is the one at the other end of it, which is the part `stat` — deliberately an `lstat` —
+    # cannot see.
+    interpreter = machine.resolve(named)
+    if layout.root != Path("/"):
+        return interpreter, None
+    account = machine.user(layout.user)
+    if account is None:
+        return interpreter, None
+    return interpreter, interpreter_blocker(machine, interpreter, account)
 
 
 def _source_matches(machine: Machine, layout: Layout, source: Path | None) -> tuple[bool, bool]:

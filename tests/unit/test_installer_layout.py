@@ -38,6 +38,7 @@ def test_the_production_layout_is_the_documented_tree() -> None:
     assert {
         "/opt/encore/application",
         "/opt/encore/venv",
+        "/opt/encore/python",
         "/etc/encore",
         "/etc/encore/config.yaml",
         "/etc/encore/environment",
@@ -144,6 +145,33 @@ def test_only_the_paths_the_appliance_writes_are_writable_by_the_appliance() -> 
         "/var/cache/encore/temp",
         "/var/log/encore",
     }
+
+
+def test_the_downloaded_interpreter_is_readable_by_the_service_account() -> None:
+    """The one path whose whole purpose is a *different* identity reading it.
+
+    `/opt/encore/python` is where `uv` puts a managed CPython when the distribution has none new
+    enough — Debian 12 ships 3.11 and the project requires 3.12. Left to uv's default it lands in
+    `~/.local/share/uv/python` **of whoever ran the installer**, which under `sudo` is inside
+    `/root` at `drwx------`: the venv links to it, `User=encore` cannot traverse the path, and
+    systemd reports `status=203/EXEC` while every mode check on the entry point passes (#46).
+
+    So the entry is asserted as *root-owned and world-readable* rather than `encore`-owned. It is
+    code, not state — the appliance never writes it — and the property that matters is that the
+    account named in `User=` can walk to it whichever account paid for the download.
+    """
+
+    layout = Layout()
+    entry = next(item for item in layout.directories if item.final == layout.python)
+    assert (entry.owner, entry.group) == ("root", "root")
+    assert entry.mode == 0o755
+    assert entry.mode & 0o004, "readable by everybody"
+    assert entry.mode & 0o001, "and searchable, which is the bit that stops an exec"
+    assert layout.staged(layout.python) == Path("/opt/encore/python")
+    assert (layout.python, SCOPE_APPLICATION) in layout.removals, (
+        "in the application scope, so `remove` cannot leave an interpreter behind and `owned_roots` "
+        "cannot let a deletion reach it by accident"
+    )
 
 
 def test_the_removal_table_carries_exactly_the_three_specification_scopes() -> None:

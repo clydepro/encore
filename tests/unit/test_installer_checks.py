@@ -70,6 +70,11 @@ def machine(layout: Layout, **values: Any) -> ApplianceState:
         "hostname": "jukebox",
         "root": True,
         "environment_runnable": True,
+        # Stated for the same reason as `systemd_running` two lines above: #46 is a check that read
+        # the entry point's mode and never asked who would have to execute it, so a fixture that
+        # leaves the interpreter to a default cannot describe the machine that broke.
+        "interpreter": Path("/opt/encore/python/cpython-3.12/bin/python3.12"),
+        "interpreter_blocker": None,
         "present": {final: True for final, _ in layout.removals},
     }
     return ApplianceState(**{**base, **values})
@@ -602,3 +607,88 @@ def test_a_stopped_appliance_is_not_probed(tmp_path: Path) -> None:
         layout, machine(layout, service=ServiceState(), health=None), command=Command.VERIFY
     )
     assert not [check for check in checks if check.name.startswith("health")]
+
+
+def test_an_environment_the_service_cannot_execute_fails_verification(tmp_path: Path) -> None:
+    """#46, in the one form the report ever showed it: everything green, appliance dead.
+
+    The entry point is there and `0755`, so `environment_runnable` is true and the check that asked
+    only that question passed. What the appliance cannot do is *exec* it, because the kernel resolves
+    the shebang into `/root` and `/root` is `drwx------`, and `User=encore` is not root. A mode check
+    cannot see this; only the account's identity can, so the check asks about that.
+    """
+
+    layout = layout_of(tmp_path)
+    broken = machine(
+        layout,
+        environment_runnable=True,
+        interpreter=Path("/root/.local/share/uv/python/cpython-3.12/bin/python3.12"),
+        interpreter_blocker=Path("/root"),
+    )
+    checks = assess_box(layout, broken, command=Command.VERIFY)
+    assert verdict_of(checks, "environment") is Verdict.FAIL, checks
+    detail = finding(checks, "environment")
+    assert "encore cannot reach" in detail, detail
+    assert "/root" in detail, "the sentence has to name the directory, not the concept"
+    assert "/opt/encore/python" in detail, detail
+    assert blocked(checks), "`verify` is a report, and this belongs in its exit code"
+
+
+def test_the_same_machine_is_a_warning_on_the_command_that_repairs_it(tmp_path: Path) -> None:
+    """A prerequisite is something the *run* cannot fix, and #46's is squarely fixable.
+
+    Blocking on this finding would produce the sentence #43 was about, arriving from the opposite
+    direction: `install` refusing to touch a machine because of a defect `install` exists to
+    repair — "a prerequisite is unmet, so nothing was changed", printed over an appliance whose only
+    problem was the one this run solves. So the verdict is the command's, not the fact's: WARN here,
+    FAIL in `verify`, and the plan still lists the re-sync either way.
+    """
+
+    layout = layout_of(tmp_path)
+    broken = machine(
+        layout,
+        environment_runnable=True,
+        interpreter=Path("/root/.local/share/uv/python/cpython-3.12/bin/python3.12"),
+        interpreter_blocker=Path("/root"),
+    )
+    for command in (Command.INSTALL, Command.UPGRADE):
+        checks = assess_box(layout, broken, command=command)
+        assert verdict_of(checks, "environment") is Verdict.WARN, command
+        assert not blocked(checks), f"{command} must be allowed to proceed"
+        assert "will rebuild" in finding(checks, "environment"), command
+
+
+def test_the_question_is_asked_of_the_service_account_not_of_the_checker(tmp_path: Path) -> None:
+    """The reason this is a check about `User=` rather than about `os.access`.
+
+    A process running as root can execute `/root/.local/share/uv/python/…` — the installer's own
+    process can, which is what made `ok environment` true on a machine whose appliance could not
+    start. Reachability is therefore computed for the identity named in the unit file, and an
+    interpreter that the checker can reach is not on its own a pass or a failure: the verdict comes
+    from `interpreter_blocker`, which is where the account was applied.
+    """
+
+    layout = layout_of(tmp_path)
+    blocked = Path("/root/.local/share/uv/python/cpython-3.12/bin/python3.12")
+    unreachable = machine(layout, interpreter=blocked, interpreter_blocker=Path("/root"))
+    assert (
+        verdict_of(assess_box(layout, unreachable, command=Command.VERIFY), "environment")
+        is Verdict.FAIL
+    )
+    reached = machine(layout, interpreter=blocked, interpreter_blocker=None)
+    assert verdict_of(assess_box(layout, reached, command=Command.VERIFY), "environment") is (
+        Verdict.OK
+    )
+
+
+def test_an_unasked_question_is_left_unasked(tmp_path: Path) -> None:
+    """A rehearsal has no service account (13.5's `useradd` is skipped), so nothing is concluded.
+
+    `interpreter_blocker` is None there for the same reason `matches(ownership=False)` exists: an
+    appliance whose prefix holds no `encore` user is not an appliance with a broken environment, and
+    planning a re-sync from that would make every staged run plan one forever.
+    """
+
+    layout = layout_of(tmp_path)
+    checks = assess_box(layout, machine(layout, interpreter=None, interpreter_blocker=None))
+    assert verdict_of(checks, "environment") is Verdict.OK
