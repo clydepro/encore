@@ -30,12 +30,13 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from apps.installer.layout import Layout
+from apps.installer.layout import PYTHON_VERSION, Layout
 from apps.installer.options import Command, Options, Settings
 from apps.installer.system import (
     CommandResult,
     OsRelease,
     RealMachine,
+    ServiceAccount,
     ServiceState,
     SubprocessRunner,
 )
@@ -166,6 +167,9 @@ class FakeMachine(RealMachine):
         binaries: `mpv` and `uv` as the machine sees them; None means "not installed".
         disk_free: Bytes free anywhere, or None for "a real filesystem's answer".
         health: What `/api/v1/health` answered, or None for "not asked".
+        account: What the service account's record says, where `user=True`. Its primary group
+            matters: #46's question is whether that identity can walk to the interpreter, and an
+            account that belongs to nothing is the machine where the answer is no.
     """
 
     def __init__(
@@ -182,6 +186,7 @@ class FakeMachine(RealMachine):
         hostname: str = "jukebox",
         binaries: Mapping[str, Path | None] | None = None,
         disk_free: int | None = None,
+        account: ServiceAccount | None = None,
     ) -> None:
         self._recorder = recorder if recorder is not None else RecordingRunner()
         super().__init__(self._recorder)
@@ -202,6 +207,19 @@ class FakeMachine(RealMachine):
             else {"mpv": Path("/usr/bin/mpv"), "uv": Path("/usr/bin/uv")}
         )
         self._disk_free = disk_free
+        self._account = account
+
+    def user(self, name: str) -> ServiceAccount | None:
+        # `user_exists` already tells this fiction, so `user` has to as well: the two disagreeing is
+        # how #41's fake could report an account that its own chown then failed to find, and #46's
+        # question — can *this identity* execute that path — is asked of this record.
+        if not self._user:
+            return None
+        if self._account is not None:
+            return self._account
+        return ServiceAccount(
+            name=name, shell="/usr/sbin/nologin", home="/var/lib/encore", group=name
+        )
 
     @property
     def recorder(self) -> RecordingRunner:
@@ -304,12 +322,21 @@ def checkout() -> Path:
 
 
 def synced(*commands: str) -> dict[tuple[str, ...], Callable[[Call], None]]:
-    """The *effect* of `uv sync`, without the network.
+    """The *effects* of `uv python install` and `uv sync`, without the network.
 
-    A test that ran the real command would resolve a dependency graph on every install; a test
-    that skipped it would leave `venv/bin/encore-server` nonexistent, which the acceptance list
-    correctly calls a broken appliance. So the outcome is substituted and the command is still
-    recorded — `ran("uv", "sync")` stays true, and the environment ends up runnable.
+    A test that ran the real commands would resolve a dependency graph and download a CPython on
+    every install; a test that skipped them would leave `venv/bin/encore-server` nonexistent, which
+    the acceptance list correctly calls a broken appliance. So the outcomes are substituted and the
+    commands are still recorded — `ran("uv", "sync")` stays true, and the environment ends up
+    runnable.
+
+    What they leave behind is the venv `uv` leaves behind, not a directory of shell scripts: a
+    `bin/python` that is a symlink into the interpreter directory, and console scripts whose shebang
+    names it. #46 is the reason. The interpreter's *location* is the fact that decides whether the
+    appliance starts, so a fake whose entry point says `#!/bin/sh` cannot express the machine where
+    that path runs through a `drwx------` home — and a recorder that answered `uv python install`
+    with success and no filesystem effect would let the executor plan a `--python` path that never
+    existed, which is #41's accidentally-green fake one command later.
 
     Args:
         commands: The entry points to leave in the environment. Defaults to the three the
@@ -321,14 +348,62 @@ def synced(*commands: str) -> dict[tuple[str, ...], Callable[[Call], None]]:
     """
 
     def create_environment(call: Call) -> None:
-        environment = (call.env or {}).get("UV_PROJECT_ENVIRONMENT")
+        environ = call.env or {}
+        environment = environ.get("UV_PROJECT_ENVIRONMENT")
         if environment is None:
             return
         binary = Path(environment) / "bin"
         binary.mkdir(parents=True, exist_ok=True)
+        interpreter = _managed_interpreter(environ.get("UV_PYTHON_INSTALL_DIR"))
+        launcher = binary / "python"
+        if interpreter is not None:
+            launcher.unlink(missing_ok=True)
+            launcher.symlink_to(interpreter)
+        named = f"#!{launcher if interpreter is not None else Path('/bin/sh')}\n"
         for command in commands or ("encore-server", "encore-builder", "encore-install"):
             script = binary / command
-            script.write_text(f'#!/bin/sh\nexec {command} "$@"\n')
+            script.write_text(f'{named}exec {command} "$@"\n')
             script.chmod(0o755)
 
-    return {("uv", "sync"): create_environment}
+    return {
+        ("uv", "sync"): create_environment,
+        ("uv", "python", "install"): install_interpreter,
+    }
+
+
+def install_interpreter(call: Call) -> None:
+    """`uv python install --install-dir D`, which leaves a CPython under `D`.
+
+    The directory is named in argv rather than in the environment. Registering an effect for it is
+    the difference #41 taught about: a recorder that answers `uv python install` with success and
+    nothing on disk lets the next command be planned against a path that does not exist.
+    """
+
+    argv = call.argv
+    if "--install-dir" in argv:
+        _managed_interpreter(argv[argv.index("--install-dir") + 1], alias=True)
+
+
+def _managed_interpreter(install_dir: str | None, *, alias: bool = False) -> Path | None:
+    """A stand-in for the CPython `uv` downloads, placed where it said it would put it.
+
+    Nothing in the suite executes it — the entry points are only ever inspected — but it is created
+    0755 under a 0755 tree so that the traversal arithmetic in `interpreter_blocker` has something
+    true to run against.
+
+    `alias=True` also leaves uv's stable `cpython-3.12-<platform>` symlink beside the versioned
+    directory, because that is what the real layout contains and the executor has to pick one.
+    """
+
+    if install_dir is None:
+        return None
+    root = Path(install_dir)
+    interpreter = root / f"cpython-{PYTHON_VERSION}.0-test" / "bin" / f"python{PYTHON_VERSION}"
+    interpreter.parent.mkdir(parents=True, exist_ok=True)
+    interpreter.write_text("#!/bin/sh\nexit 0\n")
+    interpreter.chmod(0o755)
+    if alias:
+        stable = root / f"cpython-{PYTHON_VERSION}-test"
+        stable.unlink(missing_ok=True)
+        stable.symlink_to(interpreter.parent, target_is_directory=True)
+    return interpreter

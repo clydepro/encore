@@ -13,20 +13,26 @@ computer running pytest: the environments are literals and the binaries are file
 
 from __future__ import annotations
 
+import grp
 import os
 import pwd
 import stat
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from apps.installer.system import (
     USER_BIN_DIRS,
     CommandResult,
+    Machine,
+    PathState,
     RealMachine,
+    ServiceAccount,
     SubprocessRunner,
+    interpreter_blocker,
+    interpreter_of,
     search_path,
 )
 
@@ -266,3 +272,193 @@ def test_the_real_environment_is_not_reduced_by_a_home_that_points_at_a_binary_d
     executable(tmp_path / ".local/bin/whichprobe")
 
     assert RealMachine().which("whichprobe") == tmp_path / ".local/bin/whichprobe"
+
+
+def test_a_shebang_names_the_program_the_kernel_will_actually_run() -> None:
+    """The line that turns "is this file executable" into a question about a different file.
+
+    `#!/bin/sh` at the top of a console script is not a comment: systemd execs it, the kernel reads
+    it, and the answer to "can the appliance start" moves to wherever that path leads. An
+    `env`-style shebang resolves against the invoking account's `PATH`, which is not a fact about
+    this filesystem, so it is answered with None rather than with a guess.
+    """
+
+    assert interpreter_of("#!/opt/encore/venv/bin/python\nimport sys\n") == Path(
+        "/opt/encore/venv/bin/python"
+    )
+    assert interpreter_of("#!/bin/sh") == Path("/bin/sh")
+    assert interpreter_of("#!/usr/bin/env python3") is None
+    assert interpreter_of("#!/opt/encore/venv/bin/python  -E ") == Path(
+        "/opt/encore/venv/bin/python"
+    )
+    assert interpreter_of("no shebang here") is None
+    assert interpreter_of(None) is None, "a path root could not read is a question, not an answer"
+
+
+class _Table:
+    """A machine that answers `stat` from a table, because the arithmetic is the point.
+
+    Built out of path facts rather than out of a real filesystem so that a directory can be
+    `drwx------` on a machine where the test process is root and could walk through it anyway —
+    which is #46: the account that matters is the one in `User=`, never the one running the check.
+
+    Only `stat` is implemented, which is the only question `interpreter_blocker` asks. A full
+    `Machine` here would be a double answering questions this function does not pose.
+    """
+
+    def __init__(self, **paths: tuple[str, str, int]) -> None:
+        self._paths = {
+            Path(final): PathState(
+                path=Path(final),
+                exists=True,
+                is_dir=not final.rsplit("/", 1)[-1].count("."),
+                owner=owner,
+                group=group,
+                mode=mode,
+            )
+            for final, (owner, group, mode) in paths.items()
+        }
+
+    def stat(self, path: Path) -> PathState:
+        return self._paths.get(path, PathState(path=path))
+
+
+def table(**paths: tuple[str, str, int]) -> Machine:
+    """`_Table` as the protocol asks for it.
+
+    A cast rather than an implementation: `interpreter_blocker` puts one question to a machine, and
+    a double that also answered `systemctl` would be claiming more than it knows.
+    """
+
+    return cast("Machine", _Table(**paths))
+
+
+ENCORE = ServiceAccount(
+    name="encore", shell="/usr/sbin/nologin", home="/var/lib/encore", group="encore"
+)
+
+
+def test_a_private_directory_blocks_a_service_account_below_it() -> None:
+    """#46's exact machine: the interpreter is there, readable, and unreachable.
+
+    Every mode bit on `/opt/encore/venv/bin/python` says executable. What stops the appliance is
+    `/root` above it, which is `drwx------` on Debian by default and is where uv put a downloaded
+    CPython because root ran the install.
+    """
+
+    machine = table(
+        **{
+            "/": ("root", "root", 0o755),
+            "/root": ("root", "root", 0o700),
+            "/root/.local": ("root", "root", 0o755),
+            "/root/.local/share": ("root", "root", 0o700),
+            "/root/.local/share/uv": ("root", "root", 0o755),
+            "/root/.local/share/uv/python": ("root", "root", 0o755),
+            "/root/.local/share/uv/python/cpython-3.12": ("root", "root", 0o755),
+            "/root/.local/share/uv/python/cpython-3.12/bin": ("root", "root", 0o755),
+            "/root/.local/share/uv/python/cpython-3.12/bin/python3.12": ("root", "root", 0o755),
+        }
+    )
+    blocked = Path("/root/.local/share/uv/python/cpython-3.12/bin/python3.12")
+    assert interpreter_blocker(machine, blocked, account=ENCORE) == Path("/root")
+
+
+def test_the_same_file_is_reachable_when_everything_above_it_is_searchable() -> None:
+    """The fix, as one line of table: same modes on the file, `/opt/encore/python` above it."""
+
+    machine = table(
+        **{
+            "/": ("root", "root", 0o755),
+            "/opt": ("root", "root", 0o755),
+            "/opt/encore": ("root", "root", 0o755),
+            "/opt/encore/python": ("root", "root", 0o755),
+            "/opt/encore/python/cpython-3.12": ("root", "root", 0o755),
+            "/opt/encore/python/cpython-3.12/bin": ("root", "root", 0o755),
+            "/opt/encore/python/cpython-3.12/bin/python3.12": ("root", "root", 0o755),
+        }
+    )
+    target = Path("/opt/encore/python/cpython-3.12/bin/python3.12")
+    assert interpreter_blocker(machine, target, account=ENCORE) is None
+
+
+def test_the_owner_the_group_and_everybody_are_three_different_answers() -> None:
+    """Which triad applies is decided by who the account *is*, not by what the mode looks like.
+
+    Three machines, one bit each, and a wrong choice among them is a check that passes a broken
+    appliance or fails a working one:
+    """
+
+    def one(mode: int, *, owner: str = "root", group: str = "root") -> Path | None:
+        machine = table(
+            **{
+                "/": ("root", "root", 0o755),
+                "/srv": (owner, group, mode),
+                "/srv/python": ("root", "root", 0o755),
+            }
+        )
+        return interpreter_blocker(machine, Path("/srv/python"), account=ENCORE)
+
+    assert one(0o750) == Path("/srv"), "0750 root:root says nothing to encore"
+    assert one(0o750, group="encore") is None, "the primary group is a real answer"
+    assert one(0o710, group="encore") is None, "search without read is enough to exec"
+    assert one(0o705) is None, "other-x is enough, and an ACL-free 0705 is a shared directory"
+    assert one(0o700) == Path("/srv"), "and 0700 is /root"
+
+
+def test_a_supplementary_group_counts_because_that_is_how_audio_is_granted() -> None:
+    """Membership is asked of the account's groups, not of its primary one.
+
+    The appliance's own privilege model is supplementary (13.5: `encore` joins `audio`), so a check
+    that looked only at `pw_gid` would disagree with the machine about half of what 13.5 sets up.
+    """
+
+    machine = table(
+        **{
+            "/": ("root", "root", 0o755),
+            "/srv": ("root", "shared", 0o750),
+            "/srv/python": ("root", "root", 0o755),
+        }
+    )
+    account = ServiceAccount(name="encore", shell="/usr/sbin/nologin", home="/x", group="encore")
+    assert interpreter_blocker(machine, Path("/srv/python"), account=account) == Path("/srv")
+    member = ServiceAccount(
+        name="encore", shell="/usr/sbin/nologin", home="/x", group="encore", groups=("shared",)
+    )
+    assert interpreter_blocker(machine, Path("/srv/python"), account=member) is None
+
+
+def test_a_path_that_stops_existing_blocks_at_the_component_where_it_stops(tmp_path: Path) -> None:
+    """A dangling symlink blocks at the link, not at a mode it never got to consult.
+
+    `uv` removes its managed interpreter on `clean`, and an upgrade that relinked a venv to a
+    directory mid-removal produces exactly this: the entry point is executable, and there is
+    nothing at the other end of it.
+    """
+
+    missing = tmp_path / "venv" / "bin" / "python"
+    assert interpreter_blocker(RealMachine(), missing, account=ENCORE) is not None
+
+
+def test_the_arithmetic_agrees_with_the_kernel_on_this_filesystem(tmp_path: Path) -> None:
+    """The predicate is a reimplementation of `access(2)`, so it is checked against `access(2)`.
+
+    Not against a table: for the identity that *can* be used here — the one running the test —
+    `os.access` is the kernel answering the same question, on real directories with real modes.
+    Where they disagree, `_grants` is wrong and this is the file that says so.
+    """
+
+    account = ServiceAccount(
+        name=pwd.getpwuid(os.getuid()).pw_name,
+        shell="/bin/sh",
+        home="/",
+        group=grp.getgrgid(os.getgid()).gr_name,
+    )
+    for mode, label in ((0o755, "shared"), (0o700, "private"), (0o750, "group")):
+        home = tmp_path / label
+        home.mkdir()
+        home.chmod(mode)
+        interpreter = home / "python"
+        interpreter.write_text("#!/bin/sh\n")
+        interpreter.chmod(0o755)
+        blocked = interpreter_blocker(RealMachine(), interpreter, account=account)
+        assert (blocked is None) == os.access(interpreter, os.X_OK), f"{label}: {mode:o}"

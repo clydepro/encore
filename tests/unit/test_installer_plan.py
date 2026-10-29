@@ -112,6 +112,10 @@ def empty(layout: Layout, **overrides: object) -> ApplianceState:
         "port_free": True,
         "hostname": "jukebox",
         "root": True,
+        # Stated like every other field, because #46's machine is one where this is not None and an
+        # `install` that did not notice would plan nothing on the box that started this.
+        "interpreter": None,
+        "interpreter_blocker": None,
         "present": {final: False for final, _ in layout.removals} | {RUNTIME_DB: False},
     }
     return ApplianceState(**{**base, **overrides})  # type: ignore[arg-type]
@@ -169,6 +173,10 @@ def installed(layout: Layout, **overrides: Any) -> ApplianceState:
         application_matches=True,
         environment_matches=True,
         environment_runnable=True,
+        # A machine whose venv points at a readable interpreter, which is what "installed" means for
+        # #46 — the two fields a healthy install leaves behind it.
+        interpreter=layout.staged(f"{layout.python}/cpython-3.12/bin/python3.12"),
+        interpreter_blocker=None,
         present={final: True for final, _ in layout.removals},
     )
     return replace(state, **overrides) if overrides else state
@@ -234,6 +242,30 @@ def test_an_interrupted_install_gets_only_the_missing_half(tmp_path: Path) -> No
     assert action_kinds(
         install_plan(options(stage(tmp_path), service=True), state, EncoreConfig()).actions
     ) == [SyncEnvironment.__name__]
+
+
+def test_an_environment_the_service_cannot_execute_is_drift(tmp_path: Path) -> None:
+    """#46's repair path, which is the difference between a fixed installer and a fixed machine.
+
+    The lockfile stamp matches, so every existing comparison says the environment is current — and
+    it is current, for the root shell that built it. It is unusable for the account in `User=`, and
+    an `install` that planned nothing here would report `nothing to do — the machine already matches
+    this request` on an appliance that cannot start. Reachability is therefore part of "current", not
+    a separate opinion the plan is free to ignore.
+    """
+
+    layout = stage(tmp_path)
+    state = installed(
+        layout,
+        interpreter=Path("/root/.local/share/uv/python/cpython-3.12/bin/python3.12"),
+        interpreter_blocker=Path("/root"),
+    )
+    assert state.environment_matches, "the stamp is not the problem, and saying so would be a lie"
+    actions = install_plan(options(layout, service=True), state, EncoreConfig()).actions
+    assert action_kinds(actions) == [SyncEnvironment.__name__]
+    sync = actions[0]
+    assert isinstance(sync, SyncEnvironment)
+    assert "cannot" in sync.detail or "reach" in sync.detail, sync.detail
 
 
 def test_drift_is_repaired_rather_than_recreated(tmp_path: Path) -> None:

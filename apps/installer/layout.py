@@ -46,6 +46,12 @@ DEFAULT_GROUP = "encore"
 #: healthy and one that is quiet.
 AUDIO_GROUP = "audio"
 
+#: The interpreter the appliance runs on, as `uv` names it. Matches `requires-python` in
+#: `pyproject.toml`, and is stated here rather than read from it because the installer runs before
+#: the project is unpacked in some orderings and because a floor is a decision, not an import.
+#: AIG 3.
+PYTHON_VERSION = "3.12"
+
 # SAPRS 13.10's three scopes, in the words an operator reads in a removal report.
 SCOPE_APPLICATION = "application"
 SCOPE_CONFIGURATION = "configuration"
@@ -135,6 +141,20 @@ class Layout:
         return "/opt/encore/venv"
 
     @property
+    def python(self) -> str:
+        """`/opt/encore/python` — the interpreter the venv links to, when the machine has none.
+
+        Not in SAPRS 13.3's table because 13.3 assumes a system Python, and Debian 12 does not have
+        one new enough (`requires-python` is 3.12, bookworm ships 3.11), so `uv` downloads a managed
+        CPython. Where it puts that download is `UV_PYTHON_INSTALL_DIR`, whose default is the
+        *invoking account's* `~/.local/share/uv/python` — under `sudo`, inside `/root`, which is
+        `drwx------`. The venv then links to an interpreter `User=encore` can never reach and the
+        unit dies at exec (#46). Giving it a place of its own, world-readable and next to the venv,
+        is what makes the download survive the account that triggered it.
+        """
+        return "/opt/encore/python"
+
+    @property
     def config_file(self) -> str:
         """`/etc/encore/config.yaml` — the file the Server reads and never writes (12.3)."""
         return "/etc/encore/config.yaml"
@@ -205,6 +225,14 @@ class Layout:
                 group=self.group,
                 mode=0o755,
                 purpose="the dedicated virtual environment (SAPRS 13.4)",
+            ),
+            Directory(
+                final=self.python,
+                owner="root",
+                group="root",
+                mode=0o755,
+                purpose="the downloaded interpreter the venv links to, readable by the service "
+                "account (#46)",
             ),
             Directory(
                 final="/etc/encore",
@@ -337,6 +365,7 @@ class Layout:
             (self.tmpfiles_file, SCOPE_APPLICATION),
             (self.application, SCOPE_APPLICATION),
             (self.venv, SCOPE_APPLICATION),
+            (self.python, SCOPE_APPLICATION),
             ("/opt/encore", SCOPE_APPLICATION),
             ("/etc/encore", SCOPE_CONFIGURATION),
             (self.state, SCOPE_DATA),
