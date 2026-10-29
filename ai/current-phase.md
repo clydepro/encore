@@ -5,8 +5,9 @@
 [#32](https://github.com/clydepro/encore/issues/32), then fixed twice by its own documented command
 ([#38](https://github.com/clydepro/encore/issues/38),
 [#41](https://github.com/clydepro/encore/issues/41) — see "What running it as root found" below).
-**Phase 7 — dependency alerts — is open as
-[#39](https://github.com/clydepro/encore/issues/39) / [#40](https://github.com/clydepro/encore/pull/40).** Phases 1–5 are merged:
+**Phase 7 — the dependency-alert chore — merged as
+[#40](https://github.com/clydepro/encore/pull/40), closing
+[#39](https://github.com/clydepro/encore/issues/39).** Phases 1–5 are merged:
 [PR #20](https://github.com/clydepro/encore/pull/20) (domain, bus, configuration),
 [PR #22](https://github.com/clydepro/encore/pull/22) (repositories, Builder — closed #19),
 [PR #24](https://github.com/clydepro/encore/pull/24) (search, playback, queue — closed #23),
@@ -129,6 +130,15 @@ observed state (`ApplianceState.root`, `.user_exists`), which is what that modul
 always claimed. On a real appliance a failed `chown` is still fatal, and that half is asserted too —
 the fix must not mean a machine that cannot read its own configuration shrugs.
 
+**A third, found by running the suite as root rather than the installer.**
+`test_a_real_root_rehearsal_completes` is the only test in this repository that CI has never
+executed: it skips unless the process is root, and the runners are not. It was red the first time it
+ran — its recorder was given `real=(("rsync",),)` and no `effects`, so `uv sync` was recorded,
+produced no venv, and the acceptance list correctly failed the rehearsal it existed to bless. One
+argument fixes it (`effects=synced()`, what every other installer test passes), but the reason it
+was wrong is the same as #38's and #41's: the assertion lived in a branch of the machine nobody on
+this project had standing in. A skip that has never been un-skipped is not coverage.
+
 **The finding worth carrying into step 16.** `RecordingRunner` answered every unrecognised command
 with success, so every test in the suite saw a `chown` that worked. Changing that one default turned
 19 tests red. This is the general form of the sentence in `ai/HANDOFF.md` about bugs living between
@@ -143,7 +153,9 @@ simulator whose guests never fail is the same trap with a bigger number in front
    DACs, the mpv socket under the `encore` account on a machine with a real `audio` group. The
    manual steps in `docs/Administrator-Guide.md` are the checklist; run them once on hardware
    before calling step 15 closed. #38 and #41 were what the first attempt at that found, and there
-   will be more where those came from.
+   will be more where those came from. Run `pytest tests/regression/test_issue_38_installer_path.py`
+   as root while you are there: it is the one file in the suite that asks the machine to be a
+   machine, and off hardware one of its five tests never runs at all.
 2. **Party Simulation driver (milestone 16)** — the 15,000-song corpus, hundreds of guests,
    HTTP-fronted clients. `tests/party_simulation/test_admin_in_the_room.py` added the operator to
    the shape of a party; the scale is still missing.

@@ -212,6 +212,16 @@ exactly that command on a real one (#41). The runner now refuses a `chown` namin
 machine says is absent, and the 19 tests that changed behaviour as a result are the point — an
 accidentally-green fake is not a check, and the fix was to the fake rather than to the assertion.
 
+**A skip is not coverage.** `test_a_real_root_rehearsal_completes` runs only when the process is
+root, so no CI run on this repository has ever executed it — and it was wrong: its
+`RecordingRunner` had no `effects`, so `uv sync` was recorded, produced no environment, and the
+acceptance list failed the rehearsal the test existed to bless. It is fixed, and it passes as root
+(`sudo env PATH="$PATH" uv run pytest tests/regression/test_issue_38_installer_path.py`).
+The rule it teaches is
+the same one in the paragraph above, stated about the runner rather than the fake: a branch of the
+test matrix nobody can stand in is a branch nobody tests, so name it in the hardware checklist
+rather than trusting the skip to be honest about itself.
+
 **The host is a seam, not a mock.** `tests/support/installer.py` gives the suite two doubles that
 are deliberately different in kind. `RecordingRunner` captures argv, environment and working
 directory instead of spawning, which is 13.6's "every command is logged" made testable.

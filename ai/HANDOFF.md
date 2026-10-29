@@ -7,8 +7,9 @@ request → SAPRS → AIG → ADRs → AEP (AEP 2). This page is a pointer, not 
 be wrong faster than the SAPRS is.
 
 State as of this writing: **Phases 1–6 are merged (#20, #22, #24, #26, #27, #33). Step 15 then
-broke twice on the command in its own documentation — #38 and #41, both fixed — and the open work is
-the dependency-alert chore [#40](https://github.com/clydepro/encore/pull/40) for issue #39.** The
+broke twice on the command in its own documentation — #38 and #41, both fixed — and the
+dependency-alert chore [#40](https://github.com/clydepro/encore/pull/40) has merged, closing
+[#39](https://github.com/clydepro/encore/issues/39), so the open work is milestone 16.** The
 appliance now installs itself:
 `sudo ENCORE_ADMIN_PASSWORD='…' ./scripts/encore-install install`, from a clone, on a machine that
 had nothing on it a minute before. A guest scans a code printed by the appliance itself, an
@@ -103,7 +104,10 @@ Then `tests/integration/test_installer_lifecycle.py`, which is this phase told a
   including `chown root:encore` on a machine the test had just declared had no `encore` group — so
   the rehearsal rehearsed an ownership change that never happens, and 19 tests changed behaviour
   when the fake was given that one way to refuse. The general form, for whatever suite you write
-  next: a fake's defaults are assertions too, and the ones nobody chose are the ones that lie.
+  next: a fake's defaults are assertions too, and the ones nobody chose are the ones that lie. And
+  the corollary, learned a commit later: #41's own root-only test — the one file that skips unless
+  `geteuid() == 0`, so the one test CI has never executed — was red when it finally ran. A guard
+  that only opens on hardware has to be walked through on hardware, once, before it counts.
 - **`segno`, not a hand-rolled encoder.** A QR symbol is data encoding, Reed-Solomon over GF(256),
   mask selection by penalty score and a format string, in that order, and a mistake in any of the
   four produces an image that looks correct and does not scan — which surfaces at a party. The
