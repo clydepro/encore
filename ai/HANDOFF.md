@@ -7,8 +7,8 @@ request → SAPRS → AIG → ADRs → AEP (AEP 2). This page is a pointer, not 
 be wrong faster than the SAPRS is.
 
 State as of this writing: **Phases 1–6 are merged (#20, #22, #24, #26, #27, #33). Step 15 then
-broke four times on the command in its own documentation — #38, #41, #43, #44, all fixed — and the
-dependency-alert chore [#40](https://github.com/clydepro/encore/pull/40) has merged, closing
+broke five times on the commands in its own documentation — #38, #41, #43, #44, #46, all fixed — and
+the dependency-alert chore [#40](https://github.com/clydepro/encore/pull/40) has merged, closing
 [#39](https://github.com/clydepro/encore/issues/39), so the open work is milestone 16.** The
 appliance now installs itself:
 `sudo ENCORE_ADMIN_PASSWORD='…' ./scripts/encore-install install`, from a clone, on a machine that
@@ -16,9 +16,9 @@ had nothing on it a minute before. A guest scans a code printed by the appliance
 operator's password can be set before the box boots, and `encore-install verify` answers SAPRS
 13.11's acceptance list with a fix under every line that is not green.
 
-1526 tests pass in the standard gate (1578 with the slow suites), 93.6% coverage of `encore/`,
+1547 tests pass in the standard gate (1599 with the slow suites), 93.6% coverage of `encore/`,
 `ruff` and strict `mypy` clean across `encore/`, `apps/`, `tests/` and `tools/`. Two new ADRs (014,
-015) and four regression files.
+015) and five regression files.
 
 **Nothing here has met a Raspberry Pi.** The sentence was written in the last handoff about the
 guest interface and about the administrative interface; now it is about the install itself, and it
@@ -46,13 +46,14 @@ authoritative in a way no test can be.
 4. **`apps/installer/execute.py`** — the only module that changes anything, and the one that
    refuses a deletion outside `Layout.owned_roots`.
 5. **`apps/installer/system.py`** — the two seams, and the questions the machine is allowed to be
-   asked. `search_path` is the one owner of "where a host binary is" (#38), `systemd_running` is
-   the one owner of "does this machine have a service manager" (#43), and `observe()` is the one
-   place anything is looked up, once, so `execute.py` decides effects and never facts. Two rules
-   learned the hard way, and they are the same rule: a field that carries two facts lets every
-   consumer choose which one it meant, and a double that cannot build the combination cannot test
-   it. When a step there starts calling `os.geteuid()` or `Path.exists()` directly, the test double
-   has already started lying.
+   asked. `search_path` is the one owner of "where a host binary is" (#38), `systemd_running` of
+   "does this machine have a service manager" (#43), `interpreter_of`/`interpreter_blocker`/
+   `resolve` of "can the account in `User=` execute what `ExecStart` names" (#46), and `observe()`
+   is the one place anything is looked up, once, so `execute.py` decides effects and never facts.
+   Three rules learned the hard way, and they are the same rule: a field that carries two facts lets
+   every consumer choose which one it meant; a permission bit is not an answer about an identity;
+   and a double that cannot build the combination cannot test it. When a step there starts calling
+   `os.geteuid()` or `Path.exists()` directly, the test double has already started lying.
 6. **`docs/Administrator-Guide.md`'s installation section** — the manual steps, which are the
    specification the installer is measured against. Where the two disagree, one of them has a bug
    and it is not necessarily the installer's.
@@ -111,6 +112,16 @@ Then `tests/integration/test_installer_lifecycle.py`, which is this phase told a
   the corollary, learned a commit later: #41's own root-only test — the one file that skips unless
   `geteuid() == 0`, so the one test CI has never executed — was red when it finally ran. A guard
   that only opens on hardware has to be walked through on hardware, once, before it counts.
+- **…and a check can ask the right question about the wrong thing.** #46 is not a fake that could
+  not express a state; every answer in the report was *true*. `_environment` asked whether
+  `/opt/encore/venv/bin/encore-server` had an execute bit, it did, and the appliance could not
+  start — because a script is a pointer to an interpreter, the interpreter was a symlink into
+  `/root` (uv downloads Python 3.12 there when root runs the install on a Debian 12 box), and
+  `/root` is `drwx------`. The `encore` account never gets there, so `mode & 0o111` was a correct
+  answer about an inode for a question about an identity. When you write the next check that ends in
+  a permission bit, ask which *user* the claim belongs to first; and when a fix detects a broken
+  machine, make sure the same command can also repair it — #46's first cut made the finding a
+  prerequisite failure, and `install` duly refused to fix the thing it fixes.
 - **…and a double that cannot describe a machine cannot test on it.** #43 was not a fake answering
   yes; it was a fake with no way to say "systemd is running *and* there is no unit yet", which is
   every machine before its first install. `systemd=True` implied an empty `ServiceState.detail`,

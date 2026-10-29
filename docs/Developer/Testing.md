@@ -224,6 +224,18 @@ other. That is also why `tests/unit/test_installer_checks.py::machine` now state
 `systemd_running` explicitly instead of letting the dataclass default answer it: a fixture whose
 combinations arrive from defaults will eventually ship the default that is wrong.
 
+**A permission bit is not an answer about an identity.** #46 was the fifth finding of the installer
+milestone and the only one where nothing in the report was false: `environment` asked whether
+`/opt/encore/venv/bin/encore-server` had `0o111` set, it did, and the service could not start — the
+script's shebang named an interpreter that was a symlink into `/root`, which is `drwx------`, and
+`User=encore` cannot search it. The lesson for the next checker is not "test more" but: before you
+assert on `mode`, name whose permissions the claim is about, and ask the question of *that* account
+(`interpreter_blocker` is the DAC walk the kernel makes, and its regression test checks it against
+`access(2)` as a foreign user, root-only). Second lesson, same bug: a fix that only *detects* a
+broken machine is half a fix. The first cut made the finding a prerequisite failure and `install`
+refused to repair the defect `install` repairs, so an unreachable interpreter counts as drift and
+the check's severity belongs to the command — WARN on `install`/`upgrade`, FAIL on `verify`.
+
 **A skip is not coverage.** `test_a_real_root_rehearsal_completes` runs only when the process is
 root, so no CI run on this repository has ever executed it — and it was wrong: its
 `RecordingRunner` had no `effects`, so `uv sync` was recorded, produced no environment, and the

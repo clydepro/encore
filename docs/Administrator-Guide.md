@@ -121,9 +121,22 @@ has already set (ADR-015).
 
    ```bash
    sudo git clone https://github.com/clydepro/encore.git /opt/encore/application
-   sudo -u encore UV_PROJECT_ENVIRONMENT=/opt/encore/venv \
-        uv sync --frozen --no-dev --project /opt/encore/application
+   sudo mkdir -p /opt/encore/python
+   sudo chown root:root /opt/encore/python
+   sudo env UV_PYTHON_INSTALL_DIR=/opt/encore/python \
+        uv python install 3.12 --install-dir /opt/encore/python
+   sudo env UV_PROJECT_ENVIRONMENT=/opt/encore/venv \
+        uv sync --frozen --no-dev --project /opt/encore/application \
+        --python "$(ls -d /opt/encore/python/cpython-3.12.*/bin/python3.12 | tail -1)"
    ```
+
+   The interpreter is *named* rather than left to be found, and that is the whole of
+   [#46](https://github.com/clydepro/encore/issues/46): `uv` searches the directory
+   beside its own binary as well as `UV_PYTHON_INSTALL_DIR`, so a plain `uv sync` run
+   under `sudo` can happily link the venv to a CPython inside `/root`, which is
+   `drwx------` — and `User=encore` then cannot execute `ExecStart` (systemd reports
+   `status=203/EXEC`). Running the sync as `encore` instead works, but buries a
+   60 MB interpreter inside the data directory that `remove --purge-data` owns.
 
 4. Write `/etc/encore/config.yaml` from
    [`examples/config.yaml`](../examples/config.yaml), and

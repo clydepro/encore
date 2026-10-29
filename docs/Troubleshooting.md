@@ -215,11 +215,63 @@ same moment.
 - Port already in use, or `/var/lib/encore` permissions for the `encore` user.
   `sudo encore-install verify` checks both, and every other item on SAPRS 13.11's
   acceptance list, with a fix under each line that is not green.
+- `Failed at step EXEC … Permission denied`, `status=203/EXEC`: the interpreter, not
+  the program. See
+  [the service fails at exec with Permission denied](#the-service-fails-at-exec-with-permission-denied).
+  Nothing in the acceptance list used to be able to say this, so an install could be
+  green and the appliance dead (#46).
 - If the sign-in page says no administrator has signed in here yet when you are
   sure `ENCORE_ADMIN_PASSWORD` was set: the value is read on the *first* boot only,
   and never overwrites a credential that already exists (ADR-015). A too-weak value
   is skipped with a line in the journal rather than being fatal. `encore-install
   reset-credential` puts the first-run page back.
+
+### The service fails at exec with Permission denied
+
+```text
+encore.service: Failed to execute /opt/encore/venv/bin/encore-server: Permission denied
+encore.service: Failed at step EXEC spawning /opt/encore/venv/bin/encore-server: Permission denied
+encore.service: Main process exited, code=exited, status=203/EXEC
+```
+
+`203/EXEC` with *Permission denied* is not a mode bit on that file, and `ls -l` will
+mislead you: the script is `0755` and correct. A script is an instruction about which
+program to run, so follow it instead —
+
+```bash
+namei -l "$(readlink -f /opt/encore/venv/bin/python)"
+sudo -u encore /opt/encore/venv/bin/python -c 'print("reachable")'
+```
+
+— and if the walk stops at somebody's home directory, that is #46. Debian 12 ships
+Python 3.11 and Encore needs 3.12, so `uv` downloads one, and where it puts the download
+is the home of whoever ran the command: under `sudo`, inside `/root`, which is
+`drwx------`. The venv is then a chain of symlinks into a directory `User=encore` cannot
+search. Nothing the acceptance list could ask about a file's mode would notice, which is
+why an install of that release printed `ok environment` over a service that could not
+start.
+
+The fix is one command, and it is safe to re-run: `sudo encore-install install` now puts
+the interpreter in `/opt/encore/python` and builds the environment against it explicitly,
+and it treats "the service account cannot reach the interpreter" as drift — so on a
+machine already installed by the older release it repairs rather than reporting that
+nothing needs doing. If you would rather not run the installer, move the interpreter it
+already paid for:
+
+```bash
+sudo mkdir -p /opt/encore/python
+sudo cp -a /root/.local/share/uv/python/. /opt/encore/python/
+sudo chmod -R a+rX /opt/encore/python
+sudo env UV_PYTHON_INSTALL_DIR=/opt/encore/python \
+     uv sync --frozen --no-dev --project /opt/encore/application \
+     --python "$(ls -d /opt/encore/python/cpython-3.12.*/bin/python3.12 | tail -1)"
+sudo systemctl restart encore
+```
+
+The same arithmetic applies to a venv you built yourself. Do not run `uv sync` as root and
+expect the appliance to agree: either name the interpreter (`--python`), or run the
+command as the service account — though that puts a 60 MB interpreter under
+`/var/lib/encore`, which `remove --purge-data` then owns.
 
 ### Library build problems
 

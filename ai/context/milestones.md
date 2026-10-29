@@ -22,7 +22,7 @@ or too early.
 | 12 | HTMX | **Done — `encore/controllers/`, `encore/templates/`, `encore/static/`** |
 | 13 | SSE | **Done — `encore/services/sse_publisher.py`, `/events`** |
 | 14 | Administrative interface | **Done — `encore/api/auth.py`, `controllers/admin.py`, `templates/admin/`, `services/{admin,statistics}_service.py`** |
-| 15 | Installer | **Done — `apps/installer/`, `scripts/encore-install`, ADR-014/015 (#32, #38, #41)** |
+| 15 | Installer | **Done — `apps/installer/`, `scripts/encore-install`, ADR-014/015 (#32, #38, #41, #43, #44, #46)** |
 | 16 | Party Simulation | Not started |
 | 17 | Documentation | Ongoing |
 
@@ -242,8 +242,8 @@ them (`container.py` still builds config and logging only — the wiring belongs
 - Test infrastructure: fixtures, temp SQLite helpers, mock mpv, Party Simulation
   profiles + loader, a performance target registry with all five of its budgets measured rather
   than promised, an ASGI driver that can hold an SSE response open, and a synthetic media generator
-  that writes real silent MP3/FLAC containers with valid tags and embedded covers. 1526 tests in the
-  standard gate, 1578 with the slow suites.
+  that writes real silent MP3/FLAC containers with valid tags and embedded covers. 1547 tests in the
+  standard gate, 1599 with the slow suites.
 - Architecture guardrail tests and `tools/check_links.py`.
 
 ## Explicitly not implemented
