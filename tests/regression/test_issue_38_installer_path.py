@@ -27,7 +27,7 @@ from apps.installer.layout import Layout
 from apps.installer.main import EXIT_OK, EXIT_PREREQUISITES, main
 from apps.installer.plan import CreateDirectories
 from apps.installer.system import RealMachine
-from tests.support.installer import FakeMachine, RecordingRunner
+from tests.support.installer import FakeMachine, RecordingRunner, synced
 
 pytestmark = pytest.mark.regression
 
@@ -177,6 +177,12 @@ def test_a_real_root_rehearsal_completes(tmp_path: Path) -> None:
     Skipped unless this is actually root: the point is a `chown` that fails for the reason real
     ones fail, and no fake can be trusted to fail that way — the fake failing is the bug this file
     is about. The lifecycle test runs everywhere; this one runs where it can lie the least.
+
+    It is also the only test in this file that no CI run has ever executed, and it was wrong: the
+    recorder had no `effects`, so `uv sync` was recorded and produced nothing, and the acceptance
+    list's `environment` check failed the rehearsal for having no `encore-server` in its venv. A
+    skipped test is a test nobody has run — which is the lesson #41's own handoff note, applied to
+    the test that #41 added.
     """
 
     if os.geteuid() != 0:
@@ -200,7 +206,11 @@ def test_a_real_root_rehearsal_completes(tmp_path: Path) -> None:
             "--log-format",
             "json",
         ],
-        machine=FakeMachine(root=True, user=False, recorder=RecordingRunner(real=(("rsync",),))),
+        machine=FakeMachine(
+            root=True,
+            user=False,
+            recorder=RecordingRunner(effects=synced(), real=(("rsync",),)),
+        ),
     )
 
     assert code == EXIT_OK, "the rehearsal aborted on an ownership it was never going to set"
