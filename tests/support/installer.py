@@ -229,6 +229,12 @@ class FakeMachine(RealMachine):
     def user_exists(self, name: str) -> bool:
         return self._user
 
+    def systemd_running(self) -> bool:
+        # The same answer `service()` is built from, because #43 was exactly these two facts being
+        # confused: a machine can run systemd and have no `encore.service`, and that is a first
+        # install rather than a broken prerequisite.
+        return self._systemd
+
     def group_exists(self, name: str) -> bool:
         return name in self._groups
 

@@ -37,7 +37,7 @@ from apps.installer.checks import Check, Verdict, assess, blocked
 from apps.installer.execute import Execution, Executor
 from apps.installer.layout import Layout
 from apps.installer.options import Command, Options, Settings
-from apps.installer.plan import Plan, checkout, plan_for
+from apps.installer.plan import Plan, Planning, checkout, plan_for
 from apps.installer.report import Report
 from apps.installer.system import ApplianceState, HttpProbe, Machine, RealMachine, observe
 from encore.config.models import EncoreConfig
@@ -197,13 +197,17 @@ def main(  # noqa: PLR0911 - one return per exit code
 
     if options.command is Command.VERIFY:
         return _finish(
-            options, Plan(command=options.command), config, checks, code=_exit_for(checks)
+            options,
+            Plan(command=options.command, planning=Planning.NOT_ASKED),
+            config,
+            checks,
+            code=_exit_for(checks),
         )
 
     if blocked(checks):
         return _finish(
             options,
-            Plan(command=options.command),
+            Plan(command=options.command, planning=Planning.BLOCKED),
             config,
             checks,
             code=EXIT_PREREQUISITES,

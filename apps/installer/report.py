@@ -49,7 +49,8 @@ class Report:
     Attributes:
         options: What was asked for, because a report that does not name its own command is
             two lines into being ambiguous.
-        plan: What was decided. An empty plan is a result, and is printed as one.
+        plan: What was decided. An empty plan is a result, and is printed as one — which is only
+            true because `Plan.planning` says *which* kind of empty it is (#43).
         execution: What happened. Empty for a plan, a verify, or a dry run of either.
         checks: What is true now, when the command asked for that question.
         notes: Anything the plan decided that is not an action — a preserved configuration, a
@@ -138,6 +139,7 @@ class Report:
             "staged": self.options.staged,
             "dry_run": self.options.dry_run,
             "plan": [_plan_entry(action) for action in self.plan.actions],
+            "planning": self.plan.planning.value,
             "performed": self.execution.changed,
             "already_done": self.execution.noops,
             "results": [

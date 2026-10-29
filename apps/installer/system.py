@@ -296,6 +296,11 @@ class ServiceState:
     `installed` is the file, `enabled` is the boot hook, `active` is the running process.
     They are separate because the failures are separate and the fixes are not alike: the
     operator asking "why didn't it come back after the power cut" needs the middle one.
+
+    These are facts about *the unit*. Whether the machine has a service manager at all is
+    `Machine.systemd_running`, and the two must not be inferred from each other: on the first
+    install of an otherwise healthy Pi they are "no" and "yes" at once, and reading one as the
+    other is #43 — an installer that refused to install a unit because the unit was not installed.
     """
 
     name: str = SERVICE_NAME
@@ -354,6 +359,15 @@ class Machine(Protocol):
     def os_release(self) -> OsRelease: ...
 
     def which(self, name: str) -> Path | None: ...
+
+    def systemd_running(self) -> bool:
+        """Whether this machine has the service manager SAPRS 13.6 assumes.
+
+        Asked separately from `service`, because the two answers disagree on every machine that
+        has not been installed yet (#43), and a check that infers one from the other fails a
+        first install on hardware that meets every prerequisite.
+        """
+        ...
 
     def hostname(self) -> str: ...
 
@@ -496,8 +510,17 @@ class RealMachine:
             return False
         return True
 
+    def systemd_running(self) -> bool:
+        """`/run/systemd/system` is where PID 1 leaves the evidence that it is systemd.
+
+        A directory test rather than `systemctl is-system-running`, which answers `degraded` on a
+        machine whose Encore is perfectly installable and costs a subprocess to say so.
+        """
+
+        return SYSTEMD_EVIDENCE.is_dir()
+
     def service(self, name: str) -> ServiceState:
-        if not SYSTEMD_EVIDENCE.is_dir():
+        if not self.systemd_running():
             return ServiceState(name=name, detail="systemd is not running on this machine")
         installed = self._runner.run(["systemctl", "cat", name])
         enabled = self._runner.run(["systemctl", "is-enabled", name])
@@ -545,6 +568,8 @@ class ApplianceState:
         os_release: The platform, for 13.1's honesty about what is supported.
         service: systemd's three answers about the unit.
         binaries: `mpv` and `uv`, resolved or not.
+        systemd_running: Whether the host runs the service manager 13.6 assumes, which is not the
+            same question as whether `service` names a unit and must never be answered from it.
         user_exists: Whether 13.5's account is already there.
         audio_group_exists: Whether the sound-card group exists to be joined.
         directories / files: observed state per layout entry, keyed by final path.
@@ -570,6 +595,9 @@ class ApplianceState:
     # installed" and "uv is in `/home/someone/.local/bin`, which root was never given" are
     # different problems with different fixes, and the second is unfindable without the list.
     search_path: str = ""
+    # Whether the host has the service manager 13.6 assumes, as distinct from whether `service`
+    # has a unit in it. #43 is what happens when one stands in for the other.
+    systemd_running: bool = True
     user_exists: bool = False
     # The account itself, where it exists: 13.5 asks two questions about it that `id` cannot
     # answer, and an appliance whose service user has a login shell is a smaller attack surface
@@ -659,6 +687,7 @@ def observe(
         service=service,
         binaries={name: machine.which(name) for name in REQUIRED_BINARIES},
         search_path=search_path(machine.environ),
+        systemd_running=machine.systemd_running(),
         user_exists=machine.user_exists(layout.user),
         service_user=machine.user(layout.user),
         audio_group_exists=machine.group_exists(AUDIO_GROUP),
