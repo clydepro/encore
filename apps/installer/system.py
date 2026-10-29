@@ -35,6 +35,7 @@ import httpx
 from apps.installer.layout import AUDIO_GROUP, Layout
 
 __all__ = [
+    "USER_BIN_DIRS",
     "ApplianceState",
     "CommandResult",
     "CommandRunner",
@@ -47,6 +48,7 @@ __all__ = [
     "ServiceState",
     "SubprocessRunner",
     "observe",
+    "search_path",
 ]
 
 #: What `systemctl` calls the appliance's unit. One constant, because the unit file, the
@@ -62,6 +64,73 @@ SUPPORTED_OS_IDS = frozenset({"raspbian", "debian", "ubuntu"})
 
 #: Binaries the installer needs to find, by the name an operator would type.
 REQUIRED_BINARIES = ("mpv", "uv")
+
+#: Where a per-user installation of a tool puts it, relative to a home directory.
+#: `~/.local/bin` is what the astral `uv` installer writes (docs/Developer/Getting-Started.md),
+#: and `~/.cargo/bin` is where an older uv or a `cargo install` leaves one; `~/bin` is the
+#: Debian convention an operator who installs anything by hand follows. These are not guesses
+#: at the machine: they are the documented destinations of the documented install step.
+USER_BIN_DIRS = (".local/bin", "bin", ".cargo/bin")
+
+
+def search_path(environ: Mapping[str, str]) -> str:
+    """Every directory a host binary could legitimately be in, as a `PATH` string.
+
+    One function, because a check that searches one list and a command that resolves through
+    another is how an installer ends up reporting "`uv` is missing" on a machine that has it
+    (#38). :meth:`RealMachine.which` and :class:`SubprocessRunner` both ask this, so "is it
+    there?" and "run it" cannot disagree, and the answer a report prints is the answer the
+    subprocess used.
+
+    The inherited `PATH` comes first and the extra directories are appended. Prepending would
+    let a home directory shadow `/usr/bin/mpv`, which turns an appliance into whatever the
+    account that ran sudo last installed — and this program runs as root on a machine holding
+    somebody's music collection.
+
+    Args:
+        environ: The environment to read `PATH`, `HOME` and `SUDO_USER` from. A parameter
+            rather than `os.environ` because the machine under test is the appliance, not the
+            runner that happens to be executing pytest.
+
+    Returns:
+        A colon-joined `PATH`, deduplicated, with empty entries removed — an empty component
+        means "the current directory" to a shell, and a root process that consults it is a
+        privilege escalation waiting for somebody to `cd` somewhere interesting.
+    """
+
+    found: list[str] = [part for part in environ.get("PATH", "").split(os.pathsep) if part]
+    for home in _candidate_homes(environ):
+        found.extend(str(Path(home) / directory) for directory in USER_BIN_DIRS)
+    ordered: list[str] = []
+    for directory in found:
+        if directory not in ordered:
+            ordered.append(directory)
+    return os.pathsep.join(ordered)
+
+
+def _candidate_homes(environ: Mapping[str, str]) -> tuple[str, ...]:
+    """The home directories whose user-local binaries a root process should be able to see.
+
+    `HOME` alone is not enough, and this is the whole of the bug. `sudo` runs the installer as
+    root with `HOME=/root` and its own `secure_path`, so an operator who installed `uv` as
+    themselves — which is what the documentation says to do, and what the astral installer
+    does without a system-wide option being used — has put it somewhere root cannot see.
+    `SUDO_USER`, which sudo sets, names that operator; looking their home up in the password
+    database is the stdlib's answer, and reading `/etc/passwd` through `pwd` beats parsing a
+    path out of an environment variable somebody could have set to anything.
+    """
+
+    homes: list[str] = []
+    if home := environ.get("HOME"):
+        homes.append(home)
+    if user := environ.get("SUDO_USER"):
+        try:
+            record = pwd.getpwnam(user)
+        except KeyError:  # a removed account, or a name sudo inherited from a parent shell
+            return tuple(homes)
+        if record.pw_dir and record.pw_dir not in homes:
+            homes.append(record.pw_dir)
+    return tuple(homes)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -133,6 +202,10 @@ class SubprocessRunner:
         parts = [str(part) for part in argv]
         program = parts[0]
         environment = dict(os.environ) | {key: str(value) for key, value in (env or {}).items()}
+        # The child resolves a bare program name through `PATH`, so it has to be the same
+        # `PATH` `which()` answered with; anything else is two answers to one question, which is
+        # the shape of #38. Appended rather than prepended, by the same rule as `search_path`.
+        environment["PATH"] = search_path(environment)
         try:
             completed = subprocess.run(  # noqa: S603 - argv is literal by this module's rule
                 parts,
@@ -328,7 +401,10 @@ class RealMachine:
         )
 
     def which(self, name: str) -> Path | None:
-        found = shutil.which(name)
+        # `search_path`, not the bare `PATH`: see #38. The failure this avoids is an installer
+        # that reports "uv is missing" on a machine with uv in `~/.local/bin`, because sudo gave
+        # root a `secure_path` and the tool was installed as somebody else.
+        found = shutil.which(name, path=search_path(self.environ))
         return None if found is None else Path(found)
 
     def hostname(self) -> str:
@@ -490,6 +566,10 @@ class ApplianceState:
     os_release: OsRelease = field(default_factory=OsRelease)
     service: ServiceState = field(default_factory=ServiceState)
     binaries: Mapping[str, Path | None] = field(default_factory=dict)
+    # The `PATH` those resolutions used. Reported when one is missing, because "uv is not
+    # installed" and "uv is in `/home/someone/.local/bin`, which root was never given" are
+    # different problems with different fixes, and the second is unfindable without the list.
+    search_path: str = ""
     user_exists: bool = False
     # The account itself, where it exists: 13.5 asks two questions about it that `id` cannot
     # answer, and an appliance whose service user has a login shell is a smaller attack surface
@@ -578,6 +658,7 @@ def observe(
         os_release=machine.os_release(),
         service=service,
         binaries={name: machine.which(name) for name in REQUIRED_BINARIES},
+        search_path=search_path(machine.environ),
         user_exists=machine.user_exists(layout.user),
         service_user=machine.user(layout.user),
         audio_group_exists=machine.group_exists(AUDIO_GROUP),

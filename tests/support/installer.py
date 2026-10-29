@@ -85,6 +85,7 @@ class RecordingRunner:
     answers: Mapping[tuple[str, ...], CommandResult] = field(default_factory=dict)
     effects: Mapping[tuple[str, ...], Callable[[Call], None]] = field(default_factory=dict)
     real: Sequence[tuple[str, ...]] = ()
+    accounts: Sequence[str] | None = None
     calls: list[Call] = field(default_factory=list)
 
     def run(
@@ -103,12 +104,33 @@ class RecordingRunner:
         for prefix in self.real:
             if parts[: len(prefix)] == prefix:
                 return SubprocessRunner().run(argv, env=env, cwd=cwd)
+        if (refused := self._refused_chown(parts)) is not None:
+            return refused
         for prefix, answer in self.answers.items():
             if parts[: len(prefix)] == prefix:
                 return answer
         return CommandResult(argv=parts, code=0)
 
     # --- the assertion side ---------------------------------------------------------------
+
+    def _refused_chown(self, parts: tuple[str, ...]) -> CommandResult | None:
+        """`chown` to an account this machine does not have, answered the way `chown` answers.
+
+        "Anything unmatched answers success" is the right default for a recorder and the wrong one
+        for this command: a rehearsal whose machine has no `encore` group was happily
+        `chown root:encore`-ing its way through every test until #41, and the fake was
+        accidentally green about exactly the failure that aborts a real install. The account list
+        is the same fiction `FakeMachine.user_exists` tells, so the two cannot disagree.
+        """
+
+        if self.accounts is None or parts[:1] != ("chown",) or len(parts) < 3:
+            return None
+        _, _, group = parts[1].partition(":")
+        if not group or group in self.accounts:
+            return None
+        # The shape of the real failure (exit 1, "invalid group"), not its punctuation: the
+        # version of chown on the box decides that, and no assertion here reads the string.
+        return CommandResult(argv=parts, code=1, stderr=f"chown: invalid group: '{parts[1]}'")
 
     def ran(self, *prefix: str) -> bool:
         return any(call.starts_with(*prefix) for call in self.calls)
@@ -164,6 +186,9 @@ class FakeMachine(RealMachine):
         self._recorder = recorder if recorder is not None else RecordingRunner()
         super().__init__(self._recorder)
         self._user = user
+        # The runner has to know the same fiction, because `chown` is the one command whose
+        # failure is a fact about accounts rather than about processes.
+        self._recorder.accounts = (SERVICE_GROUP,) if user else ()
         self._groups = frozenset(groups) | ({SERVICE_GROUP} if user else frozenset())
         self._systemd = systemd
         self._unit = unit if unit is not None else ServiceState()

@@ -31,7 +31,7 @@ import pytest
 
 from apps.installer.layout import Layout
 from apps.installer.main import EXIT_OK, EXIT_PREREQUISITES, EXIT_USAGE, EXIT_VERIFICATION, main
-from apps.installer.system import OsRelease, ServiceState
+from apps.installer.system import CommandResult, OsRelease, ServiceState
 from tests.support.installer import FakeMachine, RecordingRunner, StubHttpProbe, synced
 
 pytestmark = pytest.mark.integration
@@ -226,6 +226,88 @@ class TestFilesLanded:
         environment = layout.staged(layout.environment_file)
         assert stat.S_IMODE(environment.stat().st_mode) == 0o600
         assert secret in environment.read_text()
+
+
+class TestOwnership:
+    """SAPRS 13.5's ownership, on the two machines where it can fail differently (#41).
+
+    The distinction this class exists for is not "did chown run" — it is which failure is fatal.
+    A privileged process on a machine with the account that refuses `chown` has a broken
+    appliance, and nothing after it is worth attempting. A privileged process on a *rehearsal*
+    has a machine where the plan deliberately never ran `useradd`, and calling that fatal is what
+    made `sudo encore-install install --root …` — the first command in the guide's verification
+    section — exit 3 on a healthy laptop.
+
+    Both cases were green before #41 because `RecordingRunner` answered every unrecognised
+    command with success, including a `chown` naming a group the test had just said did not exist.
+    The fake now refuses that, in `tests/support/installer.py`, so the distinction has to be made
+    somewhere for these tests to pass at all.
+    """
+
+    def test_a_rehearsal_run_as_root_completes_without_the_service_account(
+        self, tmp_path: Path, capsys: Any
+    ) -> None:
+        """The bug, exactly: root, staged, no `encore` account, and a plan that should finish."""
+
+        recorder = RecordingRunner(effects=synced(), real=_REAL_COMMANDS)
+        code = install(tmp_path, capsys, machine=pi(root=True, user=False, recorder=recorder))
+
+        assert code == EXIT_OK, "the rehearsal aborted at action 1 of 5"
+        assert recorder.ran("chown"), "a rehearsal that never tried ownership is not rehearsing"
+
+    def test_a_rehearsal_reports_ownership_as_left_alone(self, tmp_path: Path, capsys: Any) -> None:
+        """The note is the fix: an operator has to know what the rehearsal could not rehearse.
+
+        Checked as the JSON rather than as a sentence in a report, because the sentence is
+        presentation and the finding is the contract — 13.7's "report next steps" is what a
+        provisioning tool reads.
+        """
+
+        recorder = RecordingRunner(effects=synced(), real=_REAL_COMMANDS)
+        host = pi(root=True, user=False, recorder=recorder)
+        _, payload = invoke(
+            tmp_path,
+            "install",
+            *BASE,
+            "--music-dir",
+            str(tmp_path / "opt" / "music"),
+            capsys=capsys,
+            machine=host,
+        )
+
+        performed = [entry["kind"] for entry in payload["results"]]
+        assert "CreateDirectories" in performed, performed
+        assert not [entry for entry in payload["results"] if entry["status"] == "failed"], payload[
+            "results"
+        ]
+
+    def test_a_root_install_with_the_account_still_sets_ownership(
+        self, tmp_path: Path, capsys: Any
+    ) -> None:
+        """The other half. Fixing #41 must not turn a real failure into a note.
+
+        The account exists, so a `chown` that fails now has no explanation except a machine that
+        will not let the service read its own configuration — which is worth stopping for.
+        """
+
+        recorder = RecordingRunner(
+            effects=synced(),
+            real=_REAL_COMMANDS,
+            answers={
+                ("chown",): CommandResult(argv=("chown",), code=1, stderr="Operation not permitted")
+            },
+        )
+        code = install(tmp_path, capsys, machine=pi(root=True, user=True, recorder=recorder))
+
+        assert code == EXIT_PREREQUISITES
+        assert recorder.times("chown") == 1, "it stops at the first one, as a machine fault should"
+
+    def test_an_unprivileged_rehearsal_is_still_not_fatal(
+        self, tmp_path: Path, capsys: Any
+    ) -> None:
+        """The branch #41 did not break: not root, ownership impossible, install proceeds."""
+
+        assert install(tmp_path, capsys, machine=pi(root=False, user=False)) == EXIT_OK
 
 
 class TestIdempotence:

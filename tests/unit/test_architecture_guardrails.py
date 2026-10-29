@@ -493,3 +493,25 @@ def test_the_installer_never_imports_the_server_it_installs() -> None:
     for path in _python_files(INSTALLER_ROOT):
         offenders = {name for name in _imports(path) if name.startswith("apps.server")}
         assert not offenders, f"{path.relative_to(PROJECT_ROOT)}: {sorted(offenders)}"
+
+
+def test_the_installer_executor_asks_the_machine_rather_than_the_os() -> None:
+    """`execute.py` consults no OS question directly, and #41 is the reason the rule is written down.
+
+    The module's whole design is that effects happen here and facts are decided elsewhere: the
+    executor that called `os.geteuid()` to judge a failed `chown` got the answer right about the
+    process and wrong about the machine, because what it actually needed to know was whether the
+    group existed — which is observed state, and which rehearsals run as root get the other way
+    round. A side channel of any kind makes `FakeMachine` a fiction the tests can see through.
+
+    Asserted against the source rather than by monkeypatching, because the rule is "there is no
+    such call here", and a test that patches `geteuid` into a constant would only prove that the
+    one call it knew about was patched.
+    """
+
+    side_channels = ("geteuid", "getuid", "getpass.", "uname(", "sysconfig.", "os.getlogin")
+    executor = PROJECT_ROOT / "apps" / "installer" / "execute.py"
+    source = executor.read_text(encoding="utf-8")
+
+    offenders = [name for name in side_channels if name in source]
+    assert not offenders, f"{executor.relative_to(PROJECT_ROOT)} reaches the OS: {offenders}"
