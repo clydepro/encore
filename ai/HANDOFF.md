@@ -8,7 +8,8 @@ be wrong faster than the SAPRS is.
 
 State as of this writing: **Phases 1–6 are merged (#20, #22, #24, #26, #27, #33). Step 15 then
 broke five times on the commands in its own documentation — #38, #41, #43, #44, #46, all fixed — and
-the dependency-alert chore [#40](https://github.com/clydepro/encore/pull/40) has merged, closing
+a sixth time on the hardware it was installed on (#48, below), and the dependency-alert chore
+[#40](https://github.com/clydepro/encore/pull/40) has merged, closing
 [#39](https://github.com/clydepro/encore/issues/39), so the open work is milestone 16.** The
 appliance now installs itself:
 `sudo ENCORE_ADMIN_PASSWORD='…' ./scripts/encore-install install`, from a clone, on a machine that
@@ -16,9 +17,30 @@ had nothing on it a minute before. A guest scans a code printed by the appliance
 operator's password can be set before the box boots, and `encore-install verify` answers SAPRS
 13.11's acceptance list with a fix under every line that is not green.
 
-1547 tests pass in the standard gate (1599 with the slow suites), 93.6% coverage of `encore/`,
+**#48 is the one to read if you have ever watched this thing refuse to play.** An installed Pi 4
+accepted every request and made no sound for an hour, in both mp3 and m4a, while `/health` said
+`playback: healthy, mpv running as pid 503668`: `audio.device: default` is ALSA's "first card", the
+first card is HDMI, and mpv's reply to a device it cannot open is the same `file_error` it gives for
+a file it cannot demux. The appliance is now able to tell those two apart (`encore/playback/fault.py`),
+logs the machine rather than blaming the last guest, and reports `degraded` until something plays.
+The lesson generalises past audio: **a component being alive is not the job being done.** Every
+health source in this repository was re-read with that question — "what would this component have to
+be unable to do while still answering `healthy`?" — and the answers are in
+`apps/server/appliance.py:444-495`: `library` checks the database is readable and non-empty, `runtime`
+checks the schema is current and the file is writable, `search` checks the FTS5 table opens. Each of
+those is a thing the component cannot do its job without, which is the symmetry #48's fix was
+measured against.
+
+One is not covered, and it is the same shape: **a library whose files have all moved reports
+`healthy`.** Every path on every song then fails, every failure is correctly a *song* fault (so the
+queue keeps moving, which is right for the corrupt file in track 7), and the appliance plays nothing
+while four components say they are fine. That is #48 one layer up, created by this fix's deliberate
+choice that file refusals cost the appliance nothing, and it wants a rate rather than a kind — see
+[#49](https://github.com/clydepro/encore/issues/49).
+
+1576 tests pass in the standard gate (1629 with the slow suites), 93.7% coverage of `encore/`,
 `ruff` and strict `mypy` clean across `encore/`, `apps/`, `tests/` and `tools/`. Two new ADRs (014,
-015) and five regression files.
+015) and six regression files.
 
 **Nothing here has met a Raspberry Pi.** The sentence was written in the last handoff about the
 guest interface and about the administrative interface; now it is about the install itself, and it
@@ -30,6 +52,12 @@ with 1 GB of RAM resolves this dependency graph inside a timeout. **Run the manu
 hardware once before calling step 15 closed**, and file what surprised you; that checklist is
 `docs/Administrator-Guide.md`'s installation section, which the installer automates and which is
 authoritative in a way no test can be.
+
+It has now: the box this is written on is a Pi 4, and it produced #48 — which is that checklist
+earning its keep, and the first of the six findings that no staged filesystem could have raised.
+Two of the sentences above are still true of the tests and no longer true of the product: the
+appliance has met `aplay`, a real `audio` group, an HDMI port with nothing on it, and a systemd unit
+that ran for hours. What has *not* met hardware is the 1 GB RAM case and the removal scopes.
 
 ## Start here
 

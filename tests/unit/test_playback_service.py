@@ -28,7 +28,9 @@ from encore.events import EventBus, SongFinished, SongStarted
 from encore.events.playback import FinishedReason
 from encore.playback import IllegalTransitionError, MpvPlayer, PlaybackService, TransitionPolicy
 from encore.playback.errors import MpvCommandError
-from tests.support.mpv import MockMpv
+from encore.playback.fault import FaultKind, PlaybackFault
+from encore.playback.service import LOAD_GRACE_SECONDS
+from tests.support.mpv import AUDIO_OUTPUT_FAILURE, DEFAULT_PROPERTIES, MockMpv
 
 START = datetime(2026, 6, 1, 20, 0, tzinfo=UTC)
 
@@ -99,6 +101,16 @@ def _state_of(service: PlaybackService) -> PlaybackState:
     """
 
     return service.state
+
+
+def _fault_of(service: PlaybackService) -> PlaybackFault | None:
+    """The same trick as `_state_of`, for the property that replaced it in #48's tests.
+
+    A test that watches a fault appear and then go away has to read it twice, and the second
+    read is exactly the one narrowing would erase.
+    """
+
+    return service.fault
 
 
 def _song(id_: int = 1, *, duration: int = 200) -> Song:
@@ -529,3 +541,145 @@ def test_progress_survives_a_state_change_without_reading_the_engine(
     assert service.progress.position == timedelta(seconds=30.0)
     service.resume()
     assert service.progress.state is PlaybackState.PLAYING
+
+
+# -- what a refusal was about (#48) ---------------------------------------
+
+
+def test_a_refused_track_ends_the_track_and_records_a_file_fault(
+    service: PlaybackService, bus: RecordingBus, mpv: MockMpv
+) -> None:
+    """The behaviour that already existed, pinned so the new one is a difference and not a
+    replacement: a damaged file is one song, reported once, and the queue moves on.
+    """
+
+    mpv.refuse_next_load("unrecognized file format")
+    service.play(_song(), queue_item_id=ITEM)
+
+    finished = bus.of(SongFinished)[-1]
+    assert isinstance(finished, SongFinished)
+    assert finished.reason is FinishedReason.FAILED
+    assert bus.of(SongStarted) == [], "mpv never played this, so the appliance never says it did"
+    assert service.fault is not None
+    assert service.fault.kind is FaultKind.SONG_FILE
+    assert not service.fault.blocks_every_track, (
+        "a corrupt file in a 15,000-song library is not a broken appliance"
+    )
+
+
+def test_an_output_refusal_is_reported_as_the_machine_and_not_as_the_song(
+    service: PlaybackService, mpv: MockMpv, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#48's symptom: one WARNING per guest request, each naming an innocent file.
+
+    The event is unchanged — the queue is right to walk past a track mpv never decoded — but
+    the reporting cannot stay the same when the next track, and the one after that, will fail
+    for the same reason. The level and the fields are the assertion; the sentence is not.
+    """
+
+    with caplog.at_level(logging.DEBUG, logger="encore.playback"):
+        mpv.refuse_next_load(AUDIO_OUTPUT_FAILURE)
+        service.play(_song(), queue_item_id=ITEM)
+
+    assert service.fault is not None
+    assert service.fault.kind is FaultKind.AUDIO_OUTPUT
+    assert service.fault.blocks_every_track
+    refusal = [record for record in caplog.records if getattr(record, "fault_kind", "")]
+    assert refusal, "an audio-output refusal produced no fault-bearing log record"
+    assert refusal[0].levelname == "ERROR", "a machine with no sound is not a warning"
+    assert "file" not in refusal[0].__dict__, (
+        "naming the last requested track is what made this defect read as a bad file"
+    )
+    assert refusal[0].__dict__["refused_tracks"] == 1
+
+
+def test_a_run_of_output_refusals_says_so_once(
+    service: PlaybackService, mpv: MockMpv, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Four tracks refused is one fact, stated with a count.
+
+    The party in #48 refused three tracks in five minutes, and the journal would have carried
+    three identical ERROR lines; the fourth would have been the one nobody read. The count is
+    what distinguishes "this happened" from "this is the state of the machine", and it is the
+    number the health page shows.
+    """
+
+    with caplog.at_level(logging.DEBUG, logger="encore.playback"):
+        for number in range(1, 5):
+            mpv.refuse_next_load(AUDIO_OUTPUT_FAILURE)
+            service.play(_song(number), queue_item_id=QueueItemId(number))
+
+    errors = [
+        record
+        for record in caplog.records
+        if getattr(record, "fault_kind", "") == "audio_output" and record.levelno == logging.ERROR
+    ]
+    assert len(errors) == 1, "the same fault repeated itself four times in the journal"
+    assert service.fault is not None
+    assert service.fault.repeats == 4
+
+
+def test_a_file_refusal_between_two_output_refusals_starts_the_count_ago(
+    service: PlaybackService, mpv: MockMpv
+) -> None:
+    """`repeats` counts one kind, not one another.
+
+    A damaged track in the middle of an outage is not the fourth refusal for the sound card,
+    and a number that mixed the two would be unreadable.
+    """
+
+    mpv.refuse_next_load(AUDIO_OUTPUT_FAILURE)
+    service.play(_song(1), queue_item_id=QueueItemId(1))
+    mpv.refuse_next_load("No such file or directory")
+    service.play(_song(2), queue_item_id=QueueItemId(2))
+    assert service.fault is not None
+    assert service.fault.repeats == 1
+
+    mpv.refuse_next_load(AUDIO_OUTPUT_FAILURE)
+    service.play(_song(3), queue_item_id=QueueItemId(3))
+
+    assert service.fault is not None
+    assert service.fault.kind is FaultKind.AUDIO_OUTPUT
+    assert service.fault.repeats == 1, "a new run of refusals, counted as its own run"
+    assert service.fault.song_id == SongId(3), "the record names what proved it most recently"
+
+
+def test_sound_beginning_ends_the_fault(
+    service: PlaybackService, mpv: MockMpv, bus: RecordingBus
+) -> None:
+    """Only a track that played contradicts an output fault.
+
+    A restart does not, and this is the reason `PlaybackSupervisor` is not allowed to clear it:
+    mpv coming back reads the same `audio:` and gets the same answer, so a fault that faded on a
+    restart is a health page that flickers green on a machine that has never made a sound.
+    """
+
+    mpv.refuse_next_load(AUDIO_OUTPUT_FAILURE)
+    service.play(_song(), queue_item_id=ITEM)
+    fault = _fault_of(service)
+    assert fault is not None
+    assert fault.blocks_every_track
+
+    service.play(_song(2), queue_item_id=QueueItemId(12))
+    service.tick()
+
+    assert _fault_of(service) is None
+    assert bus.of(SongStarted), "and the track that worked was reported as working"
+
+
+def test_an_engine_that_never_took_the_file_is_not_blamed_on_the_output(
+    service: PlaybackService, mpv: MockMpv, clock: FixedClock
+) -> None:
+    """The grace path stays what it was: silence, classified as nothing.
+
+    mpv refusing to say anything (an old build, a lost line) shares a symptom with mpv refusing
+    a device and nothing else, and the difference matters because the second has a setting to
+    change. No words, no claim.
+    """
+
+    service.play(_song(), queue_item_id=ITEM)
+    mpv.properties.update(DEFAULT_PROPERTIES)
+    clock.at += timedelta(seconds=LOAD_GRACE_SECONDS + 1)
+    service.tick()
+
+    assert service.fault is None

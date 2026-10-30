@@ -329,6 +329,20 @@ These are no longer planned seams; they are tests that run.
 - Dropping SSE subscribers while publishing events arrives with milestone 13; the bus
   tests already cover a handler that raises and a handler that never finishes.
 
+**A component being alive is not the same claim as a component working.** #48 shipped that
+lesson the hard way: every playback test that existed had an engine that either died (and the
+supervisor already handled that) or made sound, and the third case — a process that answers IPC
+perfectly and refuses every file because it cannot open a device — was unreachable from the suite.
+`--ao=null`, which is what `tests/integration/test_real_mpv.py` uses so it runs on a machine with
+no hardware, cannot fail that way either, which is worth saying out loud in the file that does it.
+So when a fault is added to anything with a health report, add the double that is *alive and
+unable to do the job*: `tests/support/mpv.py`'s `refuse_output` and `refuse_next_load`, and
+`tests/regression/test_issue_48_audio_output_refusal.py`, where the launcher's whole purpose is to
+be a process that is fine. And check whose words the assertion uses: mpv says
+`audio output initialization failed`, so that string is transcribed in one place, asserted against
+a real engine by launching it at a device that does not exist, and named in the failure message if
+a future build says it differently.
+
 ## Performance
 
 `tests/performance/test_performance_targets.py` encodes the SAPRS 1.8 budgets in

@@ -68,7 +68,9 @@ class EngineObservation:
             event: `"error"` when it could not open it, `"eof"` when it reached the end.
             None when the engine has said nothing of the kind — which is what a double says,
             and what a real mpv says while it is still holding a file.
-        end_detail: mpv's `file_error` text behind an `"error"` verdict, for the log.
+        end_detail: mpv's `file_error` text behind an `"error"` verdict. Its words are the
+            whole of the difference between a track the appliance should skip and a machine
+            that should stop claiming to be healthy — see `output_fault`.
     """
 
     state: PlaybackState = PlaybackState.IDLE
@@ -89,6 +91,37 @@ class EngineObservation:
     @property
     def refused(self) -> bool:
         return self.end_verdict == "error"
+
+    @property
+    def output_fault(self) -> bool:
+        """Whether mpv's refusal was about the machine rather than about this file.
+
+        The two are told apart by mpv's own words, and on the build this was measured against
+        (0.35.1, Debian bookworm, on the Pi 4 of #48) the words do not overlap:
+
+        * A file it cannot open — truncated, random bytes, prose named `.mp3` — gets
+          `Opening failed or was aborted: <path>` and `Failed to recognize file format.`, and
+          the audio output is never mentioned. `No such file or directory`, `Invalid argument`
+          and `Permission denied` arrive the same way. Whether the file was played before and
+          went away mid-set is in the prose too, so a song whose path is gone stays a song.
+        * An output it cannot open names the device, then `Error opening/starting player: Failed
+          to initialize audio output.`, then `Error: Audio output initialization failed`, and the
+          path is never mentioned. That one sentence is 0.35.1's answer to a card with nothing on
+          the other side of it (a Pi 4's HDMI port, which is what `alsa:default` is), to
+          `--ao=pulse` or `--ao=pipewire` with no server reachable by the service account, to a
+          device name that does not exist, and to a sound card that went away mid-set — every one
+          of them a machine fault. `--audio-device=help` prints that phrase itself when explaining
+          why a device cannot be opened, which is why matching on it is safe rather than lucky.
+
+        A refusal with no words at all (`"mpv gave no reason"`) is not classified. Guessing that an
+        unexplained silence is the sound card would send someone hunting a device setting that was
+        right.
+        """
+
+        if self.end_detail is None:
+            return False
+        words = self.end_detail.lower()
+        return self.refused and ("audio output" in words or "audio device" in words)
 
 
 class MpvPlayer:

@@ -30,7 +30,21 @@ paths:
 
 audio:
   # mpv output selection; hardware specifics never live in code (SAPRS 7.7).
+  # "alsa" or "pipewire". PipeWire normally runs inside a user's login session, and
+  # a system service has no session to be inside, so "alsa" is the appliance answer.
   output: alsa
+  # Which device inside that output; `mpv --ao=alsa --audio-device=help` lists the names mpv
+  # accepts. `aplay -l` lists the same hardware with different spellings, and only the first form
+  # goes here. A name mpv cannot parse is not rejected either — it logs "Trying the default audio
+  # device..." and fails like a dead card, so a typo here looks like a hardware fault.
+  #
+  # "default" is a pointer at whichever card registered first, and on a Raspberry Pi
+  # that is an HDMI port. With nothing plugged into it, every file in the library is
+  # refused with "audio output initialization failed" — mp3 and m4a alike — and the
+  # appliance still looks healthy apart from that line (#48). Name the card you can
+  # hear (`aplay -l` prints the cards):
+  #   device: alsa/plughw:CARD=Headphones,DEV=0   # the 3.5 mm jack
+  #   device: alsa/hdmi:CARD=vc4hdmi0,DEV=0        # a connected HDMI sink
   device: default
   volume: 85
   gapless: true

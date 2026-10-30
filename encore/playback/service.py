@@ -24,6 +24,16 @@ rule; this paragraph is where it is kept.
 `QueueService` tells "the party finished this song" from "someone pressed stop" without
 reading anything but the event (SAPRS 8.7, 8.8).
 
+**A refusal is either this song or this machine.** mpv says no to a file it cannot demux and
+says no to a sound card it cannot open in the same shape — an accepted `loadfile`, an
+`end-file` with `reason: "error"`, an idle player — and only its own words distinguish them.
+Both end the track as `FAILED`, because the queue is right to move on either way; they are
+not both right to *report* the same way. A bad file is one song and a WARNING naming it. A
+machine with no usable audio output is every song in the library, and a log line that blames
+the file someone happened to request last sends an operator to rebuild the library instead of
+reading two lines of `audio:`. `PlaybackFault` is where that distinction is made once, and
+`fault` is how the supervisor comes to report it instead of reporting a healthy silence.
+
 **Why `tick()` exists.** mpv is asynchronous and a JSON IPC socket is not a callback:
 something has to ask. `tick()` is that asking, about once a second (SAPRS 7.5), and it is
 the only place the service discovers that a track ended on its own. Whoever owns the clock
@@ -56,6 +66,7 @@ from encore.playback.errors import (
     MpvGoneError,
     MpvTimeoutError,
 )
+from encore.playback.fault import FaultKind, PlaybackFault
 from encore.playback.player import EngineObservation, MpvPlayer
 from encore.playback.transition import TransitionPolicy
 from encore.utilities.clock import Clock, SystemClock, ensure_aware
@@ -159,6 +170,7 @@ class PlaybackService:
         self._current: PlayingTrack | None = None
         self._progress = PlaybackProgress(state=PlaybackState.IDLE)
         self._fading = False
+        self._fault: PlaybackFault | None = None
 
     # -- what is true now -------------------------------------------------
 
@@ -191,6 +203,24 @@ class PlaybackService:
         """
 
         return self._progress
+
+    @property
+    def fault(self) -> PlaybackFault | None:
+        """The last engine refusal, and what kind of thing it said no to. None if none.
+
+        Held until sound proves the engine can make some: a track starting is the only
+        evidence that clears an audio-output fault, and a restart is not, because a restart
+        reads the same `audio:` settings and gets the same answer. That is deliberate — the
+        alternative is a component that flickers back to healthy every time the ladder in
+        `playback.restart_backoff_seconds` fires, which is how a machine with no working
+        sound card spends a party reporting good news.
+
+        Read by `PlaybackSupervisor.health()` (SAPRS 11.7 step 8), which is the only reason
+        it is public: the log says a refusal happened, and health has to say whether the
+        appliance still works.
+        """
+
+        return self._fault
 
     # -- commands (SAPRS 7.4) ---------------------------------------------
 
@@ -389,14 +419,7 @@ class PlaybackService:
                 # mpv's own verdict, from the `end-file` that arrived beside these properties.
                 # Waiting for the grace to discover a refusal is the fallback for an engine
                 # that says nothing; an engine that says this is answered in one tick.
-                self._logger.warning(
-                    "mpv refused the file",
-                    extra={
-                        "song_id": int(self._current.song_id),
-                        "file": str(self._current.song.file_path),
-                        "detail": observation.end_detail,
-                    },
-                )
+                self._record_refusal(observation)
                 self._end(FinishedReason.FAILED, completion=0.0, silence=False)
                 return self._progress
             if self._state is PlaybackState.LOADING:
@@ -461,12 +484,69 @@ class PlaybackService:
             )
         )
 
+    def _record_refusal(self, observation: EngineObservation) -> None:
+        """Say what mpv refused, and decide whose fault it is while the words are here.
+
+        One method because the decision has three consequences — the event the queue gets, the
+        line in the log, and the state of the health page — and two of them are in this file.
+        The event is the same either way; see the module docstring for why the *reporting* is
+        not.
+        """
+
+        track = self._current
+        if track is None:  # pragma: no cover - the caller holds the track
+            return
+        kind = FaultKind.AUDIO_OUTPUT if observation.output_fault else FaultKind.SONG_FILE
+        detail = observation.end_detail or "mpv gave no reason"
+        previous = self._fault
+        chained = previous is not None and previous.kind is kind
+        self._fault = (
+            previous.repeated(detail=detail, song_id=track.song_id, occurred_at=self._clock.now())
+            if chained and previous is not None
+            else PlaybackFault(
+                kind=kind,
+                detail=detail,
+                song_id=track.song_id,
+                occurred_at=self._clock.now(),
+            )
+        )
+        fault = self._fault
+        if kind is FaultKind.SONG_FILE:
+            self._logger.warning(
+                "mpv refused the file",
+                extra={
+                    "song_id": int(track.song_id),
+                    "file": str(track.song.file_path),
+                    "detail": detail,
+                },
+            )
+            return
+        # The first refusal of this kind is the news; the fortieth is the same news still
+        # true, and forty ERROR lines teach nobody anything while burying the one thing in
+        # the journal that was worth reading. The count goes in the line instead, which is
+        # how "this song failed" and "this appliance has no sound" stay distinguishable
+        # however long the party goes on.
+        if chained:
+            self._logger.debug("mpv still cannot open the audio output", extra=_fault_extras(fault))
+            return
+        self._logger.error("mpv cannot open the audio output", extra=_fault_extras(fault))
+
     def _announce(self) -> None:
         """Report that sound began — SAPRS 7.3's `Loading → Playing` edge."""
 
         track = self._current
         if track is None:  # pragma: no cover - the caller holds the track
             return
+        fault, self._fault = self._fault, None
+        # Something just decoded and reached a device, which is evidence about the machine
+        # rather than about the track: an output fault ends here, and health goes back with
+        # it. `SongStarted` is the only place this happens, because it is the only event this
+        # service publishes that cannot be produced by a file mpv merely opened.
+        if fault is not None and fault.blocks_every_track:
+            self._logger.info(
+                "the audio output is working again",
+                extra={"refused_tracks": fault.repeats, "song_id": int(track.song_id)},
+            )
         self._events.publish(
             SongStarted(
                 song_id=track.song_id,
@@ -640,6 +720,22 @@ class PlaybackService:
         if not can_transition(self._state, following):
             raise IllegalTransitionError(self._state, following)
         self._state = following
+
+
+def _fault_extras(fault: PlaybackFault) -> dict[str, object]:
+    """One fault, as structured logging fields (SAPRS 11.5's "machine-readable logs").
+
+    Built in one place so the ERROR, the DEBUG that follows it and the health report all
+    carry the same words for the same thing, and a journal filter on `fault_kind` catches
+    every one of them.
+    """
+
+    return {
+        "fault_kind": fault.kind.value,
+        "detail": fault.detail,
+        "refused_tracks": fault.repeats,
+        "song_id": int(fault.song_id),
+    }
 
 
 def _try(action: Callable[[], None], logger: logging.Logger) -> None:

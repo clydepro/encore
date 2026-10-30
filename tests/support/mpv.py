@@ -44,6 +44,14 @@ DEFAULT_PROPERTIES: Final[dict[str, Any]] = {
 #: the double raises the errors the real client raises, so a handler written against the
 #: mock cannot be wrong about the real thing.
 MpvError = MpvCommandError
+
+#: What mpv's `file_error` says when the refusal is about the machine rather than the file.
+#: Transcribed from 0.35.1 on the reference hardware, where it is the *same* sentence for
+#: three different faults: `--ao=alsa` opening a card with nothing on the other side of it, and
+#: `--ao=pulse` and `--ao=pipewire` with no server the service account can reach (#48).
+#: `tests/integration/test_real_mpv.py` checks this string against a real engine, because a
+#: double that invents it would let the classifier pass on a machine that says something else.
+AUDIO_OUTPUT_FAILURE: Final = "audio output initialization failed"
 MpvCrashedError = MpvGoneError
 
 
@@ -89,6 +97,7 @@ class MockMpv:
         self.properties: dict[str, Any] = dict(DEFAULT_PROPERTIES)
         self.commands: list[MpvCommand] = []
         self.events: deque[MpvEvent] = deque()
+        self._refusal: dict[str, Any] | None = None
 
     def __repr__(self) -> str:
         state = "running" if self.running else "stopped"
@@ -145,6 +154,17 @@ class MockMpv:
 
     def _loadfile(self, args: tuple[Any, ...]) -> None:
         mode = str(args[1]) if len(args) > 1 else "replace"
+        refusal, self._refusal = self._refusal, None
+        if refusal is not None:
+            # The command is accepted and the file is not: nothing loads, the engine stays
+            # idle, and the verdict arrives afterwards as `end-file` — the ordering #48 was
+            # found in, and the one `refuse_file` cannot show because it describes an engine
+            # that has refused already rather than one about to.
+            self.properties.update(DEFAULT_PROPERTIES)
+            self.emit("end-file", refusal)
+            if mode != "replace":
+                self.emit("queue-loaded", {"mode": mode})
+            return
         self.properties.update(
             {
                 "filename": str(args[0]),
@@ -197,6 +217,29 @@ class MockMpv:
 
         self.properties.update(DEFAULT_PROPERTIES)
         self.emit("end-file", {"reason": "error", "file_error": reason})
+
+    def refuse_output(self, reason: str = AUDIO_OUTPUT_FAILURE) -> None:
+        """Say what mpv says about a sound device it cannot open.
+
+        Shaped exactly like `refuse_file` and meant entirely differently, which is the whole of
+        #48: unless the double can tell those two apart, the appliance's ability to tell them
+        apart needs a broken sound card to test. Read `PlaybackFault` for what the difference is
+        answered with.
+        """
+
+        self.refuse_file(reason)
+
+    def refuse_next_load(self, detail: str) -> None:
+        """Accept the next `loadfile`, then refuse it, in that order.
+
+        The ordering is the point. A real engine answers `loadfile` by accepting it and failing
+        afterwards, so a service test that wants to watch a refusal unfold needs the refusal to
+        arrive with the load rather than after it — otherwise the double reports a track playing
+        first, and the `SongStarted` that follows is a fiction no broken file or broken sound
+        card ever produced (#48).
+        """
+
+        self._refusal = {"reason": "error", "file_error": detail}
 
     def crash(self) -> None:
         """Simulate an unexpected mpv death (SAPRS 7.6, SAPRS 14.10)."""

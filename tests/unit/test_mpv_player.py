@@ -16,7 +16,7 @@ import pytest
 from encore.domain import PlaybackState
 from encore.playback import MpvPlayer
 from encore.playback.errors import MpvCommandError, MpvGoneError
-from tests.support.mpv import MockMpv
+from tests.support.mpv import AUDIO_OUTPUT_FAILURE, MockMpv
 
 TRACK = Path("/music/first/track-1.flac")
 
@@ -325,3 +325,80 @@ def test_a_refusal_without_a_reason_still_names_the_verdict(
 
     assert observation.refused
     assert observation.end_detail == "mpv gave no reason"
+    assert not observation.output_fault, (
+        "words we do not have cannot be classified: guessing 'sound card' here would send an "
+        "operator to a setting that was right (#48)"
+    )
+
+
+def test_a_reading_with_no_verdict_at_all_is_not_an_output_fault(player: MpvPlayer) -> None:
+    """The ordinary case, and the reason the property starts by looking for words.
+
+    Every healthy second of playback produces an observation with no `end-file` beside it, so
+    "was this an output fault" has to answer *no* before it has anything to classify — and yes by
+    accident if it answered by looking for the absence of something else.
+    """
+
+    observation = player.observe()
+
+    assert observation.end_verdict is None
+    assert observation.end_detail is None
+    assert not observation.refused
+    assert not observation.output_fault
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        # Measured: 0.35.1's one sentence for an output it could not open, reached three ways
+        # (`alsa` with no sink, `pulse` with no server, `pipewire` with no server).
+        AUDIO_OUTPUT_FAILURE,
+        "Could not open/initialize audio device -> no sound.",
+        "Failed to initialize audio output",
+    ],
+)
+def test_a_refusal_that_names_the_output_is_about_the_machine(
+    player: MpvPlayer, mpv: MockMpv, detail: str
+) -> None:
+    """The discrimination #48 needed and the engine never advertised.
+
+    Every one of these is a refusal of *the next request too*, whatever file it names, and the
+    appliance's answer to that is a health report rather than a per-song note. The rule is a
+    phrase ("audio output", "audio device") rather than one pinned string, because mpv has said
+    the same thing in more than one order across versions and the file-level refusals it
+    actually reports never use either phrase.
+    """
+
+    mpv.refuse_output(detail)
+
+    assert player.observe().output_fault
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        # Measured: mpv 0.35.1's `file_error` for a path that is not there at all.
+        "loading failed",
+        "No such file or directory",
+        "unrecognized file format",
+        "Invalid argument",
+        "Permission denied",
+        "Protocol not known",
+    ],
+)
+def test_a_refusal_that_names_the_file_is_about_the_file(
+    player: MpvPlayer, mpv: MockMpv, detail: str
+) -> None:
+    """The other half, and the half that must not regress into a red banner.
+
+    A 15,000-song library has damaged files in it. Calling each one an audio fault would make
+    health mean nothing on exactly the night it is checked most, so the phrases have to be
+    specific as well as sufficient.
+    """
+
+    mpv.refuse_file(detail)
+
+    observation = player.observe()
+
+    assert observation.refused, "these are refusals"
+    assert not observation.output_fault

@@ -28,6 +28,7 @@ from encore.playback import (
     PlaybackSupervisor,
 )
 from encore.playback.errors import MpvGoneError
+from encore.playback.fault import FaultKind, PlaybackFault
 from tests.support.mpv import MockMpv
 
 START = datetime(2026, 6, 1, 20, 0, tzinfo=UTC)
@@ -115,6 +116,9 @@ class RecordingService:
         self.recoveries: list[PlaybackState] = []
         self.state = PlaybackState.IDLE
         self.recovery: object | None = None
+        # The read half of `PlaybackNotifier`. A fake that could not carry one would leave the
+        # supervisor's answer to #48 untestable, which is the whole point of the next section.
+        self.fault: PlaybackFault | None = None
 
     def engine_lost(self, reason: str) -> None:
         self.lost.append(reason)
@@ -453,6 +457,91 @@ def test_asking_for_a_channel_while_a_restart_is_pending_says_so(
         supervisor.channel()
 
     assert launcher.launches == launches
+
+
+# -- alive, and silent (SAPRS 11.7 step 8, #48) ---------------------------
+
+
+def test_an_engine_that_cannot_make_sound_is_not_reported_healthy(
+    launcher: FakeLauncher, bus: RecordingBus, clock: FixedClock
+) -> None:
+    """The exact lie #48 was filed for, and the sentence that replaces it.
+
+    `mpv running as pid 503668` was true, and it was the whole of what the dashboard said, on a
+    machine that had refused every file for an hour. Liveness is one question and sound is
+    another; only the service has heard mpv's answer to the second, which is why the report is
+    read from there rather than inferred from the process table.
+    """
+
+    service = RecordingService()
+    supervisor = _supervisor(launcher, bus, clock, service=service)
+    supervisor.start()
+    service.fault = PlaybackFault(
+        kind=FaultKind.AUDIO_OUTPUT,
+        detail="audio output initialization failed",
+        song_id=SongId(900),
+        occurred_at=clock.now(),
+        repeats=12,
+    )
+
+    report = supervisor.health()
+
+    assert report.status.value == "degraded"
+    assert "audio output initialization failed" in report.detail, "mpv's words, not ours"
+    assert "audio.device" in report.detail, "and the settings that would change the answer"
+    assert "12" in report.detail
+
+
+def test_a_refused_file_leaves_a_running_engine_healthy(
+    launcher: FakeLauncher, bus: RecordingBus, clock: FixedClock
+) -> None:
+    """The other direction, which matters on a real library: 15,000 files have some bad ones.
+
+    Reporting a corrupt track as a component fault would keep playback degraded for the rest of
+    the night, and a banner that is always red is a banner that gets ignored — which costs the
+    #48 case the only signal it has.
+    """
+
+    service = RecordingService()
+    supervisor = _supervisor(launcher, bus, clock, service=service)
+    supervisor.start()
+    service.fault = PlaybackFault(
+        kind=FaultKind.SONG_FILE,
+        detail="unrecognized file format",
+        song_id=SongId(7),
+        occurred_at=clock.now(),
+    )
+
+    assert supervisor.health().status.value == "healthy"
+
+
+def test_an_output_fault_survives_the_restart_that_cannot_fix_it(
+    launcher: FakeLauncher, bus: RecordingBus, clock: FixedClock
+) -> None:
+    """Killing and re-launching mpv reads the same `audio:` and gets the same answer.
+
+    Recovery clears a crash, because a crash was a process. It must not clear this, because
+    this was a configuration — and a component that went green every time the backoff ladder
+    fired would be reporting news that never happened.
+    """
+
+    service = RecordingService()
+    supervisor = _supervisor(launcher, bus, clock, service=service)
+    supervisor.start()
+    service.fault = PlaybackFault(
+        kind=FaultKind.AUDIO_OUTPUT,
+        detail="audio output initialization failed",
+        song_id=SongId(3),
+        occurred_at=clock.now(),
+    )
+
+    launcher.alive = False
+    supervisor.tick()
+
+    assert supervisor.running, "the supervisor did bring mpv back"
+    assert supervisor.health().status.value == "degraded", (
+        "a restart is not evidence about a sound card"
+    )
 
 
 def _song(id_: int = 1) -> Song:
