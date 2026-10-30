@@ -210,6 +210,18 @@ timestamp or tags changed, so a rebuild after adding an album takes seconds
 rather than the several minutes a first build takes. A `--full` build ignores
 that history. Both produce the same library; the report says which one it was.
 
+**What the `Artwork` line means.** It is the number of image files this build
+*wrote*, beside the number this library *references*: `Artwork 0 images written
+to the cache (222 in this library)` is a healthy incremental run — nothing new to
+write, nothing lost. A zero in the second bracket on a library that had covers is
+the finding, and it used to be invisible: an incremental rebuild wrote nothing and
+published nothing, over a good library (#52). References now carry across the same
+key that carries the tags, so a file that has not moved keeps its picture, a file
+whose tags were corrected has by definition moved, and a resumed build keeps the
+references the interrupted one resolved. The cache itself is never pruned: an
+album re-tagged with a new cover leaves the old JPEG behind, unreferenced and
+harmless, and `remove --purge-data` is the only command that deletes artwork.
+
 **Corrections the Builder makes and reports.** Trailing promo markers
 (`-ADVANCE`, `[Clean_Version]`), tagging-tool prefixes on artist names
 (`AlbumWrap - Kenny Chesney`), whitespace and control characters in tags, and
@@ -346,11 +358,13 @@ resuming and stopping are all announced.
 - **Rebuild the library**: run `encore-builder` (see
   [Building the library](#building-the-library)); it publishes by renaming a
   finished file into place, so a build that fails leaves the working library where
-  it was (SAPRS 5.8). Until
-  [#52](https://github.com/clydepro/encore/issues/52) is fixed, a rebuild whose
-  point is the *pictures* is `encore-builder --full`: an incremental run reuses the
-  tags it cached and nothing else, so it sees no embedded artwork and publishes a
-  library with no references — quietly, with a clean validation report. Then tell
+  it was (SAPRS 5.8). A `--full` build re-reads every file and re-resolves every
+  picture, which is what an appliance needs after
+  [#51](https://github.com/clydepro/encore/issues/51) or
+  [#52](https://github.com/clydepro/encore/issues/52) — those bugs published a
+  library whose files had no references, and an incremental run reuses references
+  from the library it is rebuilding, so a library that lost them cannot get them
+  back without one. Then tell
   the running Server: **Library → Reopen library** on the dashboard's library page,
   or `POST /admin/library/reload` with your session
   cookie. There is no automatic detection and there is not going to be one — a

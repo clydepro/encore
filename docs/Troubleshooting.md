@@ -349,8 +349,11 @@ command as the service account — though that puts a 60 MB interpreter under
   read the validation report rather than republishing blindly.
 - A build that ends in a traceback, not a report, published nothing: the library
   the Server is using is still the previous one.
-- Covers gone after a rebuild that printed no error: an incremental build writes
-  zero references today (#52). Rebuild with `--full`.
+- Covers gone after a rebuild that printed no error: that was
+  [#52](https://github.com/clydepro/encore/issues/52), and an incremental build now
+  carries the references it made before. A library that is *already* missing them
+  stays missing them until a `--full` build re-reads the files, because an
+  incremental one reuses what the last artifact said.
 - Every cover is a grey tile: read
   [the artwork cache is full and the library has no covers](#the-artwork-cache-is-full-and-the-library-has-no-covers).
 
@@ -381,28 +384,34 @@ the bytes it *wrote*, which handed the database two references naming one path. 
 library whose `artwork` table is empty above a cache that is not is a library from
 before that fix, whatever the cache looks like.
 
+Its sibling, [#52](https://github.com/clydepro/encore/issues/52), produced the same
+appliance symptom by a different route: an *incremental* build reuses the tags of
+every file that has not changed, a reused file arrives at the artwork stage with no
+image bytes (SAPRS 5.6 keeps them out of the database, and a JSON cache cannot hold
+them either), and a stage that sees no image writes no reference. So one ordinary
+rebuild published 0 rows over 222, validated, and renamed it into place. That is
+fixed: the references now carry across the same incremental key the tags do. What
+the fix cannot do is heal a library those bugs already published — an incremental
+run reuses references *from the previous artifact*, and that one has none to give.
+
 To repair an appliance that was built that way, rebuild with the current code and
 then tell the running Server — no restart, and the queue is untouched:
 
 ```console
 $ sudo encore-builder --full
-  Artwork          222  images written to the cache
+  Artwork            0  images written to the cache (222 in this library)
   Published /var/lib/encore/library.db
 ```
 
-`--full` is not decoration. A plain `encore-builder` is incremental, and an
-incremental build currently reuses the tags it cached and nothing else — so it
-sees no embedded images and publishes a library with zero artwork references,
-over the good one (#52). That is the next fix; until then a rebuild that is
-supposed to change the pictures is a rebuild with `--full`.
-
-Then **Library → Reopen library** on the dashboard's library page (see
+`--full` is not decoration, and the two numbers on that line are the diagnosis: a
+healthy incremental build reads `0 written (222 in this library)`, and a build that
+reports zero in *both* brackets has nothing to show a guest. Then **Library → Reopen
+library** on the dashboard's library page (see
 [Maintenance](Administrator-Guide.md#maintenance) — the endpoint behind it wants
 your session cookie, so `curl` without one is not the way to ask).
 
-The report's `Artwork` line is the number to check: it should match the files in
-the cache, and `select count(*) from songs where artwork_id is not null` should be
-within a few percent of how many files carry a picture.
+The other number to check is `select count(*) from songs where artwork_id is not
+null`, which should be within a few percent of how many files carry a picture.
 
 ## Diagnostics worth collecting
 

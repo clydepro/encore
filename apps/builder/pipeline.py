@@ -47,6 +47,7 @@ from apps.builder.normalization import NORMALIZATION_RULES_VERSION
 from apps.builder.precedence import ArtistTrees, normalize_track, tree_map
 from apps.builder.publication import Published, publish, stage
 from apps.builder.records import (
+    ArtworkAsset,
     ExtractedFile,
     SkippedFile,
     SkipReason,
@@ -136,14 +137,21 @@ def run(options: BuildOptions, *, bus: EventBus | None = None) -> BuildReport:
     )
     checkpoints = Checkpoints(options.temp_dir, enabled=options.incremental)
 
-    extracted, reused = _extract(found, options, previous=previous, checkpoints=checkpoints)
+    extracted, reused, carried = _extract(
+        found, options, previous=previous, checkpoints=checkpoints
+    )
     checkpoints.record(extracted)
     trees = tree_map(extracted, options.music_dir)
     tracks, skips = _catalogue(
         extracted, options=options, trees=trees, previous=previous, reused=reused
     )
     duplicates = analyse_duplicates(tracks)
-    artwork = generate_artwork(tracks, options.artwork_dir, options.artwork_limits)
+    artwork = generate_artwork(
+        tracks, options.artwork_dir, options.artwork_limits, previous=carried
+    )
+    # Stage 5's answers become part of the resume point: a build that dies at minute nine of a
+    # scan over a WiFi share must not come back with fewer pictures than it started with (#52).
+    checkpoints.record_artwork(artwork.by_file)
 
     connection = _create(options.build_file)
     built: construction.BuiltLibrary | None = None
@@ -191,7 +199,7 @@ def _extract(
     *,
     previous: PreviousLibrary,
     checkpoints: Checkpoints,
-) -> tuple[list[ExtractedFile], frozenset[str]]:
+) -> tuple[list[ExtractedFile], frozenset[str], dict[Path, ArtworkAsset]]:
     """Stage 2, with the two caches that make an incremental run incremental.
 
     Cheapest first: a checkpoint from a run that was interrupted, then the tags the
@@ -200,22 +208,36 @@ def _extract(
     file, and the reason the tag hash is not part of it: a digest of the tags is only
     available after the read the caching exists to avoid.
 
-    Returns the reused keys as well as the results, because enrichment needs to know
-    which files it may take the previous answers for.
+    Returns the reused keys, and the references stage 5 could not rebuild for them.
+    The two travel together because they are the same claim — *this file has not
+    changed* — and the artwork stage needs the second one to keep the first one
+    honest: a reused probe carries no image bytes (SAPRS 5.6 forbids storing them), so
+    without the reference a reuse is a loss (#52).
+
+    The previous library is consulted through `Reusable.matches`, which compares the
+    parts of ADR-010's key a `stat()` can answer. That call did not exist in the
+    pipeline when #52 was filed — `_extract` asked only whether the *path* was in the
+    last build — so an incremental run reused a file it had retagged since, and
+    published metadata that was true of a version of the file nobody had listened to.
     """
 
     cached: dict[str, ProbeResult] = {}
+    carried: dict[Path, ArtworkAsset] = {}
     for item in found.files:
         record = checkpoints.probe_for(item)
         if record is not None:
             cached[item.cache_key] = record
+            if (asset := checkpoints.artwork_for(item)) is not None:
+                carried[item.path] = asset
             continue
         earlier = previous.for_path(item.path)
-        if earlier is not None and earlier.probe is not None:
+        if earlier is not None and earlier.probe is not None and earlier.matches(item):
             cached[item.cache_key] = earlier.probe
+            if earlier.artwork is not None:
+                carried[item.path] = earlier.artwork
 
     reader = options.probe if options.probe is not None else MutagenProbe()
-    return extract(found.files, reader, previous=cached), frozenset(cached)
+    return extract(found.files, reader, previous=cached), frozenset(cached), carried
 
 
 # -- stages 3 and 4: normalization, precedence, enrichment ----------------
@@ -423,11 +445,14 @@ def _assemble(
         skipped=ledger,
         repaired=reference.repaired,
         artwork=_generated(artwork),
+        artwork_held=reference.artwork,
+        artwork_reused=artwork.reused,
+        artwork_uncached=artwork.uncached,
         songs=reference.songs,
         artists=reference.artists,
         albums=reference.albums,
         duplicates=duplicates.lines(),
-        warnings=tuple(_warnings(found, findings, previous, artwork)),
+        warnings=tuple(_warnings(found, findings, previous, artwork, held=reference.artwork)),
         errors=tuple(finding.detail for finding in findings.failures),
         validation=tuple((f.name, f.label, f.detail) for f in findings.findings),
         duration_seconds=time.monotonic() - started,
@@ -493,12 +518,26 @@ def _warnings(
     findings: validation.ValidationReport,
     previous: PreviousLibrary,
     artwork: ArtworkOutcome,
+    *,
+    held: int,
 ) -> list[str]:
     notes = [finding.detail or finding.name for finding in findings.findings if not finding.passed]
     if found.unreadable:
         notes.append(f"{len(found.unreadable)} entries could not be read")
     if _empty(artwork):
         notes.append(f"{_empty(artwork)} files carried no embedded artwork (normal, SAPRS 6.7)")
+    if artwork.uncached:
+        # The one artwork number that is never normal: the cache lost files the library
+        # pointed at. The songs still play, so this is a note and not a failure (6.7) — but
+        # it is the sentence that turns "some tiles are grey" into a repair.
+        notes.append(
+            f"{artwork.uncached} files name an image that is no longer in the cache; "
+            "a --full build rewrites them"
+        )
+    if not held and previous.artwork_rows:
+        notes.append(
+            f"this library holds no artwork; the previous one held {previous.artwork_rows}"
+        )
     if not previous.usable:
         notes.append("no previous library to reuse from; full build")
     return notes

@@ -505,6 +505,40 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Fixed
 
+- An incremental rebuild — the default, and what you get when you add three albums —
+  published a library with **no artwork references in it** (#52). It did not crash,
+  it validated, it printed `Artwork 0` and renamed itself into place over a library
+  that had 222 images and 1,060 covered songs, so every album tile a guest opened
+  afterwards was grey. The mechanism was a cache field with a loader and no reader:
+  `Reusable.artwork` is documented ("so an unchanged build writes zero images"),
+  filled by `PreviousLibrary` from `music_files.embedded_artwork_sha`, and read by
+  nothing — while `_extract` kept only `earlier.probe`, and a restored `ProbeResult`
+  carries tags and a duration and no image bytes, because SAPRS 5.6 keeps BLOBs out
+  of the artifact. Stage 5 therefore saw 3,049 files with no embedded cover and wrote
+  zero references; construction derives every row from what the stage named, so zero
+  is not "no new rows", it is no rows. `generate` now takes the previous build's
+  references, the checkpoint file carries them across a resumed build (ADR-010's
+  stage boundary — a build that dies at minute nine may not come back with fewer
+  pictures than it started with), and a reference whose cache file has gone is
+  reported rather than published. The report prints both numbers — `0 written to the
+  cache (222 in this library)` — because the one it used to print was a true answer
+  that the whole failure hid behind.
+
+  Verifying the criterion "a retagged file is re-read for artwork" turned up the same
+  shape one layer down, and a worse product of it: `_extract` consulted the previous
+  library by *path*, so `Reusable.matches` — ADR-010's key, written out and unit-tested
+  and called by no production path — compared nothing, and **an incremental build never
+  noticed a file had been retagged**. Correct an artist in a tag editor, rebuild, and the
+  library kept what the file used to say, forever, with `reused 3049` printed above it as
+  evidence that everything was fine. That is #48's sentence again — a check that is true
+  about the wrong subject — and the fix is the call, not a new rule: reuse now requires
+  path, size, `mtime_ns` and the normalization-rule version to agree, which is every part
+  of the key a `stat()` can answer without the read the cache exists to avoid (the tag
+  hash is not one of them; a retag that moved neither byte count nor timestamp is the
+  case this cannot see, and it is not a case any tagger produces).
+  Regression: `tests/regression/test_issue_52_incremental_artwork_reuse.py` (6), and
+  `tests/integration/test_builder_pipeline.py`'s two incremental assertions now state
+  both halves of the promise instead of the one that was true.
 - A library in which one cover existed in two byte forms could not be built at all,
   and the appliance left standing afterwards showed a grey tile wherever a cover
   should be (#51). The artwork stage keys its cache on the digest of the bytes it
