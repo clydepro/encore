@@ -14,6 +14,7 @@ Four modules, one per thing that can go wrong:
 * `supervisor` — `PlaybackSupervisor`: launch, monitor, detect, restart, reconnect,
   report health (SAPRS 7.2).
 * `transition` — the gapless/crossfade policy, which is configuration made audible.
+* `fault` — what a refusal meant, named once so the log and the health page cannot disagree.
 * `errors` — the failures, named so that a socket never reaches a controller.
 
 Nothing here imports `encore.api`, `encore.controllers`, Jinja, SQLite or the library:
@@ -31,6 +32,7 @@ from encore.playback.errors import (
     MpvTimeoutError,
     PlaybackError,
 )
+from encore.playback.fault import FaultKind, PlaybackFault
 from encore.playback.ipc import (
     CommandChannel,
     JsonIpc,
@@ -57,6 +59,7 @@ __all__ = [
     "EngineObservation",
     "EngineRecovery",
     "EngineUnavailableError",
+    "FaultKind",
     "IllegalTransitionError",
     "JsonIpc",
     "MpvCommandError",
@@ -66,6 +69,7 @@ __all__ = [
     "MpvProcess",
     "MpvTimeoutError",
     "PlaybackError",
+    "PlaybackFault",
     "PlaybackService",
     "PlaybackSupervisor",
     "PlayingTrack",

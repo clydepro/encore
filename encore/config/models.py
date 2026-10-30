@@ -134,6 +134,16 @@ class AudioConfig(_Section):
     """Audio output (SAPRS 7.7, 7.8, 12.2).
 
     Hardware specifics live here so no playback module ever embeds them.
+
+    `device`'s default is the one value in this file that is a placeholder rather than an
+    answer. "default" means "whichever card registered first", which on a Raspberry Pi is an
+    HDMI port; with nothing plugged into it mpv cannot initialise an output and refuses every
+    file the library holds, in both formats, while the rest of the appliance looks fine (#48).
+    The two ways out are naming a card (`alsa/plughw:CARD=Headphones,DEV=0`, from
+    `mpv --ao=alsa --audio-device=help`) or leaving the device alone and running a sound server
+    the service account can actually reach. A name mpv cannot parse is not an error: it logs
+    "Trying the default audio device..." and then fails the same way, which is why a typo here and
+    a dead output are indistinguishable from the journal alone.
     """
 
     output: str = "alsa"

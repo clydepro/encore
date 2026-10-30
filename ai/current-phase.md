@@ -8,7 +8,9 @@ documentation ([#38](https://github.com/clydepro/encore/issues/38),
 [#43](https://github.com/clydepro/encore/issues/43),
 [#44](https://github.com/clydepro/encore/issues/44),
 [#46](https://github.com/clydepro/encore/issues/46) — see "What an installed appliance found" and
-the two "running it" sections below).
+the two "running it" sections below) — and a sixth time by the hardware it was installed
+on ([#48](https://github.com/clydepro/encore/issues/48), "What an installed appliance heard": a
+sound card the service account could not open, reported as a bad song and a healthy component).
 **Phase 7 — the dependency-alert chore — merged as
 [#40](https://github.com/clydepro/encore/pull/40), closing
 [#39](https://github.com/clydepro/encore/issues/39).** Phases 1–5 are merged:
@@ -154,6 +156,65 @@ three places; #46 asked the right question about the wrong *subject* — the fil
 belongs to the user. The general form: **`mode & 0o111` is not "can this be executed".** Any check
 in this repository that ends in a permission bit is asking about an inode while the product's
 question is about an identity, and the two differ by the whole path above the file.
+
+## What an installed appliance heard (#48)
+
+The appliance came up on the Pi after #46 and played nothing. Every request — mp3, m4a, whichever
+guest asked — ended in the same WARNING, and `/health` was green:
+
+```text
+{"level":"WARNING","message":"mpv refused the file","song_id":900,
+ "file":"/opt/music/.../04_Bad_Moon_Rising.m4a","detail":"audio output initialization failed"}
+{"status":"healthy","components":[{"component":"playback","status":"healthy",
+ "detail":"mpv running as pid 503668"}]}
+```
+
+**The sixth finding, and the one the unit file had already warned about.** Its comment says that
+`PrivateDevices=yes` was avoided because it would give "an appliance in a sandbox with no sound
+card" that "reports healthy and plays nothing". The sandbox was excluded correctly and the same
+appliance happened anyway, because the device was wrong rather than hidden: `audio.device: default`
+is ALSA's "whichever card registered first", which on a Pi 4 is the HDMI port, which had nothing
+plugged into it. mpv's reply for that, and for a PulseAudio or PipeWire server the service account
+cannot reach, is the same `file_error` it uses for a file it cannot demux, and Encore had one
+handler for both: report the track, leave the machine alone. The general form: **a process being
+alive is not the job being done.** #46's shape one layer down — a check that is true, about the
+wrong subject, over an appliance that is not working.
+
+What that took, in order of how much it mattered:
+
+1. `PlaybackFault` (`encore/playback/fault.py`) classifies a refusal by mpv's own words, because
+   nothing else in the reading distinguishes them — the properties are idle either way, which is
+   the same fact that made `end-file` necessary in #23.
+2. `PlaybackSupervisor.health()` reads it. `degraded`, with mpv's sentence and the two settings
+   that decide which sound card it means, so the dashboard and the journal agree without anyone
+   opening a manual. A corrupt *file* still costs the appliance nothing: a banner that is always
+   red is a banner that gets ignored, and 15,000 songs contain some red. What the supervisor does
+   not claim is that no sound is coming out of the room — `audio.device: default` on a Pi with a
+   monitor on HDMI is a card that opens and plays, and the appliance cannot see the cable. It says
+   the engine reported it could not initialize an output, which is the sentence a listener can act
+   on.
+3. A fault ends when a track plays, not when mpv restarts. That is the #23 lesson again — a
+   reassuring event is not evidence — applied to the recovery path rather than the queue's.
+4. `tests/support/mpv.py` gained the double the suite never had: an engine that is alive, answers
+   IPC, and cannot make sound. `--ao=null` (which every real-mpv test here uses so it runs
+   headless) cannot fail that way, so the new integration test points a real mpv at a device that
+   does not exist and asserts the string; if a future build words it differently, that test says
+   what the build said instead of the classifier quietly stopping to fire.
+5. `content.config_text` now quotes `audio.device` and says what `default` resolves to. It used to
+   say "`default` is right unless `amixer` says otherwise", which is a sentence that cost somebody
+   an evening: `amixer` is asked about the wrong card and answers about it perfectly.
+
+**What the fix does not cover, filed as
+[#49](https://github.com/clydepro/encore/issues/49).** Rename `paths.music_root` and every request
+still fails, but each failure is correctly a *file* refusal — so the queue keeps walking, health stays
+green, and the appliance is silent for the same reason #48 was silent. The classifier is right about
+every track and wrong about the run. That one needs a rate over real attempts (N refusals with no
+successful play between them), which is a policy decision with a threshold in `audio:`-adjacent
+configuration and an argument about which component owns the answer — not a change to slip into a
+fix for a different machine fault. #48's own general form is what found it: re-read every health
+source and write down the thing its component could not do while still saying `healthy`. The
+`library`, `runtime` and `search` probes (`apps/server/appliance.py:444-495`) each name one, which is
+why they are probes and not liveness checks; `library` checks the database, and never a file.
 
 ## What running it on a machine with systemd found (#43, #44)
 

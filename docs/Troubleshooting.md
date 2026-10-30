@@ -30,9 +30,77 @@ symptom-first, because that is how someone searches it at a party.
 - mpv not running: Health shows the supervisor state; restart the service and
   watch the log for `PlaybackRecovered`.
 - Wrong output/device: `audio.output`, `audio.device` are installation
-  configuration (SAPRS 7.7) — hardware assumptions never live in code.
+  configuration (SAPRS 7.7) — hardware assumptions never live in code. This is
+  the common one, and it has its own section below because the log line lies
+  about it.
 - Output volume/ducking by the OS, or the ALSA device is held by another
   process.
+- Health green, log full of refusals: read
+  [mpv refuses every file](#mpv-refuses-every-file-audio-output-initialization-failed).
+
+### mpv refuses every file: "audio output initialization failed"
+
+```text
+{"level":"WARNING","logger":"encore.playback","message":"mpv refused the file",
+ "song_id":900,"file":"/opt/music/.../04_Bad_Moon_Rising.m4a",
+ "detail":"audio output initialization failed"}
+```
+
+The file is not the problem. Nothing in the library is. mpv opened the file,
+could not open a sound device, and gave up — which is why mp3 and m4a fail
+identically, why a rebuild changes nothing, and why the `song_id` changes every
+time while the `detail` never does. Issue
+[#48](https://github.com/clydepro/encore/issues/48) was a room with no music for
+an hour, on a Pi 4 whose `audio.device` was `default`.
+
+On a Raspberry Pi, `default` is whichever card registered first, and that is
+usually HDMI:
+
+```console
+$ cat /proc/asound/cards
+ 0 [vc4hdmi0       ]: vc4-hdmi - vc4-hdmi-0        ← what `default` opens
+ 2 [Headphones     ]: bcm2835_headpho - bcm2835 Headphones   ← what the speakers are
+```
+
+Ask mpv, as the account the service runs under, which is the part that surprises
+people — a sound server in someone's desktop session is not reachable by
+`User=encore`:
+
+```console
+$ sudo -u encore mpv --ao=alsa --audio-device=help | head   # the names worth using
+$ sudo -u encore mpv -v --ao=alsa --audio-device=default somefile.mp3
+[ao/alsa] opening device 'default'
+[ao/alsa] Playback open error: Unknown error 524        ← card 0, nothing plugged in
+[cplayer] finished playback, audio output initialization failed (reason 4)
+$ sudo -u encore mpv -v --ao=alsa --audio-device=alsa/plughw:CARD=Headphones,DEV=0 somefile.mp3
+[ao/alsa] opening device 'plughw:CARD=Headphones,DEV=0'
+[cplayer] finished playback, success (reason 0)         ← this one is the fix
+```
+
+Then set it in `/etc/encore/config.yaml` and restart — the queue survives:
+
+```yaml
+audio:
+  output: alsa
+  device: alsa/plughw:CARD=Headphones,DEV=0
+```
+
+What to check in that order, and what each answer means:
+
+| Check | If it is wrong |
+| ----- | -------------- |
+| `Admin → Health` says `playback: degraded` with mpv's sentence in it | You are on a build before #48, where every file got its own WARNING and health stayed green. Upgrade, or read the log's `detail` field |
+| `id encore` includes `audio` | `sudo usermod -aG audio encore`, then restart (SAPRS 13.5) |
+| `output: pipewire` while PipeWire runs in a login session | Use `alsa`. A system service has no session bus and no `/run/user/<uid>`, so it cannot reach a per-user sound server |
+| The device names a card with no sink behind it | Name the card you can hear. `plughw:` converts rates and channels in software, which is what you want from a fixed appliance |
+| A device name mpv cannot parse | Nothing rejects it: mpv logs `Trying the default audio device...` and fails exactly as a dead card fails, so a typo and a broken output look identical. Copy the string from `mpv --ao=<output> --audio-device=help`, which prints what mpv accepts rather than what ALSA calls the hardware |
+| The mixer, not the device | `audio.volume` is mpv's software preamp; an ALSA control at 0 % is silence whatever mpv opens. Check `amixer -c <N> get Master` and, on a Pi, `get Headphone` — they are different controls |
+| Another process holds the card (`aplay` in a timer, a desktop PipeWire that woke up) | `fuser /dev/snd/pcmC*D0p`. An appliance should own its output; if a desktop session shares the box, that session is the thing to stop |
+
+The one that is easy to miss: **`alsa/hw:2,0` and `alsa/plughw:CARD=Headphones,DEV=0` will
+fight PipeWire for the card.** On a headless appliance that is exactly what you want.
+On a box that also has a desktop, run the appliance through a system-wide PipeWire
+instead, or the two will take turns failing to open the device.
 
 ### Search is slow or empty
 

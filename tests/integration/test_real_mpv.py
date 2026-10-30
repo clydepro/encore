@@ -63,6 +63,7 @@ from encore.playback import MpvPlayer, PlaybackService, PlaybackSupervisor
 from encore.playback.ipc import MpvLauncher, socket_path_for
 from encore.playback.service import LOAD_GRACE_SECONDS
 from tests.support.media import generate_track, silent_track
+from tests.support.mpv import AUDIO_OUTPUT_FAILURE
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -84,10 +85,14 @@ class RealLauncher:
     appliance's dies, and `kill` on the process object would be a different code path.
     """
 
-    def __init__(self, temp_dir: Path) -> None:
+    def __init__(self, temp_dir: Path, *, audio: AudioConfig | None = None) -> None:
         self._mpv = MpvLauncher(
             playback=PlaybackConfig(mpv_path=Path(MPV or "/usr/bin/mpv")),
-            audio=AudioConfig(output="null", device="none", volume=70),
+            # `null` so these run on a headless machine and in CI's containers, which have no
+            # audio device (see the module docstring). Overridable because #48 needs an engine
+            # that really cannot open one — and an appliance fault that can only be staged by a
+            # double is an appliance fault nothing has checked.
+            audio=audio or AudioConfig(output="null", device="none", volume=70),
             temp_dir=temp_dir,
         )
         self.launches = 0
@@ -193,9 +198,9 @@ def _song(temp_dir: Path, number: int, *, seconds: float = 1.0, broken: bool = F
 class Appliance:
     """Player, service and monitor wired the way `apps/server` will wire them."""
 
-    def __init__(self, temp_dir: Path) -> None:
+    def __init__(self, temp_dir: Path, *, audio: AudioConfig | None = None) -> None:
         self.events = EventBus(logger=logging.getLogger("encore.real-mpv"))
-        self.launcher = RealLauncher(temp_dir)
+        self.launcher = RealLauncher(temp_dir, audio=audio)
         self.supervisor = PlaybackSupervisor(
             launcher=self.launcher,
             events=self.events,
@@ -445,6 +450,72 @@ def test_a_file_mpv_cannot_open_is_reported_not_left_loading(
     assert _state_of(appliance.playback) is PlaybackState.IDLE
     appliance.play_until_finished(_song(tmp_path, 5, seconds=0.4), item=2)
     assert appliance.recorder.finished[1] == (5, 2, "completed"), "the queue recovered by itself"
+
+
+@pytest.mark.skipif(MPV is None, reason=_skip_reason())
+def test_an_output_that_cannot_be_opened_is_an_appliance_fault_not_a_song_one(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#48, with a real engine refusing a real device.
+
+    Everything else in this file plays through `--ao=null`, which cannot fail — and the failure
+    it cannot show is the one that made an installed appliance refuse every file in its library
+    for an hour while `/health` said `healthy` and the log blamed whichever track a guest had
+    happened to request. So this launches mpv the way the appliance does and points it at a
+    device that is not there, which is the same answer a Raspberry Pi's HDMI card gives with
+    nothing plugged into it, reached without needing the hardware.
+
+    Three claims no double can make:
+
+    * mpv's own `file_error` is the string `tests/support/mpv.py` transcribes. If a build changes
+      it, this test names what the build said instead, because a classifier written from memory
+      of an engine is worth nothing.
+    * The refusal becomes a fault on the service and a degraded component, which is the half of
+      #48 a `SongFinished(FAILED)` cannot express: the event is the same one a bad file produces.
+    * The launch put the audio settings it was given into the journal, which is the line that
+      turns an evening of reading `audio:` into ten seconds.
+    """
+
+    appliance = Appliance(
+        tmp_path / "run",
+        audio=AudioConfig(output="alsa", device="alsa/encore-no-such-device:9"),
+    )
+    try:
+        with caplog.at_level(logging.DEBUG, logger="encore.playback"):
+            appliance.playback.play(_song(tmp_path, 40, seconds=0.4), queue_item_id=QueueItemId(1))
+            assert appliance.wait(lambda: bool(appliance.recorder.finished)), (
+                "an engine with no audio output said nothing about the file it was given"
+            )
+
+        assert appliance.recorder.finished, "the refusal never became a fact about the track"
+        assert [entry[2] for entry in appliance.recorder.finished] == ["failed"]
+        # Whether a `SongStarted` precedes that is a race in mpv rather than a claim this test can
+        # make: `play()`'s announcing fast path reads the filename the engine reports while it is
+        # still opening the file, and an output failure lands some tens of milliseconds later. On
+        # a quiet machine the refusal wins and nothing is announced; under a suite the start gets
+        # there first. Either way the track is failed and the fault is recorded, which is the part
+        # the appliance acts on — and the deterministic version of "nothing played, so nothing was
+        # announced" is in `tests/regression/test_issue_48_audio_output_refusal.py`, where the
+        # engine cannot be racy.
+
+        fault = appliance.playback.fault
+        assert fault is not None, "a refusal was read and no fault was recorded"
+        assert fault.detail == AUDIO_OUTPUT_FAILURE, (
+            f"this mpv refused an unopenable device with {fault.detail!r}; #48's classifier and "
+            "the string in `tests/support/mpv.py` both need re-measuring against it"
+        )
+        assert fault.blocks_every_track
+
+        report = appliance.supervisor.health()
+        assert report.status.value == "degraded", report.detail
+        assert "audio.device" in report.detail, (
+            "a health line nobody can act on is a health line nobody reads"
+        )
+        given = [record for record in caplog.records if "audio_device" in record.__dict__]
+        assert given, "the journal never says what mpv was told to open"
+        assert given[0].__dict__["audio_device"] == "alsa/encore-no-such-device:9"
+    finally:
+        appliance.close()
 
 
 # -- recovery, which is what the supervisor is for -------------------------

@@ -143,6 +143,14 @@ has already set (ADR-015).
    `/etc/encore/environment` at mode `0600` with `ENCORE_HOME`, `ENCORE_CONFIG`
    and, if you want the box configured before it boots, `ENCORE_ADMIN_PASSWORD`.
 
+   Change `audio.device` before you start. `default` means "whichever sound card
+   registered first", which on a Pi 4 is the HDMI port; with nothing plugged into
+   it, mpv refuses every file in the library and the journal says `audio output
+   initialization failed` (#48). `sudo -u encore mpv --ao=alsa --audio-device=help`
+   lists the names as the account that will be playing, which is the part that
+   matters — a sound server in your desktop session is not one the service can
+   reach. `alsa/plughw:CARD=Headphones,DEV=0` is the analog jack.
+
 5. Install the unit (SAPRS 13.6) and the tmpfiles rule that keeps the mpv socket
    directory from being cleaned away, then `systemctl daemon-reload`, `enable`
    and `start encore`.
@@ -288,7 +296,9 @@ why no administrative page changes anything when you load it.
   to be (SAPRS 8.1).
 - **Health** — the aggregate, then each component's own words: `playback`,
   `library`, `search`, `runtime`. If mpv had to be restarted, that is where it
-  says so.
+  says so. `playback: degraded` beside "mpv cannot open the audio output" is the
+  appliance telling you the sound card is wrong rather than the song, and it names
+  the two settings to fix (#48).
 - **Statistics** — plays, searches, requests, distinct songs heard, history rows,
   today and ever; a fortnight of trend as a table rather than a chart; the
   leaderboard. Peak concurrency and crossfade faults are v1.1 counters and are not

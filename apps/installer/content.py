@@ -71,24 +71,40 @@ server:
 paths:
   # Read-only, published by the Library Builder. The Server never creates this file and
   # never writes to it (ADR-006, ADR-010). If it is missing, run encore-builder.
-  library_db: {_path(staged(str(paths.library_db)))}
+  library_db: {_scalar(staged(str(paths.library_db)))}
   # Queue, history, statistics and the administrator. Created on first start.
-  runtime_db: {_path(staged(str(paths.runtime_db)))}
+  runtime_db: {_scalar(staged(str(paths.runtime_db)))}
   # The image cache the Builder wrote, served from disk and never generated at runtime.
-  artwork_dir: {_path(staged(str(paths.artwork_dir)))}
+  artwork_dir: {_scalar(staged(str(paths.artwork_dir)))}
   # mpv's IPC socket and the Builder's scratch space. Must be writable, and must be local:
   # a socket on a network filesystem is a player nobody can tell to stop.
-  temp_dir: {_path(staged(str(paths.temp_dir)))}
+  temp_dir: {_scalar(staged(str(paths.temp_dir)))}
   # Read by the Builder only; the Server never scans it (ADR-010).
-  music_dir: {_path(staged(str(paths.music_dir)))}
+  music_dir: {_scalar(staged(str(paths.music_dir)))}
 
 audio:
-  # "alsa" or "pipewire". mpv accepts either, and no version floor is claimed for this
-  # choice (SAPRS 7.7, ADR-005) — the installer picked it from what the machine has, because
-  # a silent appliance that reports healthy is the worst failure this file can cause.
-  output: {audio.output}
-  # An ALSA device name. "default" is right unless `amixer` says otherwise.
-  device: {audio.device}
+  # Which kind of sound server to open: "alsa" or "pipewire". mpv accepts either, and no version
+  # floor is claimed for this choice (SAPRS 7.7, ADR-005) — the installer picked it from what the
+  # machine has, because a silent appliance that reports healthy is the worst failure this file
+  # can cause.
+  #
+  # The one thing it cannot see from there: PipeWire and PulseAudio usually run per-user, inside
+  # someone's login session, and the appliance account has no session to be inside. On a box with
+  # a desktop logged in and a jukebox running as `encore`, "alsa" is the answer.
+  output: {_scalar(audio.output)}
+  # Which device inside that output. `mpv --ao={audio.output} --audio-device=help` prints the
+  # names mpv accepts, and `aplay -l` prints the cards — they are different spellings of the same
+  # hardware, and only the first is what goes here. A name mpv cannot parse is not rejected: it
+  # logs "Trying the default audio device..." and fails the way a dead card fails, so a typo in
+  # this line looks exactly like a broken output.
+  #
+  # Read this before leaving it as generated. "default" means "whichever card registered first",
+  # and on a Raspberry Pi 4 that is an HDMI port — with nothing plugged into it every file in the
+  # library is refused with "audio output initialization failed", mp3 and m4a alike, and nothing
+  # else about the appliance looks wrong (#48). Name the card you can actually hear:
+  #   device: alsa/plughw:CARD=Headphones,DEV=0    # the 3.5 mm jack
+  #   device: alsa/hdmi:CARD=vc4hdmi0,DEV=0         # an HDMI sink that is connected
+  device: {_scalar(audio.device)}
   volume: {audio.volume}
   gapless: {_bool(audio.gapless)}
   # 0 ends a track; anything above it holds two decoders open at once, which on a Pi 4 is
@@ -103,7 +119,7 @@ queue:
 playback:
   # The only place the mpv binary is named. A wrong path here looks like a healthy appliance
   # that never plays: the Supervisor restarts it, gets the same answer, backs off.
-  mpv_path: {playback.mpv_path}
+  mpv_path: {_scalar(playback.mpv_path)}
   # The restart ladder (SAPRS 7.6). The long final step is deliberate — a machine with a
   # dead sound card should stop trying before it fills the journal.
   restart_backoff_seconds: [{", ".join(str(step) for step in playback.restart_backoff_seconds)}]
@@ -272,13 +288,14 @@ def tmpfiles_text(layout: Layout) -> str:
     )
 
 
-def _path(value: Path | str) -> str:
-    """A path for YAML, quoted only when bare would not parse.
+def _scalar(value: Path | str) -> str:
+    """A value for YAML, quoted only when bare would not parse.
 
     Pydantic happily takes `/opt/music` and equally happily takes `"/opt/music: west"`; the
     second one is not valid YAML unquoted, and a colon in a mount point is not exotic on a
-    box with a music share. Quoting everything would be shorter and would make the file
-    nobody wants to read.
+    box with a music share. The same is true of an ALSA device: `alsa/plughw:CARD=Headphones,
+    DEV=0` is a value a working appliance writes, and quoting is what keeps it one value. Quoting
+    everything would be shorter and would make the file nobody wants to read.
     """
 
     text = str(value)

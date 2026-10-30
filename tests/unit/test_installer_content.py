@@ -17,7 +17,7 @@ import yaml
 from apps.installer.content import config_text, environment_text, tmpfiles_text, unit_text
 from apps.installer.layout import Layout
 from apps.installer.options import Settings
-from encore.config.models import EncoreConfig
+from encore.config.models import AudioConfig, EncoreConfig
 from encore.config.service import ConfigurationService
 
 
@@ -108,6 +108,49 @@ def test_rendering_loses_nothing_between_the_models_and_the_file(tmp_path: Path)
     # *appliance* will look, which under `--root` is not where this test's settings pointed.
     expected["paths"] = _stage(expected["paths"], layout)
     assert again.model_dump() == expected
+
+
+@pytest.mark.parametrize(
+    "device",
+    [
+        # The value #48 needs on a Raspberry Pi 4: colons, an equals sign, a comma.
+        "alsa/plughw:CARD=Headphones,DEV=0",
+        "alsa/hdmi:CARD=vc4hdmi0,DEV=0",
+        # And the pathological case the quoting rule exists for: a colon with a space after it is
+        # a nested mapping to anything that parses this, and the Server would refuse the file.
+        "alsa/default: the first card",
+    ],
+)
+def test_a_device_name_survives_the_rendering(tmp_path: Path, device: str) -> None:
+    """#48's remedy is one YAML line, so the line has to be a parseable one.
+
+    A value interpolated into a template unquoted turns into a different value — or into a file
+    the Server refuses at boot, which is the failure this module exists to make impossible and
+    which the round-trip test above catches only for the values it happens to try.
+    """
+
+    wanted = EncoreConfig(audio=AudioConfig(output="alsa", device=device))
+
+    rendered = config_text(wanted, Layout(root=tmp_path))
+    again = EncoreConfig.model_validate(yaml.safe_load(rendered))
+
+    assert again.audio.device == device
+
+
+def test_the_generated_file_says_where_the_device_comes_from(tmp_path: Path) -> None:
+    """A knob with no sentence beside it is a knob nobody turns, which is how #48 stayed lit.
+
+    The comment is the other half of the fix: the installer cannot probe a sound card from a
+    command line, so the file it writes has to name the command that can, and say what "default"
+    actually resolves to on the hardware this product targets.
+    """
+
+    text = generated(tmp_path)
+
+    assert "--audio-device=help" in text, "the line that lists the real device names"
+    assert "audio output initialization failed" in text, (
+        "the sentence the journal shows, so an operator can search for it"
+    )
 
 
 def test_a_rendered_file_carries_a_comment_for_every_setting(tmp_path: Path) -> None:

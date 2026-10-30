@@ -505,6 +505,41 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Fixed
 
+- An appliance with no usable audio output refused every file in its library and
+  reported itself healthy while doing it (#48). The trigger was configuration —
+  `audio.device: default` on a Raspberry Pi 4 names card 0, which is the HDMI port,
+  and ALSA will not open an HDMI device with nothing on the other side of it — but
+  the cost was everything else. mpv answers that with `end-file reason=error
+  file_error="audio output initialization failed"`, which is the shape it uses for a
+  file it cannot demux, and Encore read the two as one event: a WARNING per track
+  naming whichever innocent file a guest had most recently requested, a queue walking
+  itself to empty, and `/health` saying `playback: healthy, mpv running as pid
+  503668` — true, and the exact sentence the unit file's own comment exists to
+  prevent. Now: `EngineObservation.output_fault` asks whether mpv's own words name
+  the audio output or the audio device (phrase, not pinned string — the same
+  sentence arrived from three different faults here, and `test_real_mpv.py` re-checks
+  it against a real engine refusing a real device); `PlaybackFault` records which of
+  the two it was and how many tracks in a row have proved it; the first refusal of a
+  run is one ERROR carrying the count instead of forty warnings carrying a filename;
+  and `PlaybackSupervisor.health()` reports `degraded` in mpv's words, naming
+  `audio.output` and `audio.device`, because liveness and sound are different claims.
+  A fault ends when a track plays — not when mpv restarts, since a restart reads the
+  same `audio:` and gets the same answer. Per-track behaviour is deliberately
+  unchanged: `SongFinished(FAILED)` still names the refused track so the queue moves
+  on, and a corrupt file in a 15,000-song library still costs the appliance nothing,
+  because a banner that is always red is a banner that gets ignored. The generated
+  `config.yaml` and `examples/config.yaml` say where a device name comes from and what
+  leaving it at `default` resolves to on this hardware, and the generator now quotes
+  `audio.device` (and `playback.mpv_path`, which had the same latent problem) instead
+  of interpolating them: `alsa/plughw:CARD=Headphones,DEV=0` is the value that works,
+  and one stray space after a colon made it a mapping. `MpvLauncher` logs the output
+  and device it handed mpv, once per launch, which is the line that turns an evening
+  of reading `audio:` into ten seconds. A device name mpv cannot parse is not an error
+  either: it logs `[ao/alsa] Trying the default audio device...` and then fails exactly as
+  an absent card fails, so a typo in `audio.device` looks like a sound-card problem and a
+  sound-card problem looks like a typo. The value has to come from the list mpv prints for
+  itself (`mpv --ao=<output> --audio-device=help`); `aplay -l` prints card numbers, a
+  different spelling of the same hardware and not what goes in the file.
 - An installed appliance could not start, and the acceptance list said it was fine (#46).
   `Failed at step EXEC … Permission denied` / `status=203/EXEC` is a statement about the
   *interpreter*, not the file named in `ExecStart`: a console script's first line tells the

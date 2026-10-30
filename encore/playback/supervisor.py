@@ -43,6 +43,7 @@ from encore.events.bus import EventBus
 from encore.events.health import HealthChanged
 from encore.events.playback import PlaybackRecovered
 from encore.playback.errors import EngineUnavailableError, MpvGoneError
+from encore.playback.fault import PlaybackFault
 from encore.playback.ipc import CommandChannel
 from encore.utilities.clock import Clock, SystemClock
 
@@ -88,17 +89,24 @@ class EngineLauncher(Protocol):
 
 
 class PlaybackNotifier(Protocol):
-    """What the supervisor needs from the playback service: one report and one read.
+    """What the supervisor needs from the playback service: two reads and two reports.
 
-    Declared as two members rather than typed `PlaybackService` because that is the whole of
+    Declared as members rather than typed `PlaybackService` because that is the whole of
     the collaboration, and because a test can then hand in a recorder instead of reaching
     into a private attribute. The dependency is one-way — the supervisor tells the service
     about the *process*, and the service is the only thing allowed to publish what that
     meant for the track (ADR-004's "one publisher per fact").
+
+    `fault` is the one thing read *from* the service rather than sent to it, and it is here
+    for a reason: "the engine is alive" is not the same claim as "the engine can make sound",
+    and only the service has seen mpv's own answer to that question (SAPRS 11.7 step 8).
     """
 
     @property
     def state(self) -> PlaybackState: ...
+
+    @property
+    def fault(self) -> PlaybackFault | None: ...
 
     def engine_lost(self, reason: str) -> None: ...
 
@@ -306,10 +314,24 @@ class PlaybackSupervisor:
         Liveness is `launcher.alive`, not "a channel object exists": a supervisor that
         called itself healthy while holding a socket to a dead mpv would be the dashboard
         lying, and the dead-process case is exactly when someone is reading it (SAPRS 11.7).
+
+        Liveness is not the whole of it, and this is where the difference shows. A process
+        that answers IPC and then refuses every file because it cannot open a sound device is
+        alive, and used to be reported healthy — the failure this module's own unit file warns
+        about ("reports healthy and plays nothing"), and the one nothing else in the appliance
+        can see, because the socket, the process table and the queue are all genuinely fine.
+        So a live engine carrying an audio-output fault reports `degraded`, and the detail is
+        mpv's own sentence plus the two settings that decide which sound card it means — a reader
+        with the dashboard open and no manual has both the evidence and the place to act on it.
         """
 
         running = self._channel is not None and self._launcher.alive
         if running:
+            fault = self._output_fault()
+            if fault is not None:
+                return ComponentHealth(
+                    component=COMPONENT, status=HealthStatus.DEGRADED, detail=fault.summary
+                )
             return ComponentHealth(
                 component=COMPONENT,
                 status=HealthStatus.HEALTHY,
@@ -446,6 +468,19 @@ class PlaybackSupervisor:
             return PlaybackState.IDLE
         self._service.recovered(resumed=PlaybackState.IDLE)
         return self._service.state
+
+    def _output_fault(self) -> PlaybackFault | None:
+        """The engine's own "no sound", if it has one and nothing has contradicted it since.
+
+        Filtered to `blocks_every_track` on purpose. A library with three corrupt files is not
+        a degraded appliance, and a health page that said otherwise would cry wolf once an hour
+        on the busiest night of the year — which is how a red banner stops being read.
+        """
+
+        if self._service is None:
+            return None
+        fault = self._service.fault
+        return fault if fault is not None and fault.blocks_every_track else None
 
     def _delay(self) -> float:
         """The ladder's rung for the attempt just failed, in seconds.

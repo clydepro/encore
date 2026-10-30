@@ -421,11 +421,13 @@ class MpvLauncher:
         audio: AudioConfig,
         temp_dir: Path,
         ready_timeout: float = READY_TIMEOUT_SECONDS,
+        logger: logging.Logger | None = None,
     ) -> None:
         self._playback = playback
         self._audio = audio
         self._temp_dir = Path(temp_dir)
         self._ready_timeout = ready_timeout
+        self._logger = logger or logging.getLogger("encore.playback.ipc")
         self._process: MpvProcess | None = None
         self._channel: JsonIpc | None = None
 
@@ -484,6 +486,19 @@ class MpvLauncher:
         except MpvGoneError:
             self._process = None
             raise
+        # What the engine was told about the hardware, in the journal beside the engine's own
+        # complaint later. A refusal that says "audio output" is answered by these two values
+        # and nothing else, and the alternative is an operator comparing a log line to a YAML
+        # file by hand at the wrong end of a party — or restarting mpv until the settings
+        # appear, which they do not, because a restart changes nothing.
+        self._logger.info(
+            "mpv launched",
+            extra={
+                "ao": self._audio.output,
+                "audio_device": self._audio.device,
+                "volume": self._audio.volume,
+            },
+        )
         # Retained so that this object, which created the socket, is also the one that
         # guarantees it is closed. A caller that hands the channel on and forgets it should not
         # be the reason an appliance runs out of descriptors after a night of restarts.
