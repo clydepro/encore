@@ -346,8 +346,13 @@ resuming and stopping are all announced.
 - **Rebuild the library**: run `encore-builder` (see
   [Building the library](#building-the-library)); it publishes by renaming a
   finished file into place, so a build that fails leaves the working library where
-  it was (SAPRS 5.8). Then tell the running Server: **Library → Reopen library** on
-  the dashboard's library page, or `POST /admin/library/reload` with your session
+  it was (SAPRS 5.8). Until
+  [#52](https://github.com/clydepro/encore/issues/52) is fixed, a rebuild whose
+  point is the *pictures* is `encore-builder --full`: an incremental run reuses the
+  tags it cached and nothing else, so it sees no embedded artwork and publishes a
+  library with no references — quietly, with a clean validation report. Then tell
+  the running Server: **Library → Reopen library** on the dashboard's library page,
+  or `POST /admin/library/reload` with your session
   cookie. There is no automatic detection and there is not going to be one — a
   Server that polled its own catalogue would be watching a filesystem for a change
   the Builder could simply have announced, and ADR-006's immutability is about

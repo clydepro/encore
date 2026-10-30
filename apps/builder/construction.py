@@ -97,7 +97,7 @@ def build(
 
     connection.execute("PRAGMA foreign_keys = ON")
     state = _Grouping(tracks=tuple(tracks), artwork=artwork)
-    _write_artwork(connection, state)
+    artwork_rows = _write_artwork(connection, state)
     _write_artists(connection, state)
     _write_albums(connection, state)
     files, songs = _write_files_and_songs(connection, state, rules_version=rules_version)
@@ -108,7 +108,7 @@ def build(
         artists=len(state.artist_ids),
         albums=len(state.album_ids),
         files=files,
-        artwork=len(state.artwork_ids),
+        artwork=artwork_rows,
         provenance=provenance,
         repaired=repaired,
         grouping=state,
@@ -154,28 +154,47 @@ class _Grouping:
         return self.album_ids.get(key)
 
 
-def _write_artwork(connection: sqlite3.Connection, state: _Grouping) -> None:
-    """Insert the images the artwork stage wrote.
+def _write_artwork(connection: sqlite3.Connection, state: _Grouping) -> int:
+    """Insert the images the artwork stage wrote, and return how many rows that was.
+
+    The count is rows rather than references, because `--max-artwork` and the report's
+    `Artwork` line are both claims about files on disk.
 
     Artist images are not here: an artist's picture is a decision about a grouping,
     and the grouping does not have an id until the artists table does, so
     `_associate_artwork` derives it from the artist's albums instead.
+
+    Writing one row per `relative_path` is a guard rather than the fix. The stage now
+    deduplicates on the address it wrote, so a repeated path should not reach here — but
+    this is the module that knows the column is UNIQUE (SAPRS 5.6: the path *is* the
+    artifact), and #51 was a build that died in its own transaction over a repeated
+    path, taking the library with it. One row per file, and every digest naming that row,
+    which is what the per-file references in `songs` need.
     """
 
+    by_path: dict[str, int] = {}
     for asset in state.artwork.assets:
+        relative = asset.relative_path.as_posix()
+        existing = by_path.get(relative)
+        if existing is not None:
+            state.artwork_ids[asset.sha256] = existing
+            continue
         cursor = connection.execute(
             f"INSERT INTO {Table.ARTWORK} (kind, relative_path, width, height, sha256, source_path)"
             " VALUES (?, ?, ?, ?, ?, ?)",
             (
                 asset.kind,
-                asset.relative_path.as_posix(),
+                relative,
                 asset.width,
                 asset.height,
                 asset.sha256,
                 None if asset.source_path is None else str(asset.source_path),
             ),
         )
-        state.artwork_ids[asset.sha256] = int(cursor.lastrowid or 0)
+        artwork_id = int(cursor.lastrowid or 0)
+        by_path[relative] = artwork_id
+        state.artwork_ids[asset.sha256] = artwork_id
+    return len(by_path)
 
 
 def _write_artists(connection: sqlite3.Connection, state: _Grouping) -> None:

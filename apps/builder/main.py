@@ -25,6 +25,7 @@ question it answered was "would this publish?".
 from __future__ import annotations
 
 import argparse
+import sqlite3
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -109,8 +110,16 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - one retur
     limits = ArtworkLimits(max_assets=max(0, arguments.max_artwork))
     try:
         report = run(_with(options, limits), bus=None)
-    except (OSError, ValueError) as error:
-        print(f"build aborted: {error}\nThe previous library is unchanged.", file=sys.stderr)
+    except (OSError, ValueError, sqlite3.Error) as error:
+        # `sqlite3.Error` is the one this run actually needed (#51): a build whose own
+        # artifact violates a UNIQUE index died with a traceback, which is neither the
+        # exit code the table above promises nor a sentence about the operator's library.
+        # The type's name stays in the line because it is the part worth pasting into an
+        # issue; the stack is not, and an interrupted build is already reported honestly.
+        print(
+            f"build aborted: {type(error).__name__}: {error}\nThe previous library is unchanged.",
+            file=sys.stderr,
+        )
         return EXIT_ABORTED
 
     print(report.json() if arguments.json else report.text())
