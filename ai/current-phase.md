@@ -10,7 +10,15 @@ documentation ([#38](https://github.com/clydepro/encore/issues/38),
 [#46](https://github.com/clydepro/encore/issues/46) — see "What an installed appliance found" and
 the two "running it" sections below) — and a sixth time by the hardware it was installed
 on ([#48](https://github.com/clydepro/encore/issues/48), "What an installed appliance heard": a
-sound card the service account could not open, reported as a bad song and a healthy component).
+sound card the service account could not open, reported as a bad song and a healthy component), and
+a seventh time by the artifact it publishes
+([#51](https://github.com/clydepro/encore/issues/51), merged as
+[#54](https://github.com/clydepro/encore/pull/54): an artwork cache addressed by the wrong digest,
+which made a build over a real library impossible and left every tile grey). Verifying that on the
+machine found two more, both still open:
+[#52](https://github.com/clydepro/encore/issues/52) — an incremental rebuild publishes zero artwork —
+and [#55](https://github.com/clydepro/encore/issues/55) — `encore-install upgrade` decides the code is
+already installed by comparing `pyproject.toml`.
 **Phase 7 — the dependency-alert chore — merged as
 [#40](https://github.com/clydepro/encore/pull/40), closing
 [#39](https://github.com/clydepro/encore/issues/39).** Phases 1–5 are merged:
@@ -216,6 +224,58 @@ source and write down the thing its component could not do while still saying `h
 `library`, `runtime` and `search` probes (`apps/server/appliance.py:444-495`) each name one, which is
 why they are probes and not liveness checks; `library` checks the database, and never a file.
 
+## What an installed appliance showed when it looked for a cover (#51, #52, #55)
+
+The appliance came up, played, and every album was a grey tile. `encore-builder` had failed during
+the install with `sqlite3.IntegrityError: UNIQUE constraint failed: artwork.relative_path`, and the
+library that ended up published had **0** rows in `artwork` sitting on top of a cache of 222 JPEGs.
+
+**#51 — the cache was keyed twice, and only one of the keys was the address.** `generate()`
+deduplicated on the digest of the payload it *found* and `store_one()` named the file after the
+digest of the bytes it *wrote*. Normalization decodes, resizes and re-encodes to one JPEG, which is
+many-to-one: measured over this box's 3,049 files, **224 payloads produce 222 images**, because one
+album's cover was tagged twice (a PNG differing from its eight siblings at byte 131) and another's
+differed from its thirteen siblings by one trailing byte. Two assets, one path, and the `UNIQUE`
+index was the first place in ten stages anybody noticed — inside the write transaction, with nothing
+published. The module docstring had the rule right, `ArtworkOutcome.assets` had the contract right,
+and the loop had a different key. `main()` then made it a traceback rather than an exit code, because
+it catches `(OSError, ValueError)` and a database error is neither, in a function whose docstring
+says it never raises for a build failure.
+
+**Two more, found by verifying the fix rather than by writing it.**
+
+**[#52](https://github.com/clydepro/encore/issues/52) — an incremental rebuild publishes zero
+artwork.** `_extract()` reuses a cached `ProbeResult` per ADR-010; a restored `ProbeResult` carries
+tags and duration and no `artwork_bytes` (SAPRS 5.6 forbids BLOBs, so nothing stored could hold
+them); so every reused file reaches stage 5 looking like a file with no cover. `Reusable.artwork`
+exists for exactly this, is documented — "so an unchanged build writes zero images" — is loaded by
+`_fill_artwork` from `music_files.embedded_artwork_sha`, and is read by nothing. Seven files, two
+builds: `artwork rows=2 → 0`, `cache files=2 → 2`, validation green both times. This is why the
+documentation says a rebuild that is meant to change the pictures is `encore-builder --full`, and
+why the repair on this box was `--full`.
+
+**[#55](https://github.com/clydepro/encore/issues/55) — `encore-install upgrade` cannot see the code
+it is asked to install.** Its dry run on this machine planned four steps, none of them a copy, and
+the machine is two merged pull requests behind: `_source_matches` decides "the application already
+holds the code being offered" by comparing `pyproject.toml`, byte for byte. That file has not
+changed since the install and does not change for any commit that changes only Python. Sixteen
+source files differed and the plan saw none of them, so #51 had to be deployed here by copying three
+files by hand. `plan.py` describes the intended rule one line above the code that does not implement
+it — "the files in `application/` match the ones being offered" — and `system.py` gives the reason
+it must be observed rather than remembered: "an operator may have run `git pull` in the application
+directory themselves". A `git pull` is the one event that changes no byte of the manifest.
+
+**The finding, and it is the same one for the seventh time.** #38 asked the wrong account about a
+path, #41 trusted a recorder that always said yes, #43 inferred one fact from another, #44 stated a
+rule in two of three places, #46 read the file's mode when the question was the user's, #48 asked
+whether the process was alive when the question was whether sound was coming out, and #51 keyed a
+cache on the input when the address is the output. The form: **a digest is a claim about one
+particular byte string, and every place a cache, a key or an identity is derived, the byte string
+has to be the one the *consumer* will compare.** `relative_path` is what the Server opens, what the
+UNIQUE index enforces and what the reference names; the payload was never any of those things. #55
+is the same sentence about `pyproject.toml`: a manifest is not the tree, and an installer that reads
+one to decide whether to copy the other is asking the file rather than the directory.
+
 ## What running it on a machine with systemd found (#43, #44)
 
 The first `sudo encore-install install` — not staged, not `--no-service`, on a host with systemd as
@@ -329,3 +389,21 @@ simulator whose guests never fail is the same trap with a bigger number in front
    in ADR-014's debt list. If a second runtime write is ever needed here, the shape is wrong and
    the answer is a maintenance mode of the Server, not more SQL in the installer.
 6. **`GET /admin/sessions`?** — carried forward from phase 5, unchanged.
+7. **Two open defects that a real appliance found and no test did.**
+   [#52](https://github.com/clydepro/encore/issues/52): an incremental rebuild — the default, and
+   what a timer runs — publishes a library with **zero** artwork references, because
+   `Reusable.artwork` is loaded from the previous library, documented, and read by nothing. The
+   two-build shape already exists, in `tests/integration/test_builder_pipeline.py:245`, which asserts
+   `second.artwork == 0` with the comment "an unchanged build writes no images" — and that is exactly
+   what the broken build does. It counts cache writes and never looks at the references in the
+   artifact, so the sentence that states the intent becomes the bug's alibi. What the test needs is
+   the other half of the promise: the second library's `songs.artwork_id` equal to the first's.
+   Until it lands, the documentation says out loud that a rebuild of the pictures is
+   `encore-builder --full`.
+   [#55](https://github.com/clydepro/encore/issues/55): `install` and `upgrade` decide the
+   application is current by comparing `pyproject.toml` byte for byte, so a release that changes only
+   Python is invisible to the planner and the report prints `nothing to do` over a tree sixteen files
+   behind. #51 had to be deployed by hand for exactly that reason. Both are the sentence at the end
+   of phase 5 again — a bug that lives between two builds, or two packages, is invisible to the test
+   of either one — and #55 is #46's lesson one layer up: the check was not wrong about the file it
+   read, it read the wrong file.

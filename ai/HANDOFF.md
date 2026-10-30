@@ -7,10 +7,13 @@ request → SAPRS → AIG → ADRs → AEP (AEP 2). This page is a pointer, not 
 be wrong faster than the SAPRS is.
 
 State as of this writing: **Phases 1–6 are merged (#20, #22, #24, #26, #27, #33). Step 15 then
-broke five times on the commands in its own documentation — #38, #41, #43, #44, #46, all fixed — and
-a sixth time on the hardware it was installed on (#48, below), and the dependency-alert chore
+broke five times on the commands in its own documentation — #38, #41, #43, #44, #46, all fixed —
+a sixth time on the hardware it was installed on (#48, below), and a seventh time on the artifact
+that hardware asks the Builder to produce (#51, merged as #54), whose verification turned up two
+more still open (#52, #55). The dependency-alert chore
 [#40](https://github.com/clydepro/encore/pull/40) has merged, closing
-[#39](https://github.com/clydepro/encore/issues/39), so the open work is milestone 16.** The
+[#39](https://github.com/clydepro/encore/issues/39), so the planned work is milestone 16 and the
+unplanned work is those two issues.** The
 appliance now installs itself:
 `sudo ENCORE_ADMIN_PASSWORD='…' ./scripts/encore-install install`, from a clone, on a machine that
 had nothing on it a minute before. A guest scans a code printed by the appliance itself, an
@@ -38,9 +41,34 @@ while four components say they are fine. That is #48 one layer up, created by th
 choice that file refusals cost the appliance nothing, and it wants a rate rather than a kind — see
 [#49](https://github.com/clydepro/encore/issues/49).
 
-1576 tests pass in the standard gate (1629 with the slow suites), 93.7% coverage of `encore/`,
-`ruff` and strict `mypy` clean across `encore/`, `apps/`, `tests/` and `tools/`. Two new ADRs (014,
-015) and six regression files.
+**#51 is the one to read before you touch a cache key, a digest or an identity.** The appliance
+played and showed a grey tile for every cover, because `encore-builder` could not finish: the artwork
+stage deduplicated on the digest of the bytes it *found* and named the cache file after the digest of
+the bytes it *wrote*, and normalization makes those different — 224 embedded payloads in this box's
+library produce 222 images, so two `artwork` rows tried to name one path and the `UNIQUE` index
+stopped the build inside its own transaction. What makes it a lesson rather than a typo is that both
+the module docstring and `ArtworkOutcome.assets` already stated the rule correctly; the loop had a
+different key, and nothing between stage 5 and the database checked the promise. The general form:
+**a digest is a claim about one particular byte string, and at every place a cache, key or identity
+is derived, that has to be the byte string the consumer will compare.** The `sha256` column and the
+`relative_path` are what the Server, the incremental cache and a copy of `library.db` between two
+machines all compare; the file's tag block is not, and was never going to be.
+
+Verifying that on hardware turned up two more, both open, and both are the same sentence about a
+different layer. [#52](https://github.com/clydepro/encore/issues/52): an *incremental* rebuild — the
+default, and what a timer runs — publishes a library with zero artwork references, because
+`Reusable.artwork` is loaded from the previous library, documented in its own words ("so an
+unchanged build writes zero images"), and read by nothing. A cache field with a loader and no
+consumer is the bug class, not the field. And
+[#55](https://github.com/clydepro/encore/issues/55): `encore-install upgrade` decides the application
+is already current by comparing `pyproject.toml` byte for byte, so a release that changes only Python
+is invisible to the planner — sixteen files behind on this box, and a plan of four steps with no copy
+in it. #46 was a check that asked about the file when the answer belonged to the user; this is a check
+that asked about the manifest when the answer belonged to the tree.
+
+1583 tests pass in the standard gate (1639 collected with the slow suites), 93.7% coverage of
+`encore/`, `ruff` and strict `mypy` clean across `encore/`, `apps/`, `tests/` and `tools/`. Two new
+ADRs (014, 015), and a regression file for every numbered failure above.
 
 **Nothing here has met a Raspberry Pi.** The sentence was written in the last handoff about the
 guest interface and about the administrative interface; now it is about the install itself, and it
