@@ -505,6 +505,36 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Fixed
 
+- A library in which one cover existed in two byte forms could not be built at all,
+  and the appliance left standing afterwards showed a grey tile wherever a cover
+  should be (#51). The artwork stage keys its cache on the digest of the bytes it
+  *wrote* — that is what "content-addressed" means, and `ArtworkOutcome.assets` says
+  so — but it deduplicated on the digest of the bytes it *found*. Normalization
+  decodes, resizes and re-encodes to one JPEG, which is many-to-one by construction:
+  measured over a real 3,049-file library, 224 embedded payloads produce 222 images,
+  because one album's cover was tagged twice (a PNG differing from its eight siblings
+  at byte 131) and another's differed from its thirteen siblings by one trailing byte.
+  Two assets, one cache file, and `artwork.relative_path` is UNIQUE (SAPRS 5.6: the
+  path is the artifact), so the second INSERT raised `IntegrityError` inside the build
+  transaction: nothing published, the previous library intact, and a traceback —
+  `main` caught `(OSError, ValueError)` and a database error is neither, which is the
+  second half of the finding. The operator's way round it was `--max-artwork 0`, and a
+  library built that way has no references to make, which is what 222 orphaned JPEGs
+  above an empty `artwork` table means. Now the stage deduplicates on the address it
+  wrote and keeps the payload memo, so a 40-track album still normalizes once; the
+  write resolves every digest naming one row rather than dying on the index; an
+  unwritable database is exit 3 with the sentence about the previous library; and
+  `--max-artwork` caps images, which is what its help text always claimed. Two files
+  carrying literally the same bytes were already one entry — the defect needed a
+  re-save, not a duplicate, which is why 23 files out of 3,049 were enough to make a
+  whole build impossible. Found while verifying the fix, and filed rather than fixed
+  here: an *incremental* rebuild — the default — publishes a library with zero artwork
+  references, because `Reusable.artwork` is loaded from the previous library, described
+  in its docstring, and never read by anything (#52). Until that lands, a rebuild that
+  is meant to change the pictures is `encore-builder --full`, which the Administrator
+  Guide now says.
+  Regression: `tests/regression/test_issue_51_builder_artwork_content_address.py` (7),
+  whose first test fails with the field traceback itself — same exception, same line.
 - An appliance with no usable audio output refused every file in its library and
   reported itself healthy while doing it (#48). The trigger was configuration —
   `audio.device: default` on a Raspberry Pi 4 names card 0, which is the HDMI port,

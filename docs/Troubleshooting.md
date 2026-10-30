@@ -347,6 +347,62 @@ command as the service account — though that puts a 60 MB interpreter under
   to reach the network (ADR-001).
 - A build that fails validation leaves the previous library active (SAPRS 5.8) —
   read the validation report rather than republishing blindly.
+- A build that ends in a traceback, not a report, published nothing: the library
+  the Server is using is still the previous one.
+- Covers gone after a rebuild that printed no error: an incremental build writes
+  zero references today (#52). Rebuild with `--full`.
+- Every cover is a grey tile: read
+  [the artwork cache is full and the library has no covers](#the-artwork-cache-is-full-and-the-library-has-no-covers).
+
+### The artwork cache is full and the library has no covers
+
+```console
+$ sudo sqlite3 /var/lib/encore/library.db \
+    'select (select count(*) from artwork), (select count(*) from songs where artwork_id is not null)'
+0|0
+$ find /var/lib/encore/artwork -name '*.jpg' | wc -l
+222
+```
+
+That pair of numbers is a specific story: the Builder wrote the images and then
+failed before it wrote any references, so the library in place is one the operator
+managed to publish with the pictures switched off. The build log says so:
+
+```text
+File "…/apps/builder/construction.py", line 166, in _write_artwork
+sqlite3.IntegrityError: UNIQUE constraint failed: artwork.relative_path
+```
+
+Issue [#51](https://github.com/clydepro/encore/issues/51) was this, on a library
+of 3,049 files: one album's cover, tagged twice, exists as two byte strings that
+decode to identical pixels. Normalization re-encodes, so both forms write one
+cache file — and the artwork stage deduplicated on the bytes it *found* rather than
+the bytes it *wrote*, which handed the database two references naming one path. A
+library whose `artwork` table is empty above a cache that is not is a library from
+before that fix, whatever the cache looks like.
+
+To repair an appliance that was built that way, rebuild with the current code and
+then tell the running Server — no restart, and the queue is untouched:
+
+```console
+$ sudo encore-builder --full
+  Artwork          222  images written to the cache
+  Published /var/lib/encore/library.db
+```
+
+`--full` is not decoration. A plain `encore-builder` is incremental, and an
+incremental build currently reuses the tags it cached and nothing else — so it
+sees no embedded images and publishes a library with zero artwork references,
+over the good one (#52). That is the next fix; until then a rebuild that is
+supposed to change the pictures is a rebuild with `--full`.
+
+Then **Library → Reopen library** on the dashboard's library page (see
+[Maintenance](Administrator-Guide.md#maintenance) — the endpoint behind it wants
+your session cookie, so `curl` without one is not the way to ask).
+
+The report's `Artwork` line is the number to check: it should match the files in
+the cache, and `select count(*) from songs where artwork_id is not null` should be
+within a few percent of how many files carry a picture.
 
 ## Diagnostics worth collecting
 

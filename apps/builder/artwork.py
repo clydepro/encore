@@ -16,7 +16,12 @@ Three things this stage has to get right, in the order they surprise people:
   image and get one cache entry, which is what makes a rebuild cheap and a
   duplicate cover impossible. The address is the digest of the bytes that will be
   *written*, not of the bytes that were found, so re-running a build with the same
-  images overwrites nothing and adds nothing.
+  images overwrites nothing and adds nothing — and the two digests are not the same
+  number. Normalization decodes and re-encodes, which is many-to-one by construction:
+  one album's cover, tagged twice, arrives as two byte strings and leaves as one JPEG.
+  Keyed on what was found rather than on what was written, that is two assets naming
+  one file, and `artwork.relative_path` is UNIQUE, so the build dies in its own
+  transaction over the fifteenth copy of a picture nobody can tell apart (#51).
 * **Normalize the pixels, keep the aspect ratio.** A 3000x3000 booklet scan costs a
   guest's phone a second to decode; 640x640 JPEG at quality 82 does not look
   different at the sizes the interface uses (SAPRS 9.2). Decoding is also where a
@@ -85,7 +90,8 @@ def generate(
 
     bounds = limits if limits is not None else ArtworkLimits()
     cache_dir.mkdir(parents=True, exist_ok=True)
-    assets: dict[str, ArtworkAsset] = {}
+    store: dict[str, ArtworkAsset] = {}
+    seen: dict[str, ArtworkAsset] = {}
     by_file: dict[Path, ArtworkAsset] = {}
     written = 0
     empty = 0
@@ -96,10 +102,10 @@ def generate(
         if not payload:
             empty += 1
             continue
-        source = hashlib.sha256(payload).hexdigest()
-        asset = assets.get(source)
+        payload_digest = hashlib.sha256(payload).hexdigest()
+        asset = seen.get(payload_digest)
         if asset is None:
-            if len(assets) >= bounds.max_assets:
+            if len(store) >= bounds.max_assets:
                 continue
             asset = store_one(payload, cache_dir, limits=bounds)
             if asset is None:
@@ -108,12 +114,17 @@ def generate(
                 # is where the difference between those two sentences gets recorded.
                 failed += 1
                 continue
-            assets[source] = asset
-            written += 1
+            seen[payload_digest] = asset
+            # Two keys, for two different questions: the payload digest is the cheap one
+            # that spares a 40-track album 40 decodes, and the stored digest is the
+            # address, which decides how many images a library holds. The second bullet
+            # above is why they are not the same number (#51).
+            if store.setdefault(asset.sha256, asset) is asset:
+                written += 1
         by_file[track.path] = asset
 
     return ArtworkOutcome(
-        assets=tuple(assets[key] for key in sorted(assets)),
+        assets=tuple(store[digest] for digest in sorted(store)),
         by_file=dict(by_file),
         generated=written,
         empty=empty,
