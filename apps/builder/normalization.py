@@ -46,7 +46,10 @@ __all__ = [
     "Normalized",
     "collapse",
     "fold",
+    "has_plausible_year",
+    "is_counter",
     "is_placeholder",
+    "is_usable",
     "parse_position",
     "sort_key",
     "strip_promo_markers",
@@ -58,10 +61,28 @@ __all__ = [
 #: silently reusing a conclusion the old rule reached: "a normalization fix is a
 #: full rebuild" is the cost that sentence accepts, and this constant is where it
 #: is paid.
-NORMALIZATION_RULES_VERSION: Final = 1
+#:
+#:     1 - the rules as shipped.
+#:     2 - `is_usable` and `has_plausible_year` (#57). A version-1 build filed an artist of "01"
+#:         under that name and printed a release year of 24; the files were otherwise unchanged,
+#:         so only a rule bump makes the last build's conclusions about them invalid.
+NORMALIZATION_RULES_VERSION: Final = 2
 
 _WHITESPACE: Final = re.compile(r"\s+")
 _CONTROL: Final = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+#: A value that is nothing but a small integer: an artist field counting instead of naming.
+#: Kept to four digits so a catalogue number (`289 471 234 5`) is not mistaken for one — that
+#: shape has letters or spaces to disqualify it in practice, and `is_usable` never consults this
+#: for an album anyway.
+_COUNTER: Final = re.compile(r"\d{1,4}")
+
+#: What counts as a year. 1877 is Edison's tinfoil phonograph; 2100 is a ceiling a person can
+#: read. Deliberately not "this year plus one": a rule whose answer depends on the date the test
+#: ran is a rule nobody can state in a regression test, and the cost of the fixed window is only
+#: that an album mistagged 2051 keeps it until a human says otherwise.
+_MIN_YEAR: Final = 1877
+_MAX_YEAR: Final = 2100
 
 #: Artists that mean "no artist". Matched on the folded value, so `Various
 #: Artists`, `VARIOUS`, `various artists ` and `Various-Artists` all land here.
@@ -198,6 +219,45 @@ def is_placeholder(value: str | None, *, kind: str = "artist") -> bool:
     if kind == "album":
         return stripped in _PLACEHOLDER_ALBUMS or stripped.startswith("[unknown")
     return stripped in _PLACEHOLDER_ARTISTS
+
+
+def is_usable(value: str | None, *, kind: str = "artist") -> bool:
+    """Whether a present value says something a library can use as a name.
+
+    The conjunction `is_placeholder` could not make: a value can be neither empty nor a
+    placeholder and still be nothing. `artist: 01` is a rip tool writing the track number into
+    the artist field, and every stage downstream groups sixty files under an artist named "01"
+    (SAPRS 6.5, #57).
+
+    The counter rule is an artist rule only. "21", "25", "30" and "13" are albums, and a rule
+    that "corrected" them would search four real albums on every build and replace the title
+    someone chose with whichever release the search matched first. There is no number an album
+    cannot be, which is why the shape test is not applied to one.
+    """
+
+    if is_placeholder(value, kind=kind):
+        return False
+    return not (kind == "artist" and is_counter(value))
+
+
+def is_counter(value: str | None) -> bool:
+    """True for a name that is nothing but a small integer, `01.` and `01 ` included."""
+
+    return bool(_COUNTER.fullmatch(re.sub(r"[ ._-]", "", collapse(value))))
+
+
+def has_plausible_year(value: str | None) -> bool:
+    """Whether a date tag names a year a record could have been released in.
+
+    Searched rather than parsed from the front, because `02/03/2024`, `2024-05-06 (JP)` and
+    `c1975` all contain a year the interface can show: the field answered the question, so no
+    later level has business asking it again. `24` does not, and the album page was printing it.
+    """
+
+    return any(
+        _MIN_YEAR <= int(candidate) <= _MAX_YEAR
+        for candidate in re.findall(r"\d{4}", collapse(value))
+    )
 
 
 def sort_key(value: str | None) -> str:

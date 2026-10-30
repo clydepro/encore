@@ -114,7 +114,16 @@ class BuildReport:
         repaired: Fields whose value came from something other than a tag
             (ADR-010's `repaired` record, summed).
         artwork: Images written to the cache this run. Zero is a normal value: an
-            unchanged rebuild should write nothing.
+            unchanged rebuild should write nothing, and `artwork_held` is the number
+            that says whether the library still has pictures (#52).
+        artwork_held: Distinct images the published library references. On an
+            incremental run this is the number an operator is really asking about,
+            because it is the one a reuse bug takes away while `artwork` stays a
+            truthful zero.
+        artwork_reused: Files served from the previous build's reference instead of a
+            re-read of their image bytes.
+        artwork_uncached: Files whose previous reference names a cache file that is
+            gone. Never normal.
         songs: Rows in `songs` after publication. Compared against `processed` by
             the validation stage, and printed beside `scanned` here.
         validation: The publication gate's outcome, one line per check.
@@ -126,6 +135,9 @@ class BuildReport:
     skipped: SkipLedger = field(default_factory=SkipLedger)
     repaired: int = 0
     artwork: int = 0
+    artwork_held: int = 0
+    artwork_reused: int = 0
+    artwork_uncached: int = 0
     songs: int = 0
     artists: int = 0
     albums: int = 0
@@ -139,6 +151,7 @@ class BuildReport:
     incremental: bool = False
     reused: int = 0
     musicbrainz: str = "disabled"
+    album_art: str = "off"
 
     @property
     def skip_count(self) -> int:
@@ -199,7 +212,8 @@ class BuildReport:
             f"  Processed    {self.processed:>7}  read and catalogued",
             f"  Skipped      {self.skip_count:>7}  not catalogued, listed below",
             f"  Repaired     {self.repaired:>7}  fields filled from MusicBrainz, path or filename",
-            f"  Artwork      {self.artwork:>7}  images written to the cache",
+            f"  Artwork      {self.artwork:>7}  images written to the cache"
+            f" ({self.artwork_held} in this library)",
             f"  Songs        {self.songs:>7}  rows in library.db",
             f"  Artists      {self.artists:>7}   ·   Albums {self.albums:>7}",
             f"  Duplicates   {len(self.duplicates):>7}",
@@ -207,6 +221,7 @@ class BuildReport:
             "",
             f"  {self.accounting}",
             f"  MusicBrainz: {self.musicbrainz}",
+            f"  Cover art:   {self.album_art}",
             f"  Build: {'incremental' if self.incremental else 'full'}, {self.duration_seconds:.1f}s",
             "",
             "Validation",
@@ -239,6 +254,9 @@ class BuildReport:
         payload: dict[str, Any] = {
             **self.counts(),
             "files_scanned": self.scanned,
+            "artwork_held": self.artwork_held,
+            "artwork_reused": self.artwork_reused,
+            "artwork_uncached": self.artwork_uncached,
             "artists": self.artists,
             "albums": self.albums,
             "validation": [
@@ -259,6 +277,7 @@ class BuildReport:
             "incremental": self.incremental,
             "reused": self.reused,
             "musicbrainz": self.musicbrainz,
+            "album_art": self.album_art,
         }
         return json.dumps(payload, indent=2, sort_keys=True)
 

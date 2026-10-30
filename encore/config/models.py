@@ -32,6 +32,7 @@ from encore.utilities.qr import HTTP_DEFAULT_PORT
 __all__ = [
     "AdminConfig",
     "AudioConfig",
+    "BuilderConfig",
     "EncoreConfig",
     "LoggingConfig",
     "PathsConfig",
@@ -240,6 +241,34 @@ class AdminConfig(_Section):
     session_minutes: Annotated[int, Field(ge=1, le=7 * 24 * 60)] = 60
 
 
+class BuilderConfig(_Section):
+    """What the Library Builder is allowed to do without being told (SAPRS 6.6, 6.7, 12.2).
+
+    A section the Server never reads, in a file the Server validates — and that placement is
+    the reason it exists in this module rather than in `apps/builder/`: `extra="forbid"` is
+    SAPRS 12.5's rule, so an unmodelled `builder:` key would stop an appliance booting over a
+    configuration file that is correct. One definition, two readers, no surprise (#57).
+
+    Neither value is consulted by a request handler. Nothing here puts the Server on a network:
+    the Builder is a separate program that terminates, and ADR-001's boundary is enforced by
+    `tests/unit/test_architecture_guardrails.py`, not by a default.
+
+    Attributes:
+        musicbrainz: Fill a gap — or correct a value that no rule could rescue — from
+            MusicBrainz. On by default, because the alternative is a library whose holes are
+            never filled by anyone: the flag version of this decision lived in a terminal
+            session, and a build run by a timer does not have one. One request per second
+            (MusicBrainz's published policy), so on a 3,000-file library this costs about two
+            minutes and only on the builds that have gaps to fill.
+        album_art: Ask the Cover Art Archive for the cover of an album whose files carry no
+            embedded picture. Subordinate to `musicbrainz` — identifying a release is a
+            MusicBrainz question — and off means off: no request is made for art.
+    """
+
+    musicbrainz: bool = True
+    album_art: bool = True
+
+
 class EncoreConfig(_Section):
     """The whole validated configuration (SAPRS 12.2).
 
@@ -260,3 +289,4 @@ class EncoreConfig(_Section):
     search: SearchConfig = Field(default_factory=SearchConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     admin: AdminConfig = Field(default_factory=AdminConfig)
+    builder: BuilderConfig = Field(default_factory=BuilderConfig)

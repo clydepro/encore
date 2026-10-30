@@ -25,6 +25,7 @@ what was rejected.
 | ADR-013  | Administrator Credential in runtime.db, Session in Memory | Accepted               |
 | ADR-014  | The Installer Is a Third Application                      | Accepted               |
 | ADR-015  | First-Boot Seeding, and One Owner for the Guest Address   | Accepted               |
+| ADR-016  | MusicBrainz By Default, and a Second Source for Artwork   | Accepted               |
 
 ## Format
 

@@ -26,6 +26,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from apps.builder.normalization import fold
 from encore.domain.media import AudioFormat
 from encore.repositories.contract import MetadataField
 
@@ -214,6 +215,17 @@ class Track:
 
         return not self.missing_fields
 
+    @property
+    def group_key(self) -> tuple[str, str]:
+        """The `(artist, album)` pair this track files under — ADR-010's grouping rule.
+
+        A method on the record rather than a helper in construction, because the album-art stage
+        has to group albums the same way construction will, and a second copy of a grouping rule
+        is how one stage finds an album and the other cannot.
+        """
+
+        return (fold(self.artist), fold(self.album or ""))
+
     def with_field(self, name: str, value: str, source: str, *, repaired: bool = True) -> Track:
         """Return a copy with one field replaced and its provenance updated.
 
@@ -317,25 +329,37 @@ class ArtworkOutcome:
     """What the artwork stage produced.
 
     Attributes:
-        assets: Distinct images written this run, deduplicated by content hash —
-            the same cover on 40 files of one album is one file.
+        assets: Distinct images the library holds — the ones written this run plus the
+            ones an earlier run wrote and this one reused, deduplicated by content hash
+            (the same cover on 40 files of one album is one file).
         by_file: Which image each media file carried, so construction can
             associate the same asset with a song, its album and its artist.
-        generated: Count of cache writes. Distinct from `len(assets)`: a rebuilt
-            run finds the bytes already cached and writes nothing, which is a
-            normal outcome rather than a failure (6.7).
+        generated: Count of cache files this run actually wrote. Distinct from
+            `len(assets)`: a rebuild over a cache it already filled writes nothing and
+            resolves everything, and an incremental build reads nothing at all. Zero is
+            the normal value for both (#52), which is why `assets` — not this — is the
+            number that says whether the library has pictures.
+        reused: Files whose image was not read this run because the previous build's
+            reference still applies — same file, same size, same `mtime`, same tags
+            (ADR-010's key), so the image it carried has not changed either.
         empty: Files that had no embedded artwork at all. Measured at 77% of MP3
             and 100% of FLAC in the corpus.
         failed: Files that carried bytes which would not decode as an image. Kept
             apart from `empty` because the two need different answers: one is a
             library without covers, the other is a library with damaged ones.
+        uncached: Files whose reference could not be carried over because the cache
+            file it names is gone. Reported rather than silently dropped, since the
+            cache going missing is an install fault (#51) and the song stays playable
+            either way (6.7).
     """
 
     assets: tuple[ArtworkAsset, ...] = ()
     by_file: Mapping[Path, ArtworkAsset] = field(default_factory=dict)
     generated: int = 0
+    reused: int = 0
     empty: int = 0
     failed: int = 0
+    uncached: int = 0
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

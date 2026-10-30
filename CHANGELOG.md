@@ -14,6 +14,35 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Added
 
+- MusicBrainz has a configuration home, and the default is *on* (SAPRS 6.6, 6.7, ADR-016, [#57](https://github.com/clydepro/encore/issues/57)).
+  `config.yaml` grows a `builder:` section — `musicbrainz: true`, `album_art: true` — and an
+  ordinary `encore-builder`, run by nobody in particular, now fills a gap and fetches a cover
+  instead of publishing whatever the tags happened to say. Until this the only switch was a
+  command-line flag, so every systemd timer, CI job and reader of the documentation built with the
+  feature off: the line `MusicBrainz: disabled` appeared on 100% of the appliance's builds without
+  anyone having chosen it. The section is modelled in `encore/config/models.py` rather than in the
+  Builder, because the Server validates the same file and `extra="forbid"` would turn a correct
+  `builder:` key into a machine that does not boot; neither value is read by a request handler, and
+  `test_the_builder_reaches_the_network_from_one_module_only` is the new guardrail that keeps it
+  that way. Three states on the command line (`--musicbrainz`/`--no-musicbrainz`,
+  `--album-art`/`--no-album-art`, `--offline`) mean that *not given* is not `false`, and `--offline`
+  — a fact about this afternoon's network rather than about the library — outranks the file.
+  Cost, stated beside the switch: one request per second, about two minutes on a 3,000-file library
+  with holes in it, two requests per newly identified album and one thereafter.
+- `apps/builder/albumart.py`, SAPRS 6.7's second precedence level (ADR-016): an album whose files
+  carry no picture of their own asks the Cover Art Archive once, and gets an image only when a
+  release matches on *both* names after folding. Not closest, not highest-ranked, not the only
+  result — a wrong cover tells a guest something false about where their music is, which is worse
+  than a grey tile, and the report counts the refusals (`79 not named exactly`) because that number
+  is the policy working. The unit of asking is the album (`Track.group_key`, the same key
+  `construction` groups by), so the 463 uncovered albums of the measured corpus cost 926 requests
+  rather than 1,989, and an incremental build asks about almost none of them, because a reference
+  carried over from #52 *is* a picture. Embedded art still outranks the archive, and the archive's
+  bytes go through the same normalization, content addressing, cache and `--max-artwork` bound as
+  an embedded image — `generated` still means images written, so a cover that turns out to be
+  outranked is never written on its way to being discarded. 13 unit tests, 5 of them in the artwork
+  stage's file, and the end-to-end version in `test_issue_57_musicbrainz_configuration.py` builds a
+  library where no album is grey.
 - The installer (AIG 21 step 15, #32, ADR-014, ADR-015): `encore-install`, a third
   application in `apps/installer/`, shipped as a console script and testable on a
   machine that is not a Raspberry Pi. Five commands — `install`, `upgrade`,
@@ -505,6 +534,116 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Fixed
 
+- An offline build stopped making a library worse, and a value that is present and cannot be true
+  stopped being believed ([#57](https://github.com/clydepro/encore/issues/57)). Two defects, one
+  sentence in the spec that had been implemented in half. SAPRS 6.6's second level is "fill gaps
+  **or correct implausible values**", and `enrichment._gaps` asked only whether a field existed: an
+  artist of `01` — a rip tool writing the track number into the artist field, 34 of this corpus's
+  3,049 files — was present, therefore correct, therefore grouped sixty files under an artist named
+  01, and was never so much as asked about; `date: 24` (2 files) was published as 24 and printed as
+  24. Plausibility now lives in `normalization.py` beside `is_placeholder`, which is where it can
+  act with the network off: a counter artist falls to ADR-010's path level, so the directory the
+  file sits in names the artist, and MusicBrainz is the second answer rather than the only one. The
+  rule is narrow on purpose — a field that is *nothing but* a small integer, in artist fields only,
+  because 21, 25, 30 and 13 are albums and there is no number a title cannot be — and when nothing
+  can say better, `_resolve`'s last resort stands: a value is questioned, never discarded, so a band
+  named 1776 keeps the name. A counter is corrected but not searched with, because
+  `artist:01 AND recording:"Morning"` matches a hundred releases and the client takes the first.
+  The second half was worse: the reuse path sat inside the `if options.enrich` gate, so `--offline`
+  and `--no-musicbrainz` — the careful options — rewrote every previously enriched value back to the
+  tag and let the library quietly decay, which is 6.6's "shall not be degraded to un-enriched data"
+  broken by the flag meant to honour it. Asking nothing is now free and forgetting is not: the stage
+  runs with a `DisabledClient` and backfills from the previous build. Two fields that had a writer
+  or a reader but not both are wired end to end — `albums.musicbrainz_release_id` was never written
+  and `PreviousEnrichment.release_id` was never loaded, which is #52's shape, a documented cache
+  with no reader — so an album identified once costs one request thereafter. And a date that no rule
+  could rescue invalidates the files that rest on it: `NORMALIZATION_RULES_VERSION` goes to 2, so
+  the first build after upgrading is a full one. `MusicBrainz:` and `Cover art:` now say off,
+  unavailable or asked, in numbers, because a feature that is on by default has to be legible for
+  an operator to turn it off for a reason. Regression:
+  `tests/regression/test_issue_57_musicbrainz_configuration.py` (10), with 12 new stage tests in
+  `tests/unit/test_builder_enrichment.py`, 8 in `test_builder_musicbrainz.py` for the second host,
+  and 4 in `test_configuration.py` for the section's defaults and its error sentences.
+- `sudo encore-install upgrade` decided it had nothing to install by reading one file,
+  so an appliance two merged pull requests behind planned four steps, copied nothing
+  and reported success (#55). `_source_matches` compared `pyproject.toml` in the
+  checkout against `pyproject.toml` in `/opt/encore/application`; a release that changes
+  only Python changes no byte of a manifest, and every release this project has shipped
+  since the installer did exactly that. Measured on the hardware where it was found:
+  seven files differing under `encore/`, nine under `apps/` — one of them
+  `encore/playback/fault.py`, which was not on the appliance at all, because it is
+  #48's — and `diff -q` on the two manifests answering `identical`. `install` used the
+  same predicate, so re-running the documented first command was equally blind, and no
+  line of the acceptance list could have caught it: the question had never been asked
+  of the filesystem. That is #46's shape again — a check that is true about the wrong
+  subject, printed over fifteen other true things.
+
+  `apps/installer/application.py` is now the one place that says what "the code" means,
+  because three modules had to agree about it and only one of them had a list: the
+  copier, which had *two* hand-maintained exclusion lists in two glob dialects
+  (`shutil.ignore_patterns` and `rsync --exclude=`, 20 entries each, 12 of the rsync
+  ones carrying a trailing slash the shutil ones did not — which is the same rule
+  written twice, and the reason it drifts); the observer, which had no list because it
+  was not looking at the tree; and the planner, which said in its own docstring that
+  "the files in `application/` match the ones being offered" while a branch three lines
+  below asked about one file. One tuple, both dialects derived from it, one walk that
+  digests `size:sha256` per file, and `observe()` answers the sentence the docstring
+  claims it answers. The count rides along in `ApplianceState.application_drift` so a
+  plan line and a check can name it — `16 differ of 396 files: apps/builder/artwork.py,
+  encore/playback/fault.py …` in a dry run — and `verify` grew the acceptance-list line
+  #46 never had, WARN on `install`/`upgrade` and FAIL on `verify`, which is #43's
+  distinction applied to a new observation rather than a new rule.
+
+  Proving the fix surfaced a second disagreement, this one between the copier and the
+  observer rather than inside the observer: rsync's default is to skip a file whose size
+  and `mtime` agree, and it compares `mtime` at one-second granularity. A source file
+  rewritten in the same second as the last copy is "already transferred" to rsync and a
+  difference to a byte comparison, which is #55 arriving from the other direction — a
+  report ending in `nothing to do` about a file it did not copy. The copy now passes
+  `--checksum`, so the copier and the observer read the same property; `--ignore-times`
+  would have been correct and would have transferred all 4 MB every run.
+  Regression: `tests/regression/test_issue_55_application_tree.py` (9), which stages a
+  tree, copies it for real, changes one `.py` file and no manifest, and asserts both
+  that the second run copies and that an unchanged run still prints
+  `nothing to do — the machine already matches this request`; and
+  `tests/unit/test_installer_application.py` (11) for the exclusion rule itself,
+  including the sharp edge of pruning by path component: `build`, `dist` and `site` are
+  excluded at every depth, so a future `encore/static/dist/` would install a page with
+  no CSS in it and every installer test would stay green. That one is a test now.
+- An incremental rebuild — the default, and what you get when you add three albums —
+  published a library with **no artwork references in it** (#52). It did not crash,
+  it validated, it printed `Artwork 0` and renamed itself into place over a library
+  that had 222 images and 1,060 covered songs, so every album tile a guest opened
+  afterwards was grey. The mechanism was a cache field with a loader and no reader:
+  `Reusable.artwork` is documented ("so an unchanged build writes zero images"),
+  filled by `PreviousLibrary` from `music_files.embedded_artwork_sha`, and read by
+  nothing — while `_extract` kept only `earlier.probe`, and a restored `ProbeResult`
+  carries tags and a duration and no image bytes, because SAPRS 5.6 keeps BLOBs out
+  of the artifact. Stage 5 therefore saw 3,049 files with no embedded cover and wrote
+  zero references; construction derives every row from what the stage named, so zero
+  is not "no new rows", it is no rows. `generate` now takes the previous build's
+  references, the checkpoint file carries them across a resumed build (ADR-010's
+  stage boundary — a build that dies at minute nine may not come back with fewer
+  pictures than it started with), and a reference whose cache file has gone is
+  reported rather than published. The report prints both numbers — `0 written to the
+  cache (222 in this library)` — because the one it used to print was a true answer
+  that the whole failure hid behind.
+
+  Verifying the criterion "a retagged file is re-read for artwork" turned up the same
+  shape one layer down, and a worse product of it: `_extract` consulted the previous
+  library by *path*, so `Reusable.matches` — ADR-010's key, written out and unit-tested
+  and called by no production path — compared nothing, and **an incremental build never
+  noticed a file had been retagged**. Correct an artist in a tag editor, rebuild, and the
+  library kept what the file used to say, forever, with `reused 3049` printed above it as
+  evidence that everything was fine. That is #48's sentence again — a check that is true
+  about the wrong subject — and the fix is the call, not a new rule: reuse now requires
+  path, size, `mtime_ns` and the normalization-rule version to agree, which is every part
+  of the key a `stat()` can answer without the read the cache exists to avoid (the tag
+  hash is not one of them; a retag that moved neither byte count nor timestamp is the
+  case this cannot see, and it is not a case any tagger produces).
+  Regression: `tests/regression/test_issue_52_incremental_artwork_reuse.py` (6), and
+  `tests/integration/test_builder_pipeline.py`'s two incremental assertions now state
+  both halves of the promise instead of the one that was true.
 - A library in which one cover existed in two byte forms could not be built at all,
   and the appliance left standing afterwards showed a grey tile wherever a cover
   should be (#51). The artwork stage keys its cache on the digest of the bytes it

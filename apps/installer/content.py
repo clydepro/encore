@@ -138,6 +138,15 @@ admin:
   # Idle minutes before a session ends. The password is not in this file, and neither is a
   # session secret, because sessions are not kept on disk (SAPRS 12.6, ADR-013).
   session_minutes: {config.admin.session_minutes}
+
+builder:
+  # Read by `encore-builder`, and by nothing that serves a guest (ADR-001). The Builder is a
+  # separate command that finishes, and this is where its policy lives rather than in a flag:
+  # a build run by a timer has no terminal to remember one in (#57).
+  musicbrainz: {_bool(config.builder.musicbrainz)}
+  # An album whose files carry no embedded picture asks the Cover Art Archive once, and gets
+  # no picture at all when the release cannot be named exactly. Needs the line above.
+  album_art: {_bool(config.builder.album_art)}
 """
 
 

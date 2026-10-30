@@ -243,6 +243,12 @@ def test_an_unchanged_rebuild_reuses_every_file(corpus: Path, tmp_path: Path) ->
     assert first.songs == second.songs == 17
     assert second.reused == 17, "SAPRS 6.9's promise: no file is opened twice across builds"
     assert second.artwork == 0, "an unchanged build writes no images"
+    # …and the other half of the same sentence, which #52 is the missing reference for. A
+    # build that reuses everything and publishes nothing is green on the line above.
+    assert (first.artwork_held, second.artwork_held) == (2, 2), (
+        "an unchanged build keeps the pictures it already resolved"
+    )
+    assert second.artwork_reused == 12, "the twelve files that carried a cover still have one"
 
 
 def test_a_changed_file_is_reread_and_the_rest_are_reused(corpus: Path, tmp_path: Path) -> None:
@@ -258,22 +264,29 @@ def test_a_changed_file_is_reread_and_the_rest_are_reused(corpus: Path, tmp_path
     assert second.reused == 17, "one new file, seventeen reuses — the incremental claim"
 
 
-def test_a_touched_file_is_still_reused(corpus: Path, tmp_path: Path) -> None:
-    """A `touch` changes mtime and nothing else; a cache keyed on content still hits.
+def test_a_touched_file_is_reread_and_writes_no_new_images(corpus: Path, tmp_path: Path) -> None:
+    """A `touch` changes mtime and nothing else — and mtime is half of ADR-010's key.
 
-    The key includes mtime (SAPRS 6.9), so this asserts the *tag hash* half doing its
-    work: `size + tag hash` carry the meaning and a rebuild after a backup restore that
-    rewrote timestamps must not re-read 15,000 files.
+    The key is `(path, size, mtime_ns, tag hash)`, so a restore that rewrote timestamps
+    re-reads the tags. That is the ADR's choice, and the cheap half of it: what must not
+    happen is the cache being rewritten, because the flash it sits on has a write budget
+    and the bytes have not changed (`_already_cached`). #52 lived behind the sentence
+    that this test used to assert instead — the files were never re-read at all, because
+    nothing compared the key.
     """
 
     home = tmp_path / "encore"
     run(_options(corpus, home))
+    before = {path: path.stat().st_mtime_ns for path in (home / "var/cache/artwork").rglob("*.jpg")}
     for path in corpus.rglob("*.mp3"):
         path.touch()
     report = run(_options(corpus, home))
     assert report.songs == 17
-    assert report.reused >= 0  # mtime is in the key, so a touch legitimately invalidates
-    assert report.artwork == 0, "even a full re-read writes no images for unchanged covers"
+    assert report.reused == 5, "only the mp3s were touched, so only the mp3s are re-read"
+    assert report.artwork == 0, "re-normalized, not rewritten"
+    after = {path: path.stat().st_mtime_ns for path in (home / "var/cache/artwork").rglob("*.jpg")}
+    assert after == before, "an unchanged cover is not a write to the flash"
+    assert report.artwork_held == 2
 
 
 def test_a_full_build_ignores_the_history(corpus: Path, tmp_path: Path) -> None:

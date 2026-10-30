@@ -133,6 +133,11 @@ class _Grouping:
         self.spelling: dict[str, Counter[str]] = defaultdict(Counter)
         self.album_spelling: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
         self.album_dates: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
+        # An album's release identifier, decided the way its title is: the value most of its files
+        # carry. It belongs to the group rather than to a track because construction writes one row
+        # per album, and because the next incremental build reads that row to ask the Cover Art
+        # Archive once per album instead of twice (#57).
+        self.album_release: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
         self.album_artwork: dict[tuple[str, str], int] = {}
         for track in self.tracks:
             artist, album = self.key_for(track)
@@ -140,12 +145,20 @@ class _Grouping:
             self.album_spelling[(artist, album)][track.album or ""] += 1
             if track.date:
                 self.album_dates[(artist, album)][collapse(track.date)] += 1
+            if track.musicbrainz_release_id:
+                self.album_release[(artist, album)][track.musicbrainz_release_id] += 1
 
     @staticmethod
     def key_for(track: Track) -> tuple[str, str]:
-        """`(artist key, album key)` — the folded identity this track files under."""
+        """`(artist key, album key)` — the folded identity this track files under.
 
-        return (fold(track.artist), fold(track.album or ""))
+        `Track.group_key`, called rather than repeated: the album-art stage groups the same way
+        to decide which albums have no picture, and two copies of that rule would disagree in the
+        case that matters — an album one stage can see and the other cannot is an album that gets
+        asked about every build and never covered.
+        """
+
+        return track.group_key
 
     def artist_id_for(self, key: str) -> int | None:
         return self.artist_ids.get(key)
@@ -220,10 +233,11 @@ def _write_albums(connection: sqlite3.Connection, state: _Grouping) -> None:
             continue
         display = _display(state.album_spelling[key]) or UNKNOWN_ALBUM
         date = _display(state.album_dates[key], allow_empty=True)
+        release_id = _display(state.album_release[key], allow_empty=True)
         cursor = connection.execute(
-            f"INSERT INTO {Table.ALBUMS} (artist_id, title, sort_title, normalized_title, release_date)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (artist_id, display, sort_key(display), key[1], date or None),
+            f"INSERT INTO {Table.ALBUMS} (artist_id, title, sort_title, normalized_title,"
+            " musicbrainz_release_id, release_date) VALUES (?, ?, ?, ?, ?, ?)",
+            (artist_id, display, sort_key(display), key[1], release_id or None, date or None),
         )
         state.album_ids[key] = int(cursor.lastrowid or 0)
 

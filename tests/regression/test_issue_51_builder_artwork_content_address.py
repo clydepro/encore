@@ -42,7 +42,7 @@ from pathlib import Path
 
 import pytest
 
-from apps.builder.artwork import ArtworkLimits, _normalize, generate, store_one
+from apps.builder.artwork import ArtworkLimits, _normalize, _store, generate
 from apps.builder.construction import build
 from apps.builder.main import main
 from apps.builder.pipeline import BuildOptions, run
@@ -265,11 +265,13 @@ def test_one_payload_still_normalizes_once(
     tracks = tuple(_track(tmp_path, f"{index}.mp3", payload=first) for index in range(1, 13))
     calls: list[bytes] = []
 
-    def counting(payload: bytes, cache_dir: Path, **kwargs: object) -> ArtworkAsset | None:
+    def counting(
+        payload: bytes, cache_dir: Path, **kwargs: object
+    ) -> tuple[ArtworkAsset | None, bool]:
         calls.append(payload)
-        return store_one(payload, cache_dir, **kwargs)  # type: ignore[arg-type]
+        return _store(payload, cache_dir, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr("apps.builder.artwork.store_one", counting)
+    monkeypatch.setattr("apps.builder.artwork._store", counting)
     outcome = generate(tracks, tmp_path / "cache")
 
     assert len(calls) == 1, "twelve copies of one payload are one normalization"

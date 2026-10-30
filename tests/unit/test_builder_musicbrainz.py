@@ -25,14 +25,17 @@ import io
 import json
 import time
 import urllib.error
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pytest
 
+from apps.builder import musicbrainz
 from apps.builder.musicbrainz import (
     HttpMusicBrainzClient,
     MusicBrainzUnavailableError,
     Recording,
+    Release,
     _lucene,
 )
 
@@ -243,6 +246,159 @@ def test_requests_are_spaced_at_a_second_apart() -> None:
     started = time.monotonic()
     service.search(artist="A", release="B", track="one")
     service.search(artist="A", release="B", track="two")
+    assert time.monotonic() - started >= 0.04
+
+
+# -- the second host (#57) -------------------------------------------------
+
+
+class RawOpener:
+    """An opener that answers with bodies rather than JSON, which is what an image host sends.
+
+    `FakeOpener` is the right fake for the web service and the wrong one for the archive: it
+    serialises whatever it is given, so a test of `cover` would be handed `{}` and conclude that
+    a JPEG can be an empty dict.
+    """
+
+    def __init__(self, *bodies: bytes | Mapping[str, Any] | Sequence[Any] | Exception) -> None:
+        self.bodies = list(bodies)
+        self.requests: list[Any] = []
+
+    def __call__(self, request: Any, timeout: float = 0.0) -> FakeResponse:
+        del timeout
+        self.requests.append(request)
+        body = self.bodies.pop(0) if self.bodies else b""
+        if isinstance(body, Exception):
+            raise body
+        if isinstance(body, bytes):
+            return FakeResponse(body)
+        return FakeResponse(json.dumps(body).encode())
+
+
+def raw_client(
+    *bodies: bytes | Mapping[str, Any] | Sequence[Any] | Exception, **kwargs: Any
+) -> tuple[HttpMusicBrainzClient, RawOpener]:
+    opener = RawOpener(*bodies)
+    return HttpMusicBrainzClient(opener=opener, minimum_interval=0, **kwargs), opener
+
+
+def release_payload(*releases: tuple[str, str, str]) -> dict[str, Any]:
+    """`/ws/2/release?query=...` answered with `(id, title, artist)` per release."""
+
+    return {
+        "releases": [
+            {
+                "id": release_id,
+                "title": title,
+                "artist-credit": [{"name": artist, "joinphrase": ""}],
+            }
+            for release_id, title, artist in releases
+        ]
+    }
+
+
+def test_a_release_search_reads_the_two_names_albumart_compares() -> None:
+    service = client(
+        release_payload(("rel-1", "Random Access Memories", "Daft Punk")),
+        release_payload(),
+    )
+    found = service.releases(artist="Daft Punk", album="Random Access Memories")
+    assert found == (
+        Release(release_id="rel-1", title="Random Access Memories", artist="Daft Punk"),
+    )
+    url = service._opener.calls[0]
+    assert "musicbrainz.org/ws/2/release" in url
+    assert "query=release%3A%22Random" in url, "the album is quoted, not tokenised"
+
+
+def test_a_release_search_asks_for_a_short_list_because_ranking_is_not_matching() -> None:
+    """Five candidates, and the stage that reads them takes the first that is *this* album.
+
+    One result is how a client ends up trusting a fuzzy hit: MusicBrainz returns a best guess for
+    a query nobody meant, and with a limit of 1 the guess is the only candidate there is.
+    """
+
+    service = client(release_payload())
+    service.releases(artist="A", album="B")
+    assert "limit=5" in service._opener.calls[0]
+
+
+def test_a_release_document_with_no_id_is_not_a_candidate() -> None:
+    service = client({"releases": [{"title": "An Album", "artist-credit": "An Artist"}]})
+    assert service.releases(artist="A", album="An Album") == ()
+
+
+def test_the_cover_is_asked_of_the_archive_and_not_of_the_web_service() -> None:
+    """A different host, with a different `Accept`, through the same client.
+
+    The guardrail is that this module is the only thing in Encore that opens a socket, so the
+    archive's URL lives here rather than in the stage that wants the picture — which is also why
+    an architecture test can say so instead of a reviewer having to remember it (#57).
+    """
+
+    service, opener = raw_client(b"\xff\xd8jpeg")
+    assert service.cover("rel-1") == b"\xff\xd8jpeg"
+    request = opener.requests[0]
+    assert str(request.full_url) == "https://coverartarchive.org/release/rel-1/front"
+    assert request.get_header("Accept") == "image/*", "an image was asked for"
+
+    search = client({"releases": []})
+    search.releases(artist="A", album="B")
+    assert "musicbrainz.org/ws/2/release" in search._opener.calls[0]
+    assert "coverartarchive" not in search._opener.calls[0]
+
+
+def test_an_empty_release_id_asks_the_archive_for_nothing() -> None:
+    """`/release//front` is a 404 that costs a request and means "we never had an id".
+
+    The stage calls this for an album it could not name; refusing quietly is what keeps a policy
+    mistake in a caller from showing up as an outage in the report.
+    """
+
+    service, opener = raw_client()
+    assert service.cover("") is None
+    assert opener.requests == []
+
+
+def test_a_cover_too_large_to_be_a_cover_is_not_a_cover(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The same length-decides rule as a JSON body, because a `Content-Length` is a promise.
+
+    Nine megabytes of something is not an album sleeve, and the cache would reduce it to 640 px
+    anyway. The way to survive an image host that ignores the request is to read one byte past
+    the limit and stop, which is what `limit + 1` is for.
+    """
+
+    monkeypatch.setattr(musicbrainz, "_MAX_COVER_BYTES", 16)
+    service, _ = raw_client(bytes(17))
+    assert service.cover("rel-1") is None
+
+
+def test_a_missing_cover_is_a_miss_and_not_an_outage() -> None:
+    """Most MusicBrainz releases have no front image.
+
+    Treating that as a failure would switch cover art off for the whole run at the first plain
+    album, and the report would say the archive was unreachable when all it did was answer.
+    """
+
+    service = client(_http_error(404))
+    assert service.cover("rel-1") is None
+    assert service.available is True
+
+
+def test_the_two_hosts_share_one_rate_limit() -> None:
+    """Pacing is per client, not per URL, because the courtesy is per client.
+
+    musicbrainz.org's policy and the archive's are both stated against the user agent, and a
+    build that interleaved two unmetered streams would be one burst of 926 requests. This is the
+    test that makes default-on enrichment safe to enable on a shared connection: the same second
+    between a release search and its cover fetch as between two searches.
+    """
+
+    opener = RawOpener(release_payload(), b"\xff\xd8jpeg")
+    service = HttpMusicBrainzClient(opener=opener, minimum_interval=0.05)
+    started = time.monotonic()
+    service.releases(artist="A", album="B")
+    service.cover("rel-1")
     assert time.monotonic() - started >= 0.04
 
 

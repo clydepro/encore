@@ -194,6 +194,58 @@ idempotence, which is a result), this command asks questions (`verify`), or noth
 was planned because the machine failed a check first. The report now distinguishes
 them, in text and in `--json` as `"planning": "planned" | "not-asked" | "blocked"`.
 
+### The upgrade said nothing to do, and the machine is behind
+
+`nothing to do` is an observation, and until
+[#55](https://github.com/clydepro/encore/issues/55) it was an observation of one file:
+`pyproject.toml` in the checkout against `pyproject.toml` in
+`/opt/encore/application`. On the machine it was found on, sixteen source files
+were different — seven under `encore/`, nine under `apps/`, among them
+`encore/playback/fault.py`, which was not on the appliance at all — and the two
+manifests were identical, because a release that fixes bugs has no reason to touch
+either of them:
+
+```console
+$ sudo diff -rq --exclude=__pycache__ /opt/encore/application/encore ./encore | wc -l
+7
+$ sudo diff -q /opt/encore/application/pyproject.toml ./pyproject.toml && echo identical
+identical
+```
+
+Four planned steps, none of them a copy, and the service restarted onto the code it
+already had. The comparison is of the trees now, file by file, by content, under the
+same exclusion list a copy uses — `.venv`, the caches, `__pycache__`, and any
+`library.db` sitting in a development checkout, which is the file that must not travel
+(ADR-006 allows one library per machine, in `/var/lib/encore`).
+
+Two commands read the answer, and they are not the same sentence:
+
+```bash
+sudo encore-install upgrade --dry-run   # the plan: "16 differ of 396 files: …"
+sudo encore-install verify              # FAIL  application: … is not this checkout
+```
+
+The rehearsal is where the count is worth reading. A real `upgrade` plans the copy it
+just found, so by the time it prints its acceptance list the line says `ok` — the run
+repaired the thing it was reporting on, which is the same rule #43 established for the
+service manager. `verify` keeps it a failure, because `verify` has no repair in its
+future and an appliance running code nobody installed from is not "fine".
+
+Two cases that still say `nothing to do`, correctly:
+
+- **You cloned straight into `/opt/encore/application` and pulled there.** Nothing is
+  copied, because there is nothing to copy from, and the run prints a note saying the
+  checkout and the application are the same directory. The dependency step still does
+  its work: that question is asked of `uv.lock` against the stamp inside the venv, and
+  a `git pull` changes the lockfile without changing where the code lives.
+- **A file the exclusions name.** `application/__pycache__` is neither a difference nor
+  a leftover, because the comparison never sees it — and `rsync --delete-excluded`
+  removes it anyway, which is the point: a stale `.pyc` is importable bytecode for a
+  module the release deleted.
+
+The whole tree is about 4 MB and 400 files, so an upgrade reads both copies of it to
+answer the question; on a Pi 4 that is a second, next to the `uv sync` it precedes.
+
 ### A rehearsal did not register the service
 
 `--root` installs into a tree, and `systemctl` cannot be pointed at a tree — it
@@ -349,10 +401,13 @@ command as the service account — though that puts a 60 MB interpreter under
   read the validation report rather than republishing blindly.
 - A build that ends in a traceback, not a report, published nothing: the library
   the Server is using is still the previous one.
-- Covers gone after a rebuild that printed no error: an incremental build writes
-  zero references today (#52). Rebuild with `--full`.
-- Every cover is a grey tile: read
-  [the artwork cache is full and the library has no covers](#the-artwork-cache-is-full-and-the-library-has-no-covers).
+- Covers gone after a rebuild that printed no error: that was
+  [#52](https://github.com/clydepro/encore/issues/52), and an incremental build now
+  carries the references it made before. A library that is *already* missing them
+  stays missing them until a `--full` build re-reads the files, because an
+  incremental one reuses what the last artifact said.
+- Every cover is a grey tile, on files that never had one: read
+  [half the library is grey and the files have no picture in them](#half-the-library-is-grey-and-the-files-have-no-picture-in-them).
 
 ### The artwork cache is full and the library has no covers
 
@@ -381,28 +436,107 @@ the bytes it *wrote*, which handed the database two references naming one path. 
 library whose `artwork` table is empty above a cache that is not is a library from
 before that fix, whatever the cache looks like.
 
+Its sibling, [#52](https://github.com/clydepro/encore/issues/52), produced the same
+appliance symptom by a different route: an *incremental* build reuses the tags of
+every file that has not changed, a reused file arrives at the artwork stage with no
+image bytes (SAPRS 5.6 keeps them out of the database, and a JSON cache cannot hold
+them either), and a stage that sees no image writes no reference. So one ordinary
+rebuild published 0 rows over 222, validated, and renamed it into place. That is
+fixed: the references now carry across the same incremental key the tags do. What
+the fix cannot do is heal a library those bugs already published — an incremental
+run reuses references *from the previous artifact*, and that one has none to give.
+
 To repair an appliance that was built that way, rebuild with the current code and
 then tell the running Server — no restart, and the queue is untouched:
 
 ```console
 $ sudo encore-builder --full
-  Artwork          222  images written to the cache
+  Artwork            0  images written to the cache (222 in this library)
   Published /var/lib/encore/library.db
 ```
 
-`--full` is not decoration. A plain `encore-builder` is incremental, and an
-incremental build currently reuses the tags it cached and nothing else — so it
-sees no embedded images and publishes a library with zero artwork references,
-over the good one (#52). That is the next fix; until then a rebuild that is
-supposed to change the pictures is a rebuild with `--full`.
-
-Then **Library → Reopen library** on the dashboard's library page (see
+`--full` is not decoration, and the two numbers on that line are the diagnosis: a
+healthy incremental build reads `0 written (222 in this library)`, and a build that
+reports zero in *both* brackets has nothing to show a guest. Then **Library → Reopen
+library** on the dashboard's library page (see
 [Maintenance](Administrator-Guide.md#maintenance) — the endpoint behind it wants
 your session cookie, so `curl` without one is not the way to ask).
 
-The report's `Artwork` line is the number to check: it should match the files in
-the cache, and `select count(*) from songs where artwork_id is not null` should be
-within a few percent of how many files carry a picture.
+The other number to check is `select count(*) from songs where artwork_id is not
+null`, which should be within a few percent of how many files carry a picture.
+
+### Half the library is grey and the files have no picture in them
+
+```console
+$ sudo sqlite3 /var/lib/encore/library.db \
+    'select (select count(*) from songs where artwork_id is null), count(*) from songs'
+1989|3049
+```
+
+Not the same fault as
+[the one above](#the-artwork-cache-is-full-and-the-library-has-no-covers): the
+references there are missing, and here they are correct and there is nothing to
+point at. A FLAC carries no embedded image — the format has no place for one — and
+until
+[#57](https://github.com/clydepro/encore/issues/57) the Builder knew one source of
+artwork, SAPRS 6.7's "prefer embedded artwork", and no second. So a library of it
+published 463 grey tiles out of 703 albums and reported nothing unusual, because a
+missing picture is legal.
+
+The order is now: the file's own image, then the release's front cover from the
+Cover Art Archive, then nothing. Ask `Cover art:` in the report which half you are
+looking at:
+
+```console
+$ sudo encore-builder
+  MusicBrainz        enabled, 61 lookups, 97 fields repaired
+  Cover art          380 of 463 albums without embedded art, 926 requests, 79 not named exactly
+```
+
+- `off` — the build was told not to ask, by `builder.album_art: false`,
+  `--no-album-art`, `--offline`, or by `builder.musicbrainz: false`, which takes the
+  archive with it (naming a release is a MusicBrainz question).
+- `0 of 463` with requests counted — asked and refused. Those releases have no front
+  image at the archive, which is ordinary and not a fault of yours or of the network.
+- `79 not named exactly` — the policy, working. A cover is attached only when both the
+  artist and the album title match one release exactly, differing at most in case and
+  punctuation. A near match is refused, because an album illustrated with someone
+  else's sleeve is worse than a grey tile: one is a gap and the other is a lie about
+  where something is.
+
+Nothing to do but rebuild, and the tiles fill in as the albums are identified. Expect
+roughly one second per request, so a first pass over 463 albums is a few minutes; the
+second pass costs half as much per album, because the identifier found the first time
+is stored on the album row. Where #52 applies — an unchanged file whose artwork the
+last build already resolved — the album is not asked about at all, and the line reads
+`0 of 1 albums without embedded art`.
+
+### An artist named 01, or a release year of 24
+
+```console
+$ sudo sqlite3 /var/lib/encore/library.db "select name from artists where name glob '[0-9]*'"
+01
+$ sudo sqlite3 /var/lib/encore/library.db "select distinct release_date from albums"
+24
+```
+
+A rip tool writing the track number into the artist field, and a year written as two
+digits of itself. Both are *present*, and until #57 present was read as correct: the
+enrichment stage asked whether a field was empty and never whether it could be true.
+Sixty files of one album grouped under an artist called "01" is the same effect as a
+library growing a 400-track artist named Unknown, and 24 is a date no record was
+released on, printed as 24 on the album page.
+
+An implausible value is now treated as the gap it is, and it is corrected from
+wherever the answer actually is: the directory the file sits in, if that directory
+names an artist, and otherwise MusicBrainz. If neither can, the tag is kept — the
+Builder questions a value that looks wrong, it does not throw one away, and a band
+named 1776 keeps the name.
+
+One thing to know: this is a normalization change, and the rules version is stored with
+every file precisely so that a changed rule invalidates the old conclusions
+(ADR-010). The first build after upgrading re-reads the whole library, its report says
+`Build: full`, and every build after that is incremental again.
 
 ## Diagnostics worth collecting
 

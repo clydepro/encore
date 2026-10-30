@@ -15,10 +15,11 @@ a seventh time by the artifact it publishes
 ([#51](https://github.com/clydepro/encore/issues/51), merged as
 [#54](https://github.com/clydepro/encore/pull/54): an artwork cache addressed by the wrong digest,
 which made a build over a real library impossible and left every tile grey). Verifying that on the
-machine found two more, both still open:
-[#52](https://github.com/clydepro/encore/issues/52) — an incremental rebuild publishes zero artwork —
-and [#55](https://github.com/clydepro/encore/issues/55) — `encore-install upgrade` decides the code is
-already installed by comparing `pyproject.toml`.
+machine found two more — [#52](https://github.com/clydepro/encore/issues/52), an incremental rebuild
+that publishes zero artwork, and [#55](https://github.com/clydepro/encore/issues/55),
+`encore-install upgrade` deciding the code is already installed by comparing `pyproject.toml` — both
+fixed on this branch, and #52's grey tiles turned out to have a third cause of their own, which is
+what "What an appliance asked MusicBrainz about (#57)" below is about.
 **Phase 7 — the dependency-alert chore — merged as
 [#40](https://github.com/clydepro/encore/pull/40), closing
 [#39](https://github.com/clydepro/encore/issues/39).** Phases 1–5 are merged:
@@ -276,6 +277,59 @@ UNIQUE index enforces and what the reference names; the payload was never any of
 is the same sentence about `pyproject.toml`: a manifest is not the tree, and an installer that reads
 one to decide whether to copy the other is asking the file rather than the directory.
 
+## What an appliance asked MusicBrainz about (#57)
+
+The #52 fix landed, the appliance was rebuilt, and the tiles were still grey — which is a different
+finding from #52 and a better one, because #52 was a stage losing information it had been given and
+this was a feature that had never been asked to run.
+
+**#57 — MusicBrainz had no configuration home, so it was never on.** Three defects, one sentence
+apiece, and the appliance produced the evidence for all three.
+
+1. **The default was a flag.** `--musicbrainz` existed in `apps/builder/main.py` and nowhere else:
+   no key in `config.yaml`, nothing a systemd timer could see, so every unattended build printed
+   `MusicBrainz: disabled`. The naive fix — a `builder:` section in the file — would have stopped an
+   appliance booting over a correct configuration, because `EncoreConfig` is `extra="forbid"` and
+   the Server validates the same file the Builder reads. So `BuilderConfig` lives in
+   `encore/config/models.py`, with `musicbrainz: true` and `album_art: true`, and the guardrail that
+   keeps the Server from acting on either is now a test:
+   `test_the_builder_reaches_the_network_from_one_module_only`. Three CLI states (`BooleanOptionalAction`,
+   so *not given* is neither `true` nor `false`) sit above two file states, and `--offline` outranks
+   both because it is a statement about this afternoon's network rather than about the library.
+2. **"Present" was being read as "correct."** SAPRS 6.6's second level is "fill gaps *or correct
+   implausible values*" and `_gaps` implemented the first clause only, so `artist: 01` — 34 files,
+   a rip tool writing the track number into the artist field, sixty files grouped under an artist
+   named 01 — and `date: 24` (2 files, printed as 24) were never questioned. Plausibility went into
+   `normalization.py` beside `is_placeholder`, which is where it can act with the network off: a
+   counter artist falls to ADR-010's path level, and MusicBrainz is the second answer. Narrow on
+   purpose (a field that is *nothing but* a small integer, artist fields only — 21, 25, 30 and 13 are
+   albums), and it questions a value rather than discarding it: `_resolve`'s last resort still stands,
+   so a band named 1776 keeps the name. A counter is corrected but never searched *with*, because
+   `artist:01 AND recording:"Morning"` matches a hundred releases and the client takes the first.
+   `NORMALIZATION_RULES_VERSION` went to 2 for exactly this reason: the old conclusions were wrong,
+   and ADR-010 already priced the rebuild.
+3. **SAPRS 6.7 named one artwork source and stopped.** FLAC carries no embedded picture, so 463 of
+   703 albums were grey and validation was content — a missing picture is legal. ADR-016 adds the
+   second level: the release's front image from the Cover Art Archive, asked once per album
+   (`Track.group_key`, the same key `construction` groups by, so 926 requests rather than 1,989) and
+   attached only when *both* names match a release exactly. Not closest, not highest-ranked, not the
+   only result. A wrong cover is a lie about where something is; a grey tile is only a gap.
+
+**And the half that was #52 again.** The reuse path sat inside the `if options.enrich` gate, so
+`--offline` and `--no-musicbrainz` — the *careful* options — rewrote every previously enriched value
+back to the tags and let the library decay in silence, which is 6.6's "shall not be degraded to
+un-enriched data" broken by the flag that was supposed to honour it. Asking nothing is now free and
+forgetting is not. Two more fields had #52's shape — a documented cache with no reader:
+`albums.musicbrainz_release_id` was written by nobody and `PreviousEnrichment.release_id` was loaded
+by nobody, so an album identified in March was searched for again in October; both are wired end to
+end, and the second identification pass costs one request per album instead of two.
+
+The eighth instance of the standing finding, after #38, #41, #43, #44, #46, #48, #51 and #55: **a
+feature whose only switch is typed in a terminal is off, and a default nobody can read in a
+configuration file is a default that has never been examined.** `MusicBrainz: disabled` printed on
+100% of this appliance's builds without one person choosing it, and the report line nobody could
+account for was the same document that said the library was healthy.
+
 ## What running it on a machine with systemd found (#43, #44)
 
 The first `sudo encore-install install` — not staged, not `--no-service`, on a host with systemd as
@@ -389,21 +443,18 @@ simulator whose guests never fail is the same trap with a bigger number in front
    in ADR-014's debt list. If a second runtime write is ever needed here, the shape is wrong and
    the answer is a maintenance mode of the Server, not more SQL in the installer.
 6. **`GET /admin/sessions`?** — carried forward from phase 5, unchanged.
-7. **Two open defects that a real appliance found and no test did.**
-   [#52](https://github.com/clydepro/encore/issues/52): an incremental rebuild — the default, and
-   what a timer runs — publishes a library with **zero** artwork references, because
-   `Reusable.artwork` is loaded from the previous library, documented, and read by nothing. The
-   two-build shape already exists, in `tests/integration/test_builder_pipeline.py:245`, which asserts
-   `second.artwork == 0` with the comment "an unchanged build writes no images" — and that is exactly
-   what the broken build does. It counts cache writes and never looks at the references in the
-   artifact, so the sentence that states the intent becomes the bug's alibi. What the test needs is
-   the other half of the promise: the second library's `songs.artwork_id` equal to the first's.
-   Until it lands, the documentation says out loud that a rebuild of the pictures is
-   `encore-builder --full`.
-   [#55](https://github.com/clydepro/encore/issues/55): `install` and `upgrade` decide the
-   application is current by comparing `pyproject.toml` byte for byte, so a release that changes only
-   Python is invisible to the planner and the report prints `nothing to do` over a tree sixteen files
-   behind. #51 had to be deployed by hand for exactly that reason. Both are the sentence at the end
-   of phase 5 again — a bug that lives between two builds, or two packages, is invisible to the test
-   of either one — and #55 is #46's lesson one layer up: the check was not wrong about the file it
-   read, it read the wrong file.
+7. **MusicBrainz is on by default, and that is new behaviour on an upgraded appliance.**
+   `builder.musicbrainz` and `builder.album_art` are both `true`, so a build after this upgrade
+   contacts musicbrainz.org and coverartarchive.org at one request per second, and
+   `NORMALIZATION_RULES_VERSION` 2 makes the first one a full re-read. Administrator-Guide says so
+   in both places an operator looks (the flag table, and the security posture), and
+   `musicbrainz: false` is the whole of opting out — an offline build now keeps everything an online
+   one ever learned, which is what made the default safe to change. Two debts are named rather than
+   hidden: the Cover Art Archive asks for a credit line and the UI does not render one yet
+   (ADR-016's consequences), and a stale release identifier is reused until the tags change or
+   somebody runs `--full`, which is the cache working and the sentence an operator should hear in
+   those words.
+   [#52](https://github.com/clydepro/encore/issues/52) and
+   [#55](https://github.com/clydepro/encore/issues/55) are fixed on this branch; the third
+   open question is whether `apps/` should be inside the coverage `source` at all, which item 3 asks
+   for a decision on rather than a drift.

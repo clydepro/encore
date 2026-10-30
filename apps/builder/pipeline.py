@@ -27,26 +27,28 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
-from apps.builder import construction, schema, validation
+from apps.builder import albumart, construction, schema, validation
 from apps.builder.artwork import ArtworkLimits, ArtworkOutcome
 from apps.builder.artwork import generate as generate_artwork
 from apps.builder.discovery import Discovery, discover
 from apps.builder.duplicates import DuplicateReport
 from apps.builder.duplicates import analyse as analyse_duplicates
-from apps.builder.enrichment import PreviousEnrichment, enrich
+from apps.builder.enrichment import EnrichmentOutcome, PreviousEnrichment, enrich
 from apps.builder.extraction import MediaProbe, MutagenProbe, ProbeResult, extract
-from apps.builder.musicbrainz import MusicBrainzClient
+from apps.builder.musicbrainz import DisabledClient, MusicBrainzClient
 from apps.builder.normalization import NORMALIZATION_RULES_VERSION
 from apps.builder.precedence import ArtistTrees, normalize_track, tree_map
 from apps.builder.publication import Published, publish, stage
 from apps.builder.records import (
+    ArtworkAsset,
+    DiscoveredFile,
     ExtractedFile,
     SkippedFile,
     SkipReason,
@@ -81,9 +83,15 @@ class BuildOptions:
         temp_dir: Scratch space for the build file and the checkpoints.
         incremental: Reuse the previous build's work where the cache key matches
             (SAPRS 6.9). Off is also what a normalization-rule bump implies by itself.
-        enrich: Ask MusicBrainz to fill gaps. Optional and rate-limited per SAPRS 6.6,
-            and off by default: a build that quietly took forty minutes looking for
-            3,000 recordings is a build nobody runs twice.
+        enrich: Ask MusicBrainz to fill a gap or correct a value no rule could rescue.
+            Optional and rate-limited per SAPRS 6.6, and off *here*: the default that reaches a
+            real build comes from `builder.musicbrainz` in `config.yaml`, read by `main.py` —
+            a pipeline built without a configuration file is a test, a library import or a
+            caller that has decided for itself, and none of them should discover a socket.
+        album_art: Ask the Cover Art Archive for an album whose files carry no picture
+            (SAPRS 6.7's second precedence level, ADR-016). Subordinate to `enrich`: naming a
+            release is the same lookup, so a run that is not asking MusicBrainz cannot ask its
+            archive either, and `DisabledClient` is what makes that true rather than a comment.
         probe / client: Collaborators, injected. `MutagenProbe` and the disabled client
             are the defaults, so an ordinary run opens no socket (ADR-010).
         publish: False for a dry run — build, validate, write nothing.
@@ -97,6 +105,7 @@ class BuildOptions:
     library_version: str = ""
     incremental: bool = True
     enrich: bool = False
+    album_art: bool = False
     publish: bool = True
     probe: MediaProbe | None = None
     client: MusicBrainzClient | None = None
@@ -136,14 +145,40 @@ def run(options: BuildOptions, *, bus: EventBus | None = None) -> BuildReport:
     )
     checkpoints = Checkpoints(options.temp_dir, enabled=options.incremental)
 
-    extracted, reused = _extract(found, options, previous=previous, checkpoints=checkpoints)
+    extracted, reused, carried = _extract(
+        found, options, previous=previous, checkpoints=checkpoints
+    )
+    # Last build's answers about the files this one did not open. Computed once, because two
+    # stages read it and a second pass over 3,000 rows is the sort of duplication that ends up
+    # disagreeing with the first one about which files were reused.
+    earlier = _earlier(found.files, previous=previous, reused=reused)
     checkpoints.record(extracted)
     trees = tree_map(extracted, options.music_dir)
-    tracks, skips = _catalogue(
-        extracted, options=options, trees=trees, previous=previous, reused=reused
-    )
+    tracks, skips, enrichment = _catalogue(extracted, options=options, trees=trees, earlier=earlier)
     duplicates = analyse_duplicates(tracks)
-    artwork = generate_artwork(tracks, options.artwork_dir, options.artwork_limits)
+    # SAPRS 6.7's second precedence level, and ADR-016: an album whose files carry no picture of
+    # their own asks the Cover Art Archive once. Grouping by `Track.group_key` is what makes the
+    # unit of asking an album rather than a track, and the carried references from #52 are what
+    # makes an incremental run ask about almost nothing.
+    covers = albumart.fetch(
+        tracks,
+        # The archive is asked only by a build that is asking MusicBrainz at all: naming a
+        # release is the same lookup, so an album-art flag alone never opens a socket (#57).
+        _client(options) if options.album_art else DisabledClient(),
+        carried=carried,
+        earlier=earlier,
+    )
+    tracks = list(covers.tracks)
+    artwork = generate_artwork(
+        tracks,
+        options.artwork_dir,
+        options.artwork_limits,
+        previous=carried,
+        network=covers.payloads,
+    )
+    # Stage 5's answers become part of the resume point: a build that dies at minute nine of a
+    # scan over a WiFi share must not come back with fewer pictures than it started with (#52).
+    checkpoints.record_artwork(artwork.by_file)
 
     connection = _create(options.build_file)
     built: construction.BuiltLibrary | None = None
@@ -172,6 +207,8 @@ def run(options: BuildOptions, *, bus: EventBus | None = None) -> BuildReport:
         findings=findings,
         duplicates=duplicates,
         artwork=artwork,
+        enrichment=enrichment,
+        covers=covers,
         published=published,
         started=started,
         reused=reused,
@@ -191,7 +228,7 @@ def _extract(
     *,
     previous: PreviousLibrary,
     checkpoints: Checkpoints,
-) -> tuple[list[ExtractedFile], frozenset[str]]:
+) -> tuple[list[ExtractedFile], frozenset[str], dict[Path, ArtworkAsset]]:
     """Stage 2, with the two caches that make an incremental run incremental.
 
     Cheapest first: a checkpoint from a run that was interrupted, then the tags the
@@ -200,22 +237,36 @@ def _extract(
     file, and the reason the tag hash is not part of it: a digest of the tags is only
     available after the read the caching exists to avoid.
 
-    Returns the reused keys as well as the results, because enrichment needs to know
-    which files it may take the previous answers for.
+    Returns the reused keys, and the references stage 5 could not rebuild for them.
+    The two travel together because they are the same claim — *this file has not
+    changed* — and the artwork stage needs the second one to keep the first one
+    honest: a reused probe carries no image bytes (SAPRS 5.6 forbids storing them), so
+    without the reference a reuse is a loss (#52).
+
+    The previous library is consulted through `Reusable.matches`, which compares the
+    parts of ADR-010's key a `stat()` can answer. That call did not exist in the
+    pipeline when #52 was filed — `_extract` asked only whether the *path* was in the
+    last build — so an incremental run reused a file it had retagged since, and
+    published metadata that was true of a version of the file nobody had listened to.
     """
 
     cached: dict[str, ProbeResult] = {}
+    carried: dict[Path, ArtworkAsset] = {}
     for item in found.files:
         record = checkpoints.probe_for(item)
         if record is not None:
             cached[item.cache_key] = record
+            if (asset := checkpoints.artwork_for(item)) is not None:
+                carried[item.path] = asset
             continue
         earlier = previous.for_path(item.path)
-        if earlier is not None and earlier.probe is not None:
+        if earlier is not None and earlier.probe is not None and earlier.matches(item):
             cached[item.cache_key] = earlier.probe
+            if earlier.artwork is not None:
+                carried[item.path] = earlier.artwork
 
     reader = options.probe if options.probe is not None else MutagenProbe()
-    return extract(found.files, reader, previous=cached), frozenset(cached)
+    return extract(found.files, reader, previous=cached), frozenset(cached), carried
 
 
 # -- stages 3 and 4: normalization, precedence, enrichment ----------------
@@ -226,15 +277,20 @@ def _catalogue(
     *,
     options: BuildOptions,
     trees: ArtistTrees,
-    previous: PreviousLibrary,
-    reused: frozenset[str],
-) -> tuple[list[Track], list[SkippedFile]]:
+    earlier: Mapping[Path, PreviousEnrichment],
+) -> tuple[list[Track], list[SkippedFile], EnrichmentOutcome]:
     """Stages 3 and 4, then the split between rows and the skip ledger.
 
     Enrichment runs before anything is dropped, which is the order ADR-010's precedence
     implies: a file whose tags say nothing is exactly the file level 2 exists for, and
     filtering first would mean MusicBrainz was never consulted about the files that
     needed it.
+
+    It also runs when nothing is being asked. The stage's other half is "keep what the last
+    build learned", and a build that only reads tags is precisely the build that would
+    otherwise retype every MusicBrainz value in the library as a tag (#57, SAPRS 6.6's
+    "not degraded to un-enriched data"). `DisabledClient` is what makes that a code path
+    rather than a conditional.
     """
 
     resolved: list[Track] = []
@@ -255,15 +311,12 @@ def _catalogue(
         else:
             resolved.append(normalize_track(item, root=options.music_dir, trees=trees))
 
-    if options.enrich:
-        outcome = enrich(
-            resolved, _client(options), previous=_earlier(previous, resolved, reused=reused)
-        )
-        resolved = list(outcome.tracks)
+    outcome = enrich(resolved, _client(options), previous=earlier)
+    resolved = list(outcome.tracks)
 
     tracks = [track for track in resolved if track.catalogable]
     skips.extend(_skip_for(track) for track in resolved if not track.catalogable)
-    return tracks, skips
+    return tracks, skips, outcome
 
 
 def _skip_for(track: Track) -> SkippedFile:
@@ -283,38 +336,49 @@ def _evidence(track: Track) -> str:
 
 
 def _client(options: BuildOptions) -> MusicBrainzClient:
-    """The enrichment client, defaulted only when enrichment was actually asked for.
+    """The network, or a polite stand-in for it.
 
-    `HttpMusicBrainzClient` holds a rate-limit clock and a cached connection, so
-    building one for a run that will never use it is a small lie about what the run
-    does. The import is local for the same reason: the module reads a configuration
-    default at import time.
+    Two decisions meet here, and both are about not doing work that was not asked for. An
+    injected client is used whatever the flags say, because a test that hands in a recorder has
+    already answered the question of what to ask. Otherwise: a run with enrichment off gets
+    `DisabledClient`, which is a *real* implementation of the protocol rather than a branch —
+    `enrich` still backfills from the previous build through it, which is the half of #57 that
+    kept a `--no-musicbrainz` run from quietly retyping everything an earlier build had learned.
+
+    The import of the HTTP client is local for the same reason as the object it constructs: it
+    reads its rate-limit and user-agent constants at import time and holds a per-run clock, so
+    building one for a run that will never use it is a small lie about what the run does.
     """
 
     if options.client is not None:
         return options.client
+    if not options.enrich:
+        return DisabledClient()
     from apps.builder.musicbrainz import HttpMusicBrainzClient
 
     return HttpMusicBrainzClient()
 
 
 def _earlier(
-    previous: PreviousLibrary, tracks: Sequence[Track], *, reused: frozenset[str]
+    files: Sequence[DiscoveredFile], *, previous: PreviousLibrary, reused: frozenset[str]
 ) -> dict[Path, PreviousEnrichment]:
     """Last build's enrichment, for the files that have not changed.
 
-    Restricted to `reused` deliberately (SAPRS 6.6: enrichment "should not be degraded
-    to un-enriched data"). A changed file deserves a fresh lookup; an unchanged one
-    carrying a stale answer would be the pipeline lying about having verified it.
+    Restricted to `reused` deliberately (SAPRS 6.6: enrichment "should not be degraded to
+    un-enriched data"). A changed file deserves a fresh lookup; an unchanged one carrying a
+    stale answer would be the pipeline lying about having verified it. Keyed by path because
+    that is what a file is identified by on both sides, and read by two stages — the field
+    backfill in `enrichment`, and the release identifiers `albumart` uses to ask once per
+    album rather than twice.
     """
 
     found: dict[Path, PreviousEnrichment] = {}
-    for track in tracks:
-        if track.extracted.cache_key not in reused:
+    for item in files:
+        if item.cache_key not in reused:
             continue
-        record = previous.for_path(track.path)
+        record = previous.for_path(item.path)
         if record is not None and record.enrichment is not None:
-            found[track.path] = record.enrichment
+            found[item.path] = record.enrichment
     return found
 
 
@@ -403,6 +467,8 @@ def _assemble(
     findings: validation.ValidationReport,
     duplicates: DuplicateReport,
     artwork: ArtworkOutcome,
+    enrichment: EnrichmentOutcome,
+    covers: albumart.CoverOutcome,
     published: Published | None,
     started: float,
     reused: frozenset[str],
@@ -423,11 +489,16 @@ def _assemble(
         skipped=ledger,
         repaired=reference.repaired,
         artwork=_generated(artwork),
+        artwork_held=reference.artwork,
+        artwork_reused=artwork.reused,
+        artwork_uncached=artwork.uncached,
         songs=reference.songs,
         artists=reference.artists,
         albums=reference.albums,
         duplicates=duplicates.lines(),
-        warnings=tuple(_warnings(found, findings, previous, artwork)),
+        warnings=tuple(
+            _warnings(found, findings, previous, artwork, covers=covers, held=reference.artwork)
+        ),
         errors=tuple(finding.detail for finding in findings.failures),
         validation=tuple((f.name, f.label, f.detail) for f in findings.findings),
         duration_seconds=time.monotonic() - started,
@@ -435,7 +506,59 @@ def _assemble(
         library_version=options.library_version,
         incremental=options.incremental and previous.usable,
         reused=len(reused),
-        musicbrainz="enabled" if options.enrich else "disabled",
+        musicbrainz=_enrichment_sentence(options, enrichment),
+        album_art=_cover_sentence(options, covers),
+    )
+
+
+def _enrichment_sentence(options: BuildOptions, outcome: EnrichmentOutcome) -> str:
+    """What was asked of MusicBrainz, in the one line the report has for it.
+
+    Counts rather than the word "enabled", because "enabled" was the whole of the answer while
+    enrichment was off by default and nobody was asking — the line cannot distinguish a build
+    that repaired nothing from one that repaired three thousand fields, which is the difference
+    an operator needs when a build takes nine minutes instead of two (#57).
+    """
+
+    if outcome.unavailable:
+        return "unavailable; what the last build knew was reused"
+    if not options.enrich:
+        return (
+            "off"
+            if not outcome.reused
+            else f"off, {outcome.reused} values kept from the last build"
+        )
+    return f"enabled, {outcome.looked_up} lookups, {outcome.repaired} fields repaired" + (
+        f", {outcome.reused} reused" if outcome.reused else ""
+    )
+
+
+def _cover_sentence(options: BuildOptions, covers: albumart.CoverOutcome) -> str:
+    """The Cover Art Archive's half, in the same voice.
+
+    `unmatched` belongs on this line rather than in the warnings because it is the policy
+    working, not a failure of it: an album whose release cannot be named exactly is a tile left
+    alone on purpose, and 400 lines of that would bury the four numbers an operator acts on.
+
+    Off is checked before the archive's own state, in both directions. A build that is not asking
+    MusicBrainz has no archive to ask — naming a release is the same lookup — and a stage that was
+    never going to speak reports `unavailable` through its null client, which is a true thing to
+    say about the client and a misleading thing to print about the network (#57).
+    """
+
+    if not options.album_art:
+        return "off"
+    if not options.enrich:
+        return "off, with MusicBrainz"
+    if covers.unavailable:
+        return "archive unavailable"
+    if not covers.albums:
+        return "nothing to ask about"
+    return (
+        f"{covers.covered} of {covers.albums} albums without embedded art"
+        f", {covers.requested} requests"
+        + (f", {covers.unmatched} not named exactly" if covers.unmatched else "")
+        + (f", {covers.uncovered} with no image" if covers.uncovered else "")
     )
 
 
@@ -493,14 +616,34 @@ def _warnings(
     findings: validation.ValidationReport,
     previous: PreviousLibrary,
     artwork: ArtworkOutcome,
+    *,
+    held: int,
+    covers: albumart.CoverOutcome | None = None,
 ) -> list[str]:
     notes = [finding.detail or finding.name for finding in findings.findings if not finding.passed]
     if found.unreadable:
         notes.append(f"{len(found.unreadable)} entries could not be read")
     if _empty(artwork):
         notes.append(f"{_empty(artwork)} files carried no embedded artwork (normal, SAPRS 6.7)")
+    if artwork.uncached:
+        # The one artwork number that is never normal: the cache lost files the library
+        # pointed at. The songs still play, so this is a note and not a failure (6.7) — but
+        # it is the sentence that turns "some tiles are grey" into a repair.
+        notes.append(
+            f"{artwork.uncached} files name an image that is no longer in the cache; "
+            "a --full build rewrites them"
+        )
+    if not held and previous.artwork_rows:
+        notes.append(
+            f"this library holds no artwork; the previous one held {previous.artwork_rows}"
+        )
     if not previous.usable:
         notes.append("no previous library to reuse from; full build")
+    if covers is not None and covers.unavailable:
+        notes.append(
+            "the Cover Art Archive could not be reached; albums without embedded artwork kept "
+            "their tiles grey, and nothing already in the cache changed"
+        )
     return notes
 
 

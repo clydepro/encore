@@ -33,7 +33,13 @@ from types import MappingProxyType
 from typing import Final
 
 from apps.builder.musicbrainz import MusicBrainzClient, MusicBrainzUnavailableError, Recording
-from apps.builder.normalization import fold, is_placeholder
+from apps.builder.normalization import (
+    fold,
+    has_plausible_year,
+    is_counter,
+    is_placeholder,
+    is_usable,
+)
 from apps.builder.records import Track
 from encore.repositories.contract import MetadataField, MetadataSource
 
@@ -69,8 +75,10 @@ class PreviousEnrichment:
 
     Only the answers MusicBrainz supplied are kept, never the tags: tags are
     re-read every run, so a tag the operator fixed is noticed at once and a stale
-    enrichment is not. The identifiers come along so a resumed build looks the same
-    recording up instead of searching for it again.
+    enrichment is not. The identifiers come along too, so a resumed build looks the
+    same recording up instead of searching for it again — which means they have to be
+    read back out of the artifact, and `state._fill_identifiers` is the function that
+    does it. Before #57 that sentence was in this docstring and nowhere in the code.
     """
 
     artist: str = ""
@@ -78,7 +86,6 @@ class PreviousEnrichment:
     date: str = ""
     recording_id: str = ""
     release_id: str = ""
-    artist_id: str = ""
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -140,7 +147,7 @@ def enrich(
             continue
         recording: Recording | None = None
         if not down and _worth_asking(gaps):
-            recording, down = _lookup(track, client, notes)
+            recording, down = _lookup(track, client, notes, earlier=cache.get(track.path))
             if recording is not None:
                 outcome.looked_up += 1
         if recording is not None:
@@ -173,20 +180,27 @@ class _Counter:
 
 
 def _gaps(track: Track) -> tuple[str, ...]:
-    """Which fields have nothing usable.
+    """Which fields have nothing usable: absent, a placeholder, or a value no rule could rescue.
 
-    A placeholder counts as a gap and a wrong-but-plausible value does not. That
-    asymmetry is deliberate: overruling "Uncle Kracker" because MusicBrainz spells
-    it "Uncle Kraker" is level 2 contradicting level 1, and ADR-010 lets level 2
-    act only where level 1 failed. Spelling is not a failure.
+    A wrong-but-plausible value is not in here, and that asymmetry is deliberate: overruling
+    "Uncle Kracker" because MusicBrainz spells it "Uncle Kraker" is level 2 contradicting level 1,
+    and ADR-010 lets level 2 act only where level 1 failed. Spelling is not a failure.
+
+    What *is* a failure is a value `is_usable` and `has_plausible_year` reject, which is the half
+    of ADR-010 level 2's sentence ("correct a value that fails normalization") this function used
+    to leave unimplemented (#57). Note what makes the correction cheap: `precedence` already
+    handed a counter artist to the folder name, so a field reaches here as "01" only when there
+    was nothing better to say — which is also when a search is worth running.
     """
 
     gaps: list[str] = []
-    if is_placeholder(track.artist):
+    if not is_usable(track.artist, kind="artist"):
         gaps.append(MetadataField.ARTIST)
-    if is_placeholder(track.album, kind="album"):
+    if not is_usable(track.album, kind="album"):
         gaps.append(MetadataField.ALBUM)
-    if not track.date:
+    if track.album_artist and is_counter(track.album_artist):
+        gaps.append(MetadataField.ALBUM_ARTIST)
+    if not has_plausible_year(track.date):
         gaps.append(MetadataField.DATE)
     return tuple(gaps)
 
@@ -206,17 +220,33 @@ def _worth_asking(gaps: Sequence[str]) -> bool:
 
 
 def _lookup(
-    track: Track, client: MusicBrainzClient, notes: list[str]
+    track: Track,
+    client: MusicBrainzClient,
+    notes: list[str],
+    *,
+    earlier: PreviousEnrichment | None = None,
 ) -> tuple[Recording | None, bool]:
-    """Ask once for one track. Returns `(answer, service_is_down)`."""
+    """Ask once for one track. Returns `(answer, service_is_down)`.
 
+    An identifier wins over a search, in either source: the tag's, because a tag is evidence
+    about this file, and otherwise the last build's, because a lookup by MBID cannot guess wrong
+    in the way a search can — and at one request per second it is also the cheaper question. The
+    second half used to be unreachable, because nothing loaded the identifier (#57).
+    """
+
+    identifier = track.musicbrainz_recording_id or (earlier.recording_id if earlier else "")
+    # A counter is the thing being corrected, not the thing being searched with. `artist:01 AND
+    # recording:"Morning"` matches a hundred releases and this client takes the first, which is
+    # how an artist named "01" becomes an artist named nothing. The album title is the evidence
+    # that survives a mis-tagged artist, so the question keeps the record and drops the artist —
+    # and asks nothing at all once only a track title would be left, because a query that names
+    # only a song matches everything (SAPRS 6.6, #57).
+    artist = track.artist if is_usable(track.artist, kind="artist") else ""
     try:
-        if track.musicbrainz_recording_id:
-            return client.recording(track.musicbrainz_recording_id), False
-        if track.title and track.artist and not is_placeholder(track.artist):
-            return client.search(
-                artist=track.artist, release=track.album or "", track=track.title
-            ), False
+        if identifier:
+            return client.recording(identifier), False
+        if track.title and not is_placeholder(track.artist) and (artist or track.album):
+            return client.search(artist=artist, release=track.album or "", track=track.title), False
         return None, False
     except MusicBrainzUnavailableError as error:
         notes.append(f"MusicBrainz unavailable: {error}")

@@ -29,8 +29,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 from types import MappingProxyType
@@ -73,7 +73,9 @@ class Reusable:
         enrichment: What MusicBrainz answered last time, so an incremental build
             with the network down is not degraded to un-enriched data (SAPRS 6.6).
         artwork: The cache entry the file's embedded image produced, so an unchanged
-            build writes zero images.
+            build writes zero images *and keeps the references it already made*. Read
+            by `apps.builder.artwork.generate`; #52 is the build that published zero
+            artwork because nothing read this field.
     """
 
     cache_key: str = ""
@@ -81,18 +83,45 @@ class Reusable:
     enrichment: PreviousEnrichment | None = None
     artwork: ArtworkAsset | None = None
 
-    def matches(self, file: DiscoveredFile, *, digest: str) -> bool:
+    def matches(self, file: DiscoveredFile, *, digest: str | None = None) -> bool:
         """True when this record describes the file as it is now.
 
-        `digest` is the tag hash the caller just computed. ADR-010's key is the
-        whole of the comparison, including the rule version, which is why a rules
-        bump reuses nothing and a `touch` reuses everything it should.
+        ADR-010's key is the whole of the comparison, including the rule version,
+        which is why a rules bump reuses nothing and a `touch` reuses nothing it
+        should not.
+
+        Args:
+            file: What discovery just saw — the path, and the two numbers a `stat()`
+                answers.
+            digest: The tag hash of the file *as it is now*, for a caller that has
+                read it. None means "not read", which is the incremental case: the
+                hash is the one part of the key that cannot be had without the read
+                the key exists to avoid (`_extract`'s docstring says so, and
+                `tag_hash` is not stored anywhere a `stat()` can reach). With None
+                the comparison is path, size, `mtime_ns` and rule version — every
+                part a directory walk can answer, and the four that make a retagged
+                file a changed file, because rewriting a tag block moves the size,
+                the `mtime`, or both.
+
+        This is the reuse test itself, not a helper for it. #52 found `Reusable.artwork`
+        loaded and never read; the same shape sat one line away in this method, which
+        `PreviousLibrary` called from no path and `_extract` did not call at all — so
+        an incremental build reused a file by *name*, and a library whose tags had
+        been corrected since the last build published the old ones (issue #52's "the
+        key rule", found while testing its artwork half).
         """
 
-        expected = (
-            f"{file.path}|{file.size_bytes}|{file.mtime_ns}|{digest}|{NORMALIZATION_RULES_VERSION}"
+        parts = _split_key(self.cache_key)
+        if parts is None:
+            return False
+        stored_path, size, mtime, tag_digest, rules = parts
+        return (
+            stored_path == str(file.path)
+            and size == str(file.size_bytes)
+            and mtime == str(file.mtime_ns)
+            and rules == str(NORMALIZATION_RULES_VERSION)
+            and (digest is None or tag_digest == digest)
         )
-        return bool(self.cache_key) and self.cache_key == expected
 
 
 class PreviousLibrary:
@@ -110,9 +139,12 @@ class PreviousLibrary:
     report.
     """
 
-    def __init__(self, entries: Mapping[str, Reusable], *, usable: bool = True) -> None:
+    def __init__(
+        self, entries: Mapping[str, Reusable], *, usable: bool = True, artwork_rows: int = 0
+    ) -> None:
         self._entries = entries
         self._usable = usable
+        self._artwork_rows = artwork_rows
 
     @classmethod
     def empty(cls) -> PreviousLibrary:
@@ -146,38 +178,55 @@ class PreviousLibrary:
             # also the answer for a database written before ADR-010 existed.
             return cls.empty()
         entries: dict[str, Reusable] = {}
+        # One statement, and the artwork arrives with the file rather than in a second pass.
+        # The earlier shape loaded `embedded_artwork_sha`, then "filled in" the rest from the
+        # `artwork` table, leaving a placeholder (`relative_path=Path("pending")`, no width)
+        # whenever the digest named no row. Nothing read the field, so nothing noticed (#52);
+        # once something does, a half-built asset is a reference to a file called `pending`.
+        # A `LEFT JOIN` cannot produce that state: either the row is there in full or the
+        # field is None, which is what "this file has no cached picture" means.
         for row in connection.execute(
-            f"SELECT f.id, f.path, f.size_bytes, f.mtime_ns, f.tag_fingerprint,"
-            f" f.rules_version, f.duration_seconds, f.embedded_artwork_sha"
+            f"SELECT f.path, f.size_bytes, f.mtime_ns, f.tag_fingerprint, f.rules_version,"
+            f" f.duration_seconds, a.kind, a.relative_path, a.width, a.height, a.sha256,"
+            f" a.source_path"
             f" FROM {Table.MUSIC_FILES} AS f"
+            f" LEFT JOIN {Table.ARTWORK} AS a ON a.sha256 = f.embedded_artwork_sha"
         ):
-            file_id, path, size, mtime, fingerprint, rules, seconds, digest = row
+            path, size, mtime, fingerprint, rules, seconds = row[:6]
+            asset = _asset(row[6:])
             entries[str(path)] = Reusable(
                 cache_key=_key(str(path), int(size), int(mtime), str(fingerprint), int(rules)),
                 probe=ProbeResult(
                     tags=MappingProxyType({}), duration=timedelta(seconds=float(seconds or 0.0))
                 ),
-                artwork=None
-                if digest is None
-                else ArtworkAsset(
-                    kind="album",
-                    relative_path=Path("pending"),
-                    width=0,
-                    height=0,
-                    sha256=str(digest),
-                ),
+                artwork=asset,
             )
-            del file_id
         _fill_tags(connection, entries)
         _fill_enrichment(connection, entries)
-        _fill_artwork(connection, entries)
-        return cls(MappingProxyType(entries))
+        _fill_identifiers(connection, entries)
+        return cls(
+            MappingProxyType(entries),
+            artwork_rows=int(
+                connection.execute(f"SELECT COUNT(*) FROM {Table.ARTWORK}").fetchone()[0]
+            ),
+        )
 
     @property
     def usable(self) -> bool:
         """False when there was no previous library worth consulting."""
 
         return self._usable
+
+    @property
+    def artwork_rows(self) -> int:
+        """How many images the previous artifact held.
+
+        Kept for the report, because it is the only number that can tell an operator that a
+        build *lost* artwork rather than never having any (#52). A library with no covers is
+        normal (SAPRS 6.7); one that had 222 and now has none is not.
+        """
+
+        return self._artwork_rows
 
     def __len__(self) -> int:
         return len(self._entries)
@@ -221,6 +270,31 @@ class Checkpoints:
         last run has to be re-read even though a record for it exists.
         """
 
+        record = self._record_for(file)
+        return None if record is None else _probe_from(record)
+
+    def artwork_for(self, file: DiscoveredFile) -> ArtworkAsset | None:
+        """The image this file's cover produced in the interrupted run, if it still fits.
+
+        #52's second half. The checkpoint answers "what did the file say?" out of a JSON
+        blob, and image bytes are not in it (SAPRS 5.6 forbids BLOBs in the artifact, and
+        a checkpoint is not the place to break that) — so what it carries instead is the
+        *reference* stage 5 resolved to, which is five fields and addresses a file already
+        on disk. Without it a resumed build reuses a probe and loses the cover, which is
+        worse than the incremental build #52 describes rather than the same thing.
+        """
+
+        record = self._record_for(file)
+        if record is None:
+            return None
+        artwork = record.get("artwork")
+        if not isinstance(artwork, dict):
+            return None
+        return _asset_from(artwork)
+
+    def _record_for(self, file: DiscoveredFile) -> Mapping[str, Any] | None:
+        """The checkpoint's answer for this file, after checking it is still this file."""
+
         if not self._enabled:
             return None
         record = self._files.get(str(file.path))
@@ -230,7 +304,7 @@ class Checkpoints:
             return None
         if int(record.get("mtime_ns", -1)) != file.mtime_ns:
             return None
-        return _probe_from(record)
+        return record
 
     def record(self, extracted: list[ExtractedFile]) -> None:
         """Store this run's probes, then write them out if that is enabled."""
@@ -247,6 +321,22 @@ class Checkpoints:
             }
         if not self._enabled:
             return
+        self._write()
+
+    def record_artwork(self, by_file: Mapping[Path, ArtworkAsset]) -> None:
+        """Attach stage 5's references to the probes already recorded (ADR-010's boundary).
+
+        A second write of the same file rather than a second file, because the checkpoint is
+        one answer to "what did we already do?" and two answers to that question is how a
+        build comes to trust the stale one.
+        """
+
+        if not self._enabled:
+            return
+        for path, asset in by_file.items():
+            record = self._files.get(str(path))
+            if record is not None:
+                record["artwork"] = _asset_dict(asset)
         self._write()
 
     def clear(self) -> None:
@@ -286,6 +376,28 @@ def _key(path: str, size: int, mtime_ns: int, digest: str, rules: int) -> str:
     return f"{path}|{size}|{mtime_ns}|{digest}|{rules}"
 
 
+#: How many fields `_key` writes, and how many `_split_key` must find to answer at all.
+_KEY_FIELDS: Final = 5
+
+
+def _split_key(key: str) -> tuple[str, str, str, str, str] | None:
+    """`_key` backwards.
+
+    Split from the right, because a path is the one field that may contain `|`: with
+    `rsplit("|", 4)` the leftmost piece keeps whatever pipes the filename had, and the
+    four that follow are unambiguous. Anything that does not split into five pieces is
+    not a key this function wrote, and answers None — which reads as "not reusable".
+    """
+
+    if not key:
+        return None
+    parts = key.rsplit("|", _KEY_FIELDS - 1)
+    if len(parts) != _KEY_FIELDS:
+        return None
+    path, size, mtime, digest, rules = parts
+    return path, size, mtime, digest, rules
+
+
 def cache_key(item: ExtractedFile) -> str:
     """The key for a file just read, in the same spelling `Reusable` compares."""
 
@@ -310,6 +422,32 @@ def _probe_from(record: Mapping[str, Any]) -> ProbeResult | None:
     )
 
 
+def _asset_dict(asset: ArtworkAsset) -> dict[str, Any]:
+    """One reference, in the shape the checkpoint file holds it in."""
+
+    return {
+        "kind": asset.kind,
+        "relative_path": asset.relative_path.as_posix(),
+        "width": asset.width,
+        "height": asset.height,
+        "sha256": asset.sha256,
+    }
+
+
+def _asset_from(record: Mapping[str, Any]) -> ArtworkAsset | None:
+    relative = record.get("relative_path")
+    digest = record.get("sha256")
+    if not isinstance(relative, str) or not isinstance(digest, str) or not digest:
+        return None
+    return ArtworkAsset(
+        kind=str(record.get("kind", "album")),
+        relative_path=Path(relative),
+        width=int(record.get("width", 0) or 0),
+        height=int(record.get("height", 0) or 0),
+        sha256=digest,
+    )
+
+
 def _fill_tags(connection: sqlite3.Connection, entries: dict[str, Reusable]) -> None:
     """Give each cached file back the tag values its song row kept."""
 
@@ -324,11 +462,10 @@ def _fill_tags(connection: sqlite3.Connection, entries: dict[str, Reusable]) -> 
             continue
         tags = dict(entry.probe.tags)
         tags.update(_canonical(values))
-        entries[str(path)] = Reusable(
-            cache_key=entry.cache_key,
-            probe=ProbeResult(tags=MappingProxyType(tags), duration=entry.probe.duration),
-            enrichment=entry.enrichment,
-            artwork=entry.artwork,
+        # `replace`, not a fresh `Reusable(...)`: a construction that lists four fields is a
+        # construction that quietly drops the fifth, and #52 is what that looks like.
+        entries[str(path)] = replace(
+            entry, probe=ProbeResult(tags=MappingProxyType(tags), duration=entry.probe.duration)
         )
 
 
@@ -356,7 +493,6 @@ def _fill_enrichment(connection: sqlite3.Connection, entries: dict[str, Reusable
         entry = entries.get(str(path))
         if entry is None or entry.probe is None or not effective:
             continue
-        earlier = entry.enrichment or PreviousEnrichment()
         attribute = {
             "artist": "artist",
             "album_artist": "artist",
@@ -365,45 +501,77 @@ def _fill_enrichment(connection: sqlite3.Connection, entries: dict[str, Reusable
         }.get(str(field))
         if attribute is None:
             continue
-        entries[str(path)] = Reusable(
-            cache_key=entry.cache_key,
-            probe=entry.probe,
-            artwork=entry.artwork,
-            enrichment=_with(earlier, **{attribute: str(effective)}),
+        entries[str(path)] = replace(
+            entry,
+            enrichment=_with(
+                entry.enrichment or PreviousEnrichment(), **{attribute: str(effective)}
+            ),
+        )
+
+
+def _fill_identifiers(connection: sqlite3.Connection, entries: dict[str, Reusable]) -> None:
+    """The MusicBrainz identifiers the last build resolved, which are not provenance rows.
+
+    `PreviousEnrichment` has named these fields since ADR-010 described the reuse path — "so a
+    resumed build looks the same recording up instead of searching for it again" — and nothing
+    ever loaded them, which is the #52 shape in a smaller coat: a documented cache entry with a
+    reader missing. They live in the rows they describe rather than in `metadata`, so a file whose
+    tags were never *repaired* still has an identifier worth keeping, and one query reads both.
+
+    An artist identifier is deliberately not here. Nothing asks the question it would answer — the
+    stages that read this map look a recording up and name a release — and `artists` has no value
+    in it to read back, because an artist MBID only ever arrived as a by-product of a track
+    lookup. Adding the column to the INSERT and the join to this query would create a field with
+    no reader, wearing the costume of a fix (#52).
+    """
+
+    rows = connection.execute(
+        f"SELECT f.path, s.musicbrainz_recording_id, al.musicbrainz_release_id"
+        f" FROM {Table.MUSIC_FILES} AS f"
+        f" JOIN {Table.SONGS} AS s ON s.music_file_id = f.id"
+        f" LEFT JOIN {Table.ALBUMS} AS al ON al.id = s.album_id"
+    )
+    for path, recording, release in rows:
+        entry = entries.get(str(path))
+        if entry is None:
+            continue
+        identifiers = {
+            name: str(value)
+            for name, value in (("recording_id", recording), ("release_id", release))
+            if value
+        }
+        if not identifiers:
+            continue
+        entries[str(path)] = replace(
+            entry,
+            enrichment=_with(entry.enrichment or PreviousEnrichment(), **identifiers),
         )
 
 
 def _with(earlier: PreviousEnrichment, **values: str) -> PreviousEnrichment:
-    from dataclasses import replace
-
     return replace(earlier, **values)
 
 
-def _fill_artwork(connection: sqlite3.Connection, entries: dict[str, Reusable]) -> None:
-    """Replace the placeholder references with the cache entries they name."""
+def _asset(row: Sequence[Any]) -> ArtworkAsset | None:
+    """One `artwork` row, as the stage that would have written it hands it back.
 
-    rows = connection.execute(
-        f"SELECT sha256, kind, relative_path, width, height FROM {Table.ARTWORK}"
-    ).fetchall()
-    by_digest = {
-        str(digest): ArtworkAsset(
-            kind=str(kind),
-            relative_path=Path(str(relative)),
-            width=int(width),
-            height=int(height),
-            sha256=str(digest),
-        )
-        for digest, kind, relative, width, height in rows
-    }
-    for path, entry in list(entries.items()):
-        if entry.artwork is None:
-            continue
-        asset = by_digest.get(entry.artwork.sha256)
-        if asset is None:
-            continue
-        entries[path] = Reusable(
-            cache_key=entry.cache_key, probe=entry.probe, enrichment=entry.enrichment, artwork=asset
-        )
+    None is the `LEFT JOIN`'s answer for a file whose stored digest names no row, which is
+    the honest state: no cached picture. The alternative was a placeholder asset with a
+    path of `pending` in it, and the only reason nobody noticed is that nothing read the
+    field (#52).
+    """
+
+    kind, relative, width, height, digest, source = row
+    if relative is None:
+        return None
+    return ArtworkAsset(
+        kind=str(kind or "album"),
+        relative_path=Path(str(relative)),
+        width=int(width or 0),
+        height=int(height or 0),
+        sha256=str(digest or ""),
+        source_path=None if source is None else Path(str(source)),
+    )
 
 
 def stored_tag_hash(tags: Mapping[str, str]) -> str:

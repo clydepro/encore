@@ -177,6 +177,10 @@ and, unlike everything else in this repository, its subject is a machine it is n
   ownership of 13.5, the removal scopes of 13.10, and the fact that `owned_roots` is *derived* from
   `removals` rather than maintained beside it. Two lists, one for planning a deletion and one for
   allowing it, is a setup where a directory appears in the first and not the second.
+- `tests/unit/test_installer_application.py` — the one definition of "the code": the
+  exclusion rule both copy dialects are derived from, what it prunes at every depth, and the
+  tree comparison #55 was missing. No recorder and no fake in this file, because the module is
+  a rule about a tree rather than an actor on a machine.
 - `tests/unit/test_installer_plan.py` — the pure planner: order, second-run emptiness,
   interrupted-install repair, drift versus recreation, all four removal-scope combinations, and
   the upgrade's stop-before-backup-before-start. `ApplianceState` is built by hand in this file,
@@ -401,6 +405,15 @@ queue→player dependency is one-way, ADR-011); `encore/services/` may not impor
 `encore.playback` (the coupling is a protocol, not a package); and `encore/search/`
 may contain no SQL in any string literal, checked by parsing literals rather than by
 grepping text, so that a docstring about `MATCH` does not trip the rule.
+
+The rule added with [#57](https://github.com/clydepro/encore/issues/57) is the network
+one: `test_the_builder_reaches_the_network_from_one_module_only` asserts that only
+`apps/builder/musicbrainz.py` imports anything able to open a socket, and that the file
+still exists. An import rule about a boundary is worth least at the moment a second
+destination appears inside it, which is what #57 is: the Cover Art Archive is a second
+host, and the obvious way to write it is a `requests.get` in the album-art stage — where
+a build with enrichment switched off would still execute it, because the stage that
+chose to ask would also be the stage that knew how.
 
 ## Test-writing conventions
 

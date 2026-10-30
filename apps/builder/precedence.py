@@ -39,7 +39,8 @@ from typing import Final
 from apps.builder.normalization import (
     collapse,
     fold,
-    is_placeholder,
+    has_plausible_year,
+    is_usable,
     parse_position,
     sort_key,
     strip_promo_markers,
@@ -239,7 +240,10 @@ def normalize_track(
     track_number, _ = _position(tags.get("track"))
     disc_number, _ = _position(tags.get("disc"))
     genre = _value(tags.get("genre"))
-    date = _value(tags.get("date"))
+    # `date: 24` is a fragment of a year rather than a year, and "24" is what the album page
+    # printed. Absent and implausible are made to arrive at the same place: a field that does not
+    # name a year holds nothing, so the artifact says NULL and level 2 is free to answer it (#57).
+    date = _value(tags.get("date")) if has_plausible_year(tags.get("date")) else ""
 
     return Track(
         extracted=extracted,
@@ -274,18 +278,20 @@ def _resolve(
 ) -> tuple[str, str]:
     """Apply levels 1, 3 and 4 to one field, in that order.
 
-    A placeholder is absence with better manners: `Various Artists` is a present,
-    non-empty tag value, and SAPRS 6.5's "empty values" rule means it must not win
-    a precedence contest it should lose.
+    A placeholder is absence with better manners: `Various Artists` is a present, non-empty tag
+    value, and SAPRS 6.5's "empty values" rule means it must not win a precedence contest it
+    should lose. `is_usable` adds the other present-but-empty case, a value that is a track
+    number wearing an artist's name (#57): the folder it was ripped from names the artist, so
+    level 3 outranks it and level 2 can still be asked.
     """
 
     tagged = _value(tag)
-    if tagged and not is_placeholder(tagged, kind=kind):
+    if tagged and is_usable(tagged, kind=kind):
         return tagged, MetadataSource.TAG
-    if hint and not is_placeholder(hint, kind=kind):
+    if hint and is_usable(hint, kind=kind):
         return hint, MetadataSource.PATH
     guessed = _value(fallback)
-    if guessed and not is_placeholder(guessed, kind=kind):
+    if guessed and is_usable(guessed, kind=kind):
         return guessed, MetadataSource.FILENAME
     # Nothing usable. The tag value, if there was one, is returned anyway: a
     # track filed under "Various Artists" is at least honest about the source, and
@@ -349,7 +355,7 @@ def _tag_artist(item: ExtractedFile) -> str | None:
 
     for key in ("album_artist", "artist"):
         value = _value(item.tags.get(key))
-        if value and not is_placeholder(value):
+        if value and is_usable(value, kind="artist"):
             return fold(value)
     return None
 

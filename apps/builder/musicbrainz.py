@@ -38,6 +38,7 @@ __all__ = [
     "MusicBrainzClient",
     "MusicBrainzUnavailableError",
     "Recording",
+    "Release",
 ]
 
 #: MusicBrainz's published policy for clients: no more than one request per
@@ -52,11 +53,32 @@ MAX_FAILURES: Final = 5
 HTTP_NOT_FOUND: Final = 404
 _YEAR_LENGTH: Final = 4
 
+#: A JSON answer is small. The limit is a backstop against a redirect to something that is
+#: not a MusicBrainz document, not a tuning knob.
+_MAX_JSON_BYTES: Final = 4 * 1024 * 1024
+
 #: Lookup paths. `inc` asks for the relations and release we need in one round
 #: trip, which at one request per second is the difference between a two-minute
 #: enrichment and a six-minute one.
 _BASE: Final = "https://musicbrainz.org/ws/2"
+
+#: The Cover Art Archive. A different host, and a different service: MusicBrainz answers "what
+#: release is this" and this answers "what does its front look like". It is here rather than in
+#: `albumart.py` because this module is the one the architecture guardrail allows to open a
+#: socket, and moving the URL would mean moving the exception.
+_COVER_BASE: Final = "https://coverartarchive.org"
 _USER_AGENT: Final = "EncoreJukebox/0.1 ( https://github.com/clydepro/encore )"
+
+#: How many release candidates one album may be offered. The archive is asked for the first
+#: candidate whose artist and title match exactly, which is why a wider list costs a request and
+#: buys nothing: a fuzzy fifth result is the wrong cover with more confidence.
+_RELEASE_CANDIDATES: Final = 5
+
+#: A cover is a picture, not a document. `front` serves the largest image the archive holds for
+#: a release, and 1200 px JPEG is under a megabyte; anything arriving many times larger is a
+#: booklet scan or a mistake, and the cache would normalize it to 640 px anyway. Read no further
+#: rather than buffer a stranger's 40 MB.
+_MAX_COVER_BYTES: Final = 8 * 1024 * 1024
 
 
 class MusicBrainzUnavailableError(RuntimeError):
@@ -85,14 +107,43 @@ class Recording:
     year: str = ""
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Release:
+    """What MusicBrainz says about one release, for the question album art asks.
+
+    Not the tracks: enrichment has `Recording` for that. This is the smaller claim — *which*
+    release is this album — and the fields are the two an exact match can be tested against.
+
+    Attributes:
+        release_id: The MBID, which is what the Cover Art Archive is addressed by.
+        title / artist: As the database spells them. `albumart` compares these against the
+            album's own artist and title, folded, and asks for a picture only when both agree.
+    """
+
+    release_id: str = ""
+    title: str = ""
+    artist: str = ""
+
+
 class MusicBrainzClient(Protocol):
-    """The enrichment lookups the pipeline makes."""
+    """The lookups the pipeline makes."""
 
     def recording(self, recording_id: str) -> Recording | None:
         """Fetch one recording by MBID, or None if the id is not in the database."""
 
     def search(self, *, artist: str, release: str, track: str) -> Recording | None:
         """Search for a recording by name, or None for no confident match."""
+
+    def releases(self, *, artist: str, album: str) -> Sequence[Release]:
+        """Candidate releases for an album, best first. Empty is a complete answer."""
+
+    def cover(self, release_id: str) -> bytes | None:
+        """The release's front image, or None for "there isn't one".
+
+        None is also the answer when the service is unreachable, from this function only:
+        a missing cover is a grey tile and an outage is a report line, and the difference
+        belongs to `releases`, which is the call that has to succeed for the id to be new.
+        """
 
     @property
     def available(self) -> bool:
@@ -111,6 +162,12 @@ class DisabledClient:
         return None
 
     def search(self, *, artist: str, release: str, track: str) -> Recording | None:  # noqa: ARG002 - the signature is the protocol
+        return None
+
+    def releases(self, *, artist: str, album: str) -> Sequence[Release]:  # noqa: ARG002
+        return ()
+
+    def cover(self, release_id: str) -> bytes | None:  # noqa: ARG002 - the signature is the protocol
         return None
 
     @property
@@ -183,7 +240,64 @@ class HttpMusicBrainzClient:
         recordings: Sequence[Any] = (payload or {}).get("recordings") or []
         return _recording_from(recordings[0]) if recordings else None
 
+    def releases(self, *, artist: str, album: str) -> Sequence[Release]:
+        """Candidate releases for an album, in the order MusicBrainz rates them.
+
+        The query is quoted and exact (`_lucene`), because this answer is about to become a
+        picture on a party screen: a search that finds the right artist's *other* album and
+        illustrates this one with it is worse than finding nothing. `albumart` still checks the
+        two names before asking for an image — this is the first of two guards, not the whole of
+        one.
+        """
+
+        query = " AND ".join(
+            part for part in (_lucene("release", album), _lucene("artist", artist)) if part
+        )
+        if not query:
+            return ()
+        payload = self._get(f"{_BASE}/release", {"query": query, "limit": str(_RELEASE_CANDIDATES)})
+        documents: Sequence[Any] = (payload or {}).get("releases") or []
+        return tuple(
+            release
+            for release in (_release_from(document) for document in documents)
+            if release is not None
+        )
+
+    def cover(self, release_id: str) -> bytes | None:
+        """The release's front image, or None.
+
+        `front` is the archive's own "largest image on the front panel", which is the one answer
+        that does not require choosing between a 250 px thumbnail and a 1400 px scan; the cache
+        resizes whatever arrives. A 404 here is ordinary — a large share of MusicBrainz releases
+        have no cover image at all — which is why this returns None rather than raising on the
+        miss, and why an unreachable archive is reported by `available` rather than by a count of
+        albums that got nothing.
+        """
+
+        if not release_id:
+            return None
+        return self._body(
+            f"{_COVER_BASE}/release/{urllib.parse.quote(release_id, safe='')}/front",
+            {},
+            limit=_MAX_COVER_BYTES,
+        )
+
     def _get(self, url: str, params: Mapping[str, str]) -> dict[str, Any] | None:
+        """One JSON GET. See `_body` for the transport and the counting."""
+
+        body = self._body(url, params)
+        if body is None:
+            return None
+        try:
+            parsed = json.loads(body)
+        except (TypeError, ValueError) as error:
+            self._failures += 1
+            raise MusicBrainzUnavailableError("malformed JSON from MusicBrainz") from error
+        return parsed if isinstance(parsed, dict) else None
+
+    def _body(
+        self, url: str, params: Mapping[str, str], *, limit: int = _MAX_JSON_BYTES
+    ) -> bytes | None:
         """One GET, rate-limited, None on a miss, `MusicBrainzUnavailableError` on a failure.
 
         A 404 is a miss and is not counted as a failure: an identifier in a tag
@@ -195,31 +309,38 @@ class HttpMusicBrainzClient:
         if not self.available:
             return None
         self._wait()
-        full = f"{url}?{urllib.parse.urlencode(params)}"
-        request = urllib.request.Request(  # noqa: S310 - `full` is `_BASE` plus a quoted path, https-only
+        full = f"{url}?{urllib.parse.urlencode(params)}" if params else url
+        request = urllib.request.Request(  # noqa: S310 - `url` is one of the two constants above, https-only
             full,
-            headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
+            headers={
+                "User-Agent": _USER_AGENT,
+                # The archive serves a different kind of thing than the web service does, and an
+                # `Accept: application/json` on an image request is how a client ends up being
+                # served a JSON description of a picture it asked for.
+                "Accept": "image/*" if url.startswith(_COVER_BASE) else "application/json",
+            },
         )
         try:
             with (self._opener or urllib.request.urlopen)(
                 request, timeout=self._timeout
             ) as response:
-                body = response.read()
+                # `limit + 1`, so "too big" is decided by a length rather than by trusting a
+                # `Content-Length` header an image host is not obliged to send.
+                body: bytes = response.read(limit + 1)
         except urllib.error.HTTPError as error:
             if error.code == HTTP_NOT_FOUND:
                 return None
             self._failures += 1
-            raise MusicBrainzUnavailableError(f"HTTP {error.code} from {_BASE}") from error
+            raise MusicBrainzUnavailableError(f"HTTP {error.code} from {url}") from error
         except (TimeoutError, urllib.error.URLError, OSError, ValueError) as error:
             self._failures += 1
-            raise MusicBrainzUnavailableError(f"cannot reach {_BASE}: {error}") from error
+            raise MusicBrainzUnavailableError(f"cannot reach {url}: {error}") from error
         self._requests += 1
-        try:
-            parsed = json.loads(body)
-        except (TypeError, ValueError) as error:
-            self._failures += 1
-            raise MusicBrainzUnavailableError("malformed JSON from MusicBrainz") from error
-        return parsed if isinstance(parsed, dict) else None
+        # An answer bigger than the promise is not a picture Encore meant to fetch: the cache
+        # would reduce it to 640 px anyway, and the way to lose a party is to hold a 40 MB body
+        # in memory to find out. None, which is "this album has no cover" as far as the report is
+        # concerned — and honest, because a host that sends that is not this host's image store.
+        return body if len(body) <= limit else None
 
     def _wait(self) -> None:
         """Space requests by at least `minimum_interval`, under the lock."""
@@ -272,6 +393,24 @@ def _recording_from(payload: Mapping[str, Any] | None) -> Recording | None:
         artist=artist,
         album=release_title,
         year=year,
+    )
+
+
+def _release_from(payload: Mapping[str, Any]) -> Release | None:
+    """One release document, as the two names and an identifier.
+
+    `artist-credit` rather than a relation, because a release's credited artist is what the
+    grouping in `library.db` was built from — the same flattening `_credit` does for a
+    recording, for the same reason.
+    """
+
+    release_id = str(payload.get("id", ""))
+    if not release_id:
+        return None
+    return Release(
+        release_id=release_id,
+        title=str(payload.get("title", "")),
+        artist=_credit(payload.get("artist-credit")),
     )
 
 
