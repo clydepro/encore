@@ -65,6 +65,62 @@ def test_the_example_states_only_what_the_defaults_already_are() -> None:
     assert stated.model_dump() == EncoreConfig().model_dump()
 
 
+# -- the Builder's policy, in the Server's file ---------------------------------------
+
+
+def test_the_builder_section_defaults_to_asking(tmp_path: Path) -> None:
+    """An absent section is a machine that enriches, not one that does not (SAPRS 6.6, #57).
+
+    The alternative was the state this replaced: enrichment reachable only by a flag typed in a
+    terminal, so every timer-built library was built with the feature off and looked, in its own
+    report, like a library that needed nothing.
+    """
+
+    config = ConfigurationService(path=written(tmp_path, document(builder=None))).config
+    assert (config.builder.musicbrainz, config.builder.album_art) == (True, True)
+
+
+def test_a_builder_section_that_says_no_is_understood(tmp_path: Path) -> None:
+    """Default-on is not mandatory-on, and the way to say so is the file that says everything else.
+
+    Asserted through `ConfigurationService` rather than through the model because the sentence an
+    operator needs is "my appliance will not phone home", and that is a claim about the loader.
+    """
+
+    config = ConfigurationService(
+        path=written(tmp_path, document(builder={"musicbrainz": False, "album_art": False}))
+    ).config
+    assert (config.builder.musicbrainz, config.builder.album_art) == (False, False)
+
+
+def test_a_builder_value_that_is_not_a_boolean_names_itself(tmp_path: Path) -> None:
+    """SAPRS 12.5: a bad file fails at startup, and says which setting is bad.
+
+    `musicbrainz: sometimes` is the mistake worth testing. `musicbrainz: yes` is not — YAML 1.1
+    reads that as the boolean True before anything Encore controls can complain — which is why
+    `examples/config.yaml` spells its booleans the way every other line in it does. The message
+    has to name the section, because a person reading it is holding a file with seven of them.
+    """
+
+    with pytest.raises(ConfigurationError, match=r"builder\.musicbrainz"):
+        ConfigurationService(
+            path=written(tmp_path, document(builder={"musicbrainz": "sometimes"}))
+        ).load()
+
+
+def test_an_unknown_key_under_builder_is_refused(tmp_path: Path) -> None:
+    """`extra="forbid"` reaches into a section the Server never reads.
+
+    A `rate_limit_seconds:` added here would otherwise be silently ignored forever, which is the
+    worst kind of configuration: the one that looks like it is working.
+    """
+
+    with pytest.raises(ConfigurationError, match=r"builder\.rate_limit_seconds"):
+        ConfigurationService(
+            path=written(tmp_path, document(builder={"rate_limit_seconds": 2}))
+        ).load()
+
+
 def test_an_empty_file_is_the_defaults(tmp_path: Path) -> None:
     assert ConfigurationService(path=written(tmp_path, {})).load() == EncoreConfig()
 

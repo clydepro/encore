@@ -82,6 +82,7 @@ def generate(
     limits: ArtworkLimits | None = None,
     *,
     previous: Mapping[Path, ArtworkAsset] | None = None,
+    network: Mapping[tuple[str, str], bytes] | None = None,
 ) -> ArtworkOutcome:
     """Write every embedded image into the cache and map files to references.
 
@@ -97,6 +98,10 @@ def generate(
             a library with **zero** artwork rows over a cache of 222 JPEGs, validated green,
             and renamed it into place — the artifact is written from scratch every run, so a
             reference this stage does not name is a reference that does not exist.
+        network: Covers fetched for an album by `albumart`, keyed the way construction keys
+            an album. Second in SAPRS 6.7's precedence: consulted only for a file that has no
+            embedded image and no carried reference, so an actual picture in the file is never
+            displaced by a picture of it from the internet.
 
     Returns:
         An `ArtworkOutcome`. A track whose image cannot be decoded is absent from
@@ -106,8 +111,8 @@ def generate(
 
     bounds = limits if limits is not None else ArtworkLimits()
     carried = previous if previous is not None else {}
+    fetched = network if network is not None else {}
     cache_dir.mkdir(parents=True, exist_ok=True)
-    store: dict[str, ArtworkAsset] = {}
     seen: dict[str, ArtworkAsset] = {}
     by_file: dict[Path, ArtworkAsset] = {}
     written = 0
@@ -117,23 +122,46 @@ def generate(
     failed = 0
     uncached = 0
 
+    # An album's picture from the archive, resolved before the file loop: 40 tracks of one
+    # release are one image, and decoding it forty times would be the slowest way to say the same
+    # thing. Only the albums that still need one are normalized at all — writing a cover that the
+    # file's own art outranks would put an unused JPEG in the cache and inflate `generated`, which
+    # #52 defined as "images written this run". `None` is remembered too, so an album whose bytes
+    # will not decode is not offered to the decoder again on track two.
+    needy = {
+        track.group_key
+        for track in tracks
+        if not track.extracted.embedded_artwork and track.path not in carried
+    }
+    remote, resolved, written, missing = _cache_fetched(
+        {key: payload for key, payload in fetched.items() if key in needy}, cache_dir, bounds
+    )
+    failed += missing
+    store: dict[str, ArtworkAsset] = {
+        asset.sha256: asset for asset in remote.values() if asset is not None
+    }
+
     for track in tracks:
         payload = track.extracted.embedded_artwork
         if not payload:
             earlier = carried.get(track.path)
-            if earlier is None:
+            if earlier is not None:
+                # Carry the reference only when the file it addresses is still there. A cache that
+                # lost its images is #51's install fault, and writing a row for a missing one would
+                # turn a loud report line into a 404 on a guest's phone.
+                if not (cache_dir / earlier.relative_path).is_file():
+                    uncached += 1
+                    empty += 1
+                    continue
+                store.setdefault(earlier.sha256, earlier)
+                by_file[track.path] = earlier
+                reused += 1
+                continue
+            asset = remote.get(track.group_key)
+            if asset is None:
                 empty += 1
                 continue
-            # Carry the reference only when the file it addresses is still there. A cache that
-            # lost its images is #51's install fault, and writing a row for a missing one would
-            # turn a loud report line into a 404 on a guest's phone.
-            if not (cache_dir / earlier.relative_path).is_file():
-                uncached += 1
-                empty += 1
-                continue
-            store.setdefault(earlier.sha256, earlier)
-            by_file[track.path] = earlier
-            reused += 1
+            by_file[track.path] = asset
             continue
         payload_digest = hashlib.sha256(payload).hexdigest()
         asset = seen.get(payload_digest)
@@ -169,6 +197,35 @@ def generate(
         failed=failed,
         uncached=uncached,
     )
+
+
+def _cache_fetched(
+    fetched: Mapping[tuple[str, str], bytes], cache_dir: Path, bounds: ArtworkLimits
+) -> tuple[dict[tuple[str, str], ArtworkAsset | None], int, int, int]:
+    """Normalize and store one image per fetched album.
+
+    Returns the album → asset map (`None` means "asked, and it cannot be used") with the three
+    counts it contributed. Separate from `generate` because it is the only part of the stage that
+    works per *album*: doing it in the file loop would decode one cover forty times, and the
+    `max_assets` cap has to be spent in a stable order for a rebuild to land on the same library
+    twice.
+    """
+
+    remote: dict[tuple[str, str], ArtworkAsset | None] = {}
+    resolved = 0
+    written = 0
+    failed = 0
+    for key, payload in sorted(fetched.items()):
+        if resolved >= bounds.max_assets:
+            break
+        asset, created = _store(payload, cache_dir, limits=bounds)
+        remote[key] = asset
+        if asset is None:
+            failed += 1
+            continue
+        resolved += 1
+        written += int(created)
+    return remote, resolved, written, failed
 
 
 def store_one(

@@ -294,6 +294,40 @@ def test_builder_does_not_import_runtime_playback() -> None:
         assert not offenders, f"{path.relative_to(PROJECT_ROOT)} couples Builder to Server"
 
 
+#: The one Builder module allowed to hold a socket (ADR-001, SAPRS 12.4).
+NETWORK_MODULE = "apps/builder/musicbrainz.py"
+
+#: Imports that mean "this file can reach another computer". `urllib` is the one that matters
+#: today; the others are listed so that adding a dependency cannot also add a boundary crossing.
+NETWORK_IMPORTS = ("urllib.request", "http.client", "httpx", "requests", "socket")
+
+
+def test_the_builder_reaches_the_network_from_one_module_only() -> None:
+    """The Builder's network rule is a file, not a habit.
+
+    ADR-001 and SAPRS 12.4 put every socket Encore can open inside
+    `apps/builder/musicbrainz.py`, which is what makes "the Server never talks to anyone" a fact
+    a reader can check rather than a promise. #57 is the pressure test: the Cover Art Archive is a
+    second destination, and the obvious way to write it is a `requests.get` in the album-art stage
+    — a network call in a module that a build with enrichment switched off is supposed to never
+    reach. Kept behind the client protocol, that stage is pure policy and its tests need no fake
+    DNS; kept in the stage, the guardrail below would have nothing left to say.
+    """
+
+    offenders: list[str] = []
+    for path in _python_files(BUILDER_ROOT):
+        if path.relative_to(PROJECT_ROOT).as_posix() == NETWORK_MODULE:
+            continue
+        reached = {name for name in _imports(path) if name.startswith(NETWORK_IMPORTS)}
+        if reached:
+            offenders.append(f"{path.relative_to(PROJECT_ROOT)}: {sorted(reached)}")
+
+    assert not offenders, "only the MusicBrainz client may open a socket: " + "; ".join(offenders)
+    # And the exception is not dead: a Builder with no client at all would pass this test by
+    # deleting the file, which is not what satisfying a guardrail means.
+    assert (PROJECT_ROOT / NETWORK_MODULE).is_file()
+
+
 INSTALLER_ROOT = "apps/installer"
 
 #: What the installer may not import. `encore.config` is allowed on purpose — one definition of

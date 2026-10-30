@@ -406,8 +406,8 @@ command as the service account — though that puts a 60 MB interpreter under
   carries the references it made before. A library that is *already* missing them
   stays missing them until a `--full` build re-reads the files, because an
   incremental one reuses what the last artifact said.
-- Every cover is a grey tile: read
-  [the artwork cache is full and the library has no covers](#the-artwork-cache-is-full-and-the-library-has-no-covers).
+- Every cover is a grey tile, on files that never had one: read
+  [half the library is grey and the files have no picture in them](#half-the-library-is-grey-and-the-files-have-no-picture-in-them).
 
 ### The artwork cache is full and the library has no covers
 
@@ -464,6 +464,79 @@ your session cookie, so `curl` without one is not the way to ask).
 
 The other number to check is `select count(*) from songs where artwork_id is not
 null`, which should be within a few percent of how many files carry a picture.
+
+### Half the library is grey and the files have no picture in them
+
+```console
+$ sudo sqlite3 /var/lib/encore/library.db \
+    'select (select count(*) from songs where artwork_id is null), count(*) from songs'
+1989|3049
+```
+
+Not the same fault as
+[the one above](#the-artwork-cache-is-full-and-the-library-has-no-covers): the
+references there are missing, and here they are correct and there is nothing to
+point at. A FLAC carries no embedded image — the format has no place for one — and
+until
+[#57](https://github.com/clydepro/encore/issues/57) the Builder knew one source of
+artwork, SAPRS 6.7's "prefer embedded artwork", and no second. So a library of it
+published 463 grey tiles out of 703 albums and reported nothing unusual, because a
+missing picture is legal.
+
+The order is now: the file's own image, then the release's front cover from the
+Cover Art Archive, then nothing. Ask `Cover art:` in the report which half you are
+looking at:
+
+```console
+$ sudo encore-builder
+  MusicBrainz        enabled, 61 lookups, 97 fields repaired
+  Cover art          380 of 463 albums without embedded art, 926 requests, 79 not named exactly
+```
+
+- `off` — the build was told not to ask, by `builder.album_art: false`,
+  `--no-album-art`, `--offline`, or by `builder.musicbrainz: false`, which takes the
+  archive with it (naming a release is a MusicBrainz question).
+- `0 of 463` with requests counted — asked and refused. Those releases have no front
+  image at the archive, which is ordinary and not a fault of yours or of the network.
+- `79 not named exactly` — the policy, working. A cover is attached only when both the
+  artist and the album title match one release exactly, differing at most in case and
+  punctuation. A near match is refused, because an album illustrated with someone
+  else's sleeve is worse than a grey tile: one is a gap and the other is a lie about
+  where something is.
+
+Nothing to do but rebuild, and the tiles fill in as the albums are identified. Expect
+roughly one second per request, so a first pass over 463 albums is a few minutes; the
+second pass costs half as much per album, because the identifier found the first time
+is stored on the album row. Where #52 applies — an unchanged file whose artwork the
+last build already resolved — the album is not asked about at all, and the line reads
+`0 of 1 albums without embedded art`.
+
+### An artist named 01, or a release year of 24
+
+```console
+$ sudo sqlite3 /var/lib/encore/library.db "select name from artists where name glob '[0-9]*'"
+01
+$ sudo sqlite3 /var/lib/encore/library.db "select distinct release_date from albums"
+24
+```
+
+A rip tool writing the track number into the artist field, and a year written as two
+digits of itself. Both are *present*, and until #57 present was read as correct: the
+enrichment stage asked whether a field was empty and never whether it could be true.
+Sixty files of one album grouped under an artist called "01" is the same effect as a
+library growing a 400-track artist named Unknown, and 24 is a date no record was
+released on, printed as 24 on the album page.
+
+An implausible value is now treated as the gap it is, and it is corrected from
+wherever the answer actually is: the directory the file sits in, if that directory
+names an artist, and otherwise MusicBrainz. If neither can, the tag is kept — the
+Builder questions a value that looks wrong, it does not throw one away, and a band
+named 1776 keeps the name.
+
+One thing to know: this is a normalization change, and the rules version is stored with
+every file precisely so that a changed rule invalidates the old conclusions
+(ADR-010). The first build after upgrading re-reads the whole library, its report says
+`Build: full`, and every build after that is incremental again.
 
 ## Diagnostics worth collecting
 

@@ -203,6 +203,7 @@ class PreviousLibrary:
             )
         _fill_tags(connection, entries)
         _fill_enrichment(connection, entries)
+        _fill_identifiers(connection, entries)
         return cls(
             MappingProxyType(entries),
             artwork_rows=int(
@@ -505,6 +506,45 @@ def _fill_enrichment(connection: sqlite3.Connection, entries: dict[str, Reusable
             enrichment=_with(
                 entry.enrichment or PreviousEnrichment(), **{attribute: str(effective)}
             ),
+        )
+
+
+def _fill_identifiers(connection: sqlite3.Connection, entries: dict[str, Reusable]) -> None:
+    """The MusicBrainz identifiers the last build resolved, which are not provenance rows.
+
+    `PreviousEnrichment` has named these fields since ADR-010 described the reuse path — "so a
+    resumed build looks the same recording up instead of searching for it again" — and nothing
+    ever loaded them, which is the #52 shape in a smaller coat: a documented cache entry with a
+    reader missing. They live in the rows they describe rather than in `metadata`, so a file whose
+    tags were never *repaired* still has an identifier worth keeping, and one query reads both.
+
+    An artist identifier is deliberately not here. Nothing asks the question it would answer — the
+    stages that read this map look a recording up and name a release — and `artists` has no value
+    in it to read back, because an artist MBID only ever arrived as a by-product of a track
+    lookup. Adding the column to the INSERT and the join to this query would create a field with
+    no reader, wearing the costume of a fix (#52).
+    """
+
+    rows = connection.execute(
+        f"SELECT f.path, s.musicbrainz_recording_id, al.musicbrainz_release_id"
+        f" FROM {Table.MUSIC_FILES} AS f"
+        f" JOIN {Table.SONGS} AS s ON s.music_file_id = f.id"
+        f" LEFT JOIN {Table.ALBUMS} AS al ON al.id = s.album_id"
+    )
+    for path, recording, release in rows:
+        entry = entries.get(str(path))
+        if entry is None:
+            continue
+        identifiers = {
+            name: str(value)
+            for name, value in (("recording_id", recording), ("release_id", release))
+            if value
+        }
+        if not identifiers:
+            continue
+        entries[str(path)] = replace(
+            entry,
+            enrichment=_with(entry.enrichment or PreviousEnrichment(), **identifiers),
         )
 
 

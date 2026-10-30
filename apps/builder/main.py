@@ -69,8 +69,22 @@ def parse(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--musicbrainz",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="fill gaps from MusicBrainz for this run (default: builder.musicbrainz)",
+    )
+    parser.add_argument(
+        "--album-art",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="ask the Cover Art Archive about albums with no embedded image "
+        "(default: builder.album_art; needs MusicBrainz)",
+    )
+    parser.add_argument(
+        "--offline",
         action="store_true",
-        help="fill missing metadata from MusicBrainz (optional, rate-limited, off by default)",
+        help="open no socket, whatever the configuration says; what an earlier build learned "
+        "is kept",
     )
     parser.add_argument(
         "--max-artwork",
@@ -140,6 +154,11 @@ def _options(arguments: argparse.Namespace) -> tuple[BuildOptions, EncoreConfig]
 
     config = ConfigurationService(arguments.config).config
     paths = config.paths
+    builder = config.builder
+    # Three states on the command line and two in the file: a flag that was not given is not a
+    # `false`, it is the machine's own policy. `--offline` is the exception, because it is a fact
+    # about this afternoon's network rather than about this library, and it wins by turning both
+    # questions into the same answer — ask nothing, keep what the last build worked out.
     overrides = {
         "music_dir": arguments.music_dir,
         "library_db": arguments.library,
@@ -163,11 +182,25 @@ def _options(arguments: argparse.Namespace) -> tuple[BuildOptions, EncoreConfig]
             artwork_dir=Path(chosen["artwork_dir"]).resolve(),
             temp_dir=Path(chosen["temp_dir"]).resolve(),
             incremental=not arguments.full,
-            enrich=bool(arguments.musicbrainz),
+            enrich=False
+            if arguments.offline
+            else _asked(arguments.musicbrainz, builder.musicbrainz),
+            album_art=False
+            if arguments.offline
+            else _asked(arguments.album_art, builder.album_art),
             publish=not arguments.dry_run,
         ),
         config,
     )
+
+
+def _asked(flag: bool | None, configured: bool) -> bool:
+    """One flag's three states resolved against one configuration value.
+
+    `None` means the operator did not say, which is the case configuration exists for.
+    """
+
+    return configured if flag is None else flag
 
 
 def _with(options: BuildOptions, limits: ArtworkLimits) -> BuildOptions:

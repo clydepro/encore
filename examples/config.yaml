@@ -70,3 +70,19 @@ admin:
   # Sessions expire; the secret comes from the environment or system store,
   # never from this file (SAPRS 12.6).
   session_minutes: 60
+
+builder:
+  # Read by `encore-builder` only (ADR-010). The Server never opens a connection
+  # because of anything in this section, and no request-handler reads it.
+  #
+  # Fill a gap, or correct a value that no normalization rule could rescue, from
+  # MusicBrainz. On by default: the decision belongs to the machine rather than to
+  # whichever terminal ran the build last (SAPRS 6.6, #57). One request per second,
+  # so expect roughly a minute per hundred files that have a hole in them, and
+  # almost none on a rebuild where nothing changed.
+  musicbrainz: true
+  # An album whose files carry no embedded picture gets the Cover Art Archive's
+  # front image — and only when the release can be named exactly, because a wrong
+  # cover on a party screen is worse than a grey tile (SAPRS 6.7, ADR-016). Needs
+  # the lookup above; `musicbrainz: false` turns this off whatever is here.
+  album_art: true

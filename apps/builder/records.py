@@ -26,6 +26,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from apps.builder.normalization import fold
 from encore.domain.media import AudioFormat
 from encore.repositories.contract import MetadataField
 
@@ -213,6 +214,17 @@ class Track:
         """True when this track can become a row (ADR-010: reported, not fatal)."""
 
         return not self.missing_fields
+
+    @property
+    def group_key(self) -> tuple[str, str]:
+        """The `(artist, album)` pair this track files under — ADR-010's grouping rule.
+
+        A method on the record rather than a helper in construction, because the album-art stage
+        has to group albums the same way construction will, and a second copy of a grouping rule
+        is how one stage finds an album and the other cannot.
+        """
+
+        return (fold(self.artist), fold(self.album or ""))
 
     def with_field(self, name: str, value: str, source: str, *, repaired: bool = True) -> Track:
         """Return a copy with one field replaced and its provenance updated.

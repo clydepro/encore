@@ -406,6 +406,15 @@ queue→player dependency is one-way, ADR-011); `encore/services/` may not impor
 may contain no SQL in any string literal, checked by parsing literals rather than by
 grepping text, so that a docstring about `MATCH` does not trip the rule.
 
+The rule added with [#57](https://github.com/clydepro/encore/issues/57) is the network
+one: `test_the_builder_reaches_the_network_from_one_module_only` asserts that only
+`apps/builder/musicbrainz.py` imports anything able to open a socket, and that the file
+still exists. An import rule about a boundary is worth least at the moment a second
+destination appears inside it, which is what #57 is: the Cover Art Archive is a second
+host, and the obvious way to write it is a `requests.get` in the album-art stage — where
+a build with enrichment switched off would still execute it, because the stage that
+chose to ask would also be the stage that knew how.
+
 ## Test-writing conventions
 
 - `assert` on behaviour, never on log strings or private attributes.

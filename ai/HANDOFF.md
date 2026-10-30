@@ -10,10 +10,13 @@ State as of this writing: **Phases 1–6 are merged (#20, #22, #24, #26, #27, #3
 broke five times on the commands in its own documentation — #38, #41, #43, #44, #46, all fixed —
 a sixth time on the hardware it was installed on (#48, below), and a seventh time on the artifact
 that hardware asks the Builder to produce (#51, merged as #54), whose verification turned up two
-more still open (#52, #55). The dependency-alert chore
+more (#52, #55) — both fixed on this branch, together with
+[#57](https://github.com/clydepro/encore/issues/57), which those two found: the grey tiles had a
+third cause, and the feature that was supposed to have prevented them had never been switched on.
+The dependency-alert chore
 [#40](https://github.com/clydepro/encore/pull/40) has merged, closing
 [#39](https://github.com/clydepro/encore/issues/39), so the planned work is milestone 16 and the
-unplanned work is those two issues.** The
+unplanned work is what hardware keeps turning up.** The
 appliance now installs itself:
 `sudo ENCORE_ADMIN_PASSWORD='…' ./scripts/encore-install install`, from a clone, on a machine that
 had nothing on it a minute before. A guest scans a code printed by the appliance itself, an
@@ -54,8 +57,8 @@ is derived, that has to be the byte string the consumer will compare.** The `sha
 `relative_path` are what the Server, the incremental cache and a copy of `library.db` between two
 machines all compare; the file's tag block is not, and was never going to be.
 
-Verifying that on hardware turned up two more, both open, and both are the same sentence about a
-different layer. [#52](https://github.com/clydepro/encore/issues/52): an *incremental* rebuild — the
+Verifying that on hardware turned up two more, and both are the same sentence about a different
+layer. [#52](https://github.com/clydepro/encore/issues/52): an *incremental* rebuild — the
 default, and what a timer runs — publishes a library with zero artwork references, because
 `Reusable.artwork` is loaded from the previous library, documented in its own words ("so an
 unchanged build writes zero images"), and read by nothing. A cache field with a loader and no
@@ -66,9 +69,29 @@ is invisible to the planner — sixteen files behind on this box, and a plan of 
 in it. #46 was a check that asked about the file when the answer belonged to the user; this is a check
 that asked about the manifest when the answer belonged to the tree.
 
-1583 tests pass in the standard gate (1639 collected with the slow suites), 93.7% coverage of
-`encore/`, `ruff` and strict `mypy` clean across `encore/`, `apps/`, `tests/` and `tools/`. Two new
-ADRs (014, 015), and a regression file for every numbered failure above.
+**#57 is what happened after #52 was fixed**, and it is the first finding in this list that was not a
+broken mechanism. The tiles were still grey, the artist column still had an "01" in it, and the
+reason was that three things which had all been built were each waiting for someone to ask:
+enrichment, which had no configuration key and therefore ran only in the terminal where somebody
+typed `--musicbrainz` — which is to say never, on a machine whose builds are run by a timer;
+`_gaps`, which asked whether a field was *empty* and so believed `artist: 01` and `date: 24` the way
+an `is_placeholder` check believes `Various Artists`; and SAPRS 6.7, whose one artwork rule is right
+about M4A and silent about FLAC, so 463 albums were grey in a library where nothing in the build had
+ever been able to make a picture. ADR-016 is the decision that names the second source — exact
+matches only, both folded names, because a wrong cover is a lie about where something is and a grey
+tile is only a gap.
+
+Two of #57's parts are that same cache-with-no-reader bug class again, and one of them is in the
+file that fixed #52: `albums.musicbrainz_release_id` was in the schema and in no INSERT, and
+`PreviousEnrichment.release_id` was in a dataclass, documented, and in no loader, so an album
+identified in March was searched for again in October. The third is worse than a bug, because it was
+shaped like a feature: the reuse path sat inside `if options.enrich`, so `--offline` — the option an
+operator chooses *because* they care about the library — rewrote every previously enriched value back
+to the tags. Asking nothing is now free and forgetting is not.
+
+1657 tests pass in the standard gate, 93.7% coverage of `encore/`, `ruff` and strict `mypy` clean
+across `encore/`, `apps/`, `tests/` and `tools/`. Three new ADRs (014, 015, 016), and a regression
+file for every numbered failure above.
 
 **Nothing here has met a Raspberry Pi.** The sentence was written in the last handoff about the
 guest interface and about the administrative interface; now it is about the install itself, and it

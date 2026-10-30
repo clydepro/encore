@@ -151,6 +151,7 @@ class BuildReport:
     incremental: bool = False
     reused: int = 0
     musicbrainz: str = "disabled"
+    album_art: str = "off"
 
     @property
     def skip_count(self) -> int:
@@ -220,6 +221,7 @@ class BuildReport:
             "",
             f"  {self.accounting}",
             f"  MusicBrainz: {self.musicbrainz}",
+            f"  Cover art:   {self.album_art}",
             f"  Build: {'incremental' if self.incremental else 'full'}, {self.duration_seconds:.1f}s",
             "",
             "Validation",
@@ -275,6 +277,7 @@ class BuildReport:
             "incremental": self.incremental,
             "reused": self.reused,
             "musicbrainz": self.musicbrainz,
+            "album_art": self.album_art,
         }
         return json.dumps(payload, indent=2, sort_keys=True)
 

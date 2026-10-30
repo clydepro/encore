@@ -80,7 +80,10 @@ class MediaSpec:
 
     title: str
     artist: str
-    album: str
+    # Optional like the rest: `None` writes no ALBUM frame at all, which is a different fixture
+    # from an empty one, and the case #57's cover-art stage turns on — an album the tags never
+    # named is a gap for MusicBrainz and is not a question anyone can ask the Cover Art Archive.
+    album: str | None
     track_number: int = 1
     duration_seconds: float = 1.0
     fmt: str = "mp3"

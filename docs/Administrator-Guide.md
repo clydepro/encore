@@ -180,9 +180,11 @@ encore-builder --music-dir /mnt/library --dry-run
 ```
 
 What it does, in order: discover the playable files, read their tags, normalize
-and resolve conflicts by precedence, repair gaps from MusicBrainz (only with
-`--musicbrainz`), write the artwork cache, build a scratch database, validate
-it, and publish it by an atomic rename. Nothing is moved, renamed or deleted in
+and resolve conflicts by precedence, repair gaps and implausible values from
+MusicBrainz (on by default, rate-limited, switchable in `config.yaml`), ask the
+Cover Art Archive for the cover of any album whose files carry no picture of
+their own, write the artwork cache, build a scratch database, validate it, and
+publish it by an atomic rename. Nothing is moved, renamed or deleted in
 your music directory, ever.
 
 Flags worth knowing:
@@ -193,9 +195,45 @@ Flags worth knowing:
 | `--library PATH` | override where the artifact is published |
 | `--full` | ignore the previous build and rebuild from scratch |
 | `--dry-run` | build and validate, publish nothing |
-| `--musicbrainz` | fill gaps from MusicBrainz (off by default, rate-limited) |
+| `--musicbrainz`, `--no-musicbrainz` | ask MusicBrainz, or do not, this run (default: `builder.musicbrainz`) |
+| `--album-art`, `--no-album-art` | ask the Cover Art Archive, or do not (default: `builder.album_art`; needs MusicBrainz) |
+| `--offline` | open no socket whatever the file says; what an earlier build learned is kept |
 | `--max-artwork N` | cap distinct images written (`0` skips the cache entirely) |
 | `--json` | machine-readable report |
+
+A flag that is not given is not a `false`: it leaves the decision to the file.
+The two settings live under a `builder:` section, and both are on:
+
+```yaml
+builder:
+  musicbrainz: true   # fill a gap, or correct a value no rule could rescue
+  album_art: true     # the release's own cover, for an album with no picture in it
+```
+
+**What asking costs.** One request per second, which is MusicBrainz's published
+policy and the reason this feature was slow to be worth turning on: a first build
+of 3,000 files with holes in them takes about two minutes longer than the same
+build without them, and a rebuild where nothing changed asks almost nothing. An
+album that has never been identified costs two requests — name the release, fetch
+the picture; once it has been identified the same album costs one, forever,
+because the release's identifier is stored on the album row. The Server is not
+involved in any of this: it never opens a connection because of anything in this
+section, and it does not read it (ADR-001, ADR-016).
+
+**What asking sends.** The artist and album names from your own files, to
+musicbrainz.org and coverartarchive.org, which is what a MusicBrainz lookup
+structurally is. An appliance on a network that should not have that conversation
+sets `musicbrainz: false`, and loses nothing — an offline build keeps every value
+an earlier build corrected, which is the part that used to be broken (#57).
+
+**The artwork a library ends up with** is chosen in one order, per album: an image
+embedded in the files themselves, then the release's front cover from the Cover Art
+Archive, then nothing — a grey tile. The archive is asked only when both the artist
+and the album title match a release exactly (case and punctuation may differ); a
+near match is refused, because a wrong cover is a lie about where something is and a
+missing one is only a gap. `Cover art: 380 of 463 albums without embedded art, 926
+requests, 79 not named exactly` is that policy in one line, and the last number is
+the policy working rather than failing.
 
 It prints a report and exits. The exit code is meant to be read by a cron
 wrapper as well as by you:
@@ -226,11 +264,22 @@ harmless, and `remove --purge-data` is the only command that deletes artwork.
 
 **Corrections the Builder makes and reports.** Trailing promo markers
 (`-ADVANCE`, `[Clean_Version]`), tagging-tool prefixes on artist names
-(`AlbumWrap - Kenny Chesney`), whitespace and control characters in tags, and
-track numbers written as `05` or `5/12`. Every change is recorded per field,
+(`AlbumWrap - Kenny Chesney`), whitespace and control characters in tags, track
+numbers written as `05` or `5/12`, and — since #57 — a value that is present and
+cannot be true: an artist of `01`, which is a rip tool writing the track number
+into the artist field, and a release date of `24`. Those last two are corrected
+from the directory the file sits in when that directory names an artist, and from
+MusicBrainz otherwise; when neither can, the tag is kept, because a value that
+looks wrong and a value that is missing are not the same problem and should not
+be solved the same way. Every change is recorded per field,
 with the file's original value beside it, so an artist that looks wrong on
 telephone can be traced to the tag that said it. Ask with
 `--json` and read `skip_details` and the provenance rows in the database.
+
+The first build after an upgrade that changed these rules re-reads every file. The
+rules are stored with the files they were applied to, so reusing an old conclusion
+would be the bug rather than the cache; the rebuild is a one-time cost, and the
+report's `Build: full` line says which one it was.
 
 **Files it cannot use are counted, not listed.** A library with 188 DRM
 `.m4p` files reports `188 unsupported container: .m4p` on one line; the paths
@@ -446,6 +495,13 @@ resuming and stopping are all announced.
   the trade ADR-013 records rather than hides: on the LAN the exposure to defend is
   a cross-site request from a device that is already inside, and `Strict` plus the
   origin check is what answers it.
+- The Server opens no connection to anything. The Builder does, by default: it asks
+  musicbrainz.org and coverartarchive.org about the artist and album names already in
+  your files, at one request per second, and that is the whole of its network use
+  (ADR-001, ADR-016). It is a build-time program that terminates, so the machine at a
+  party is not the machine making the calls. `builder.musicbrainz: false` is a box
+  that should not have that conversation and `--offline` is this afternoon; either
+  way an offline build keeps what an online one learned.
 - Failed sign-ins are counted per appliance, never per address, and nothing about
   who was connecting is kept. The one timestamp recorded is the last successful
   sign-in.
