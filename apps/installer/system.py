@@ -32,6 +32,7 @@ from typing import Protocol
 
 import httpx
 
+from apps.installer.application import Diff, difference, manifest
 from apps.installer.layout import AUDIO_GROUP, Layout
 
 __all__ = [
@@ -474,6 +475,15 @@ class Machine(Protocol):
 
     def read(self, path: Path) -> str | None: ...
 
+    def tree(self, root: Path) -> Mapping[str, str]:
+        """Content identities for every file a copy of `root` would carry (#55, SAPRS 13.9).
+
+        Digests rather than timestamps, because the question is "is this the same code", and a
+        `git pull` answers it without changing anything a `stat()` reports. The walk, and the
+        list of names that are not the code, belong to `application.py`.
+        """
+        ...
+
     def disk_free(self, path: Path) -> int: ...
 
     def port_free(self, host: str, port: int) -> bool: ...
@@ -575,6 +585,11 @@ class RealMachine:
             return path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return None
+
+    def tree(self, root: Path) -> Mapping[str, str]:
+        """`application.manifest`, which is the whole of the answer on a real filesystem."""
+
+        return manifest(root)
 
     def disk_free(self, path: Path) -> int:
         """Bytes free at `path`, walking up to the nearest existing ancestor.
@@ -720,6 +735,9 @@ class ApplianceState:
     # directory themselves — and an installer that assumed it was the only writer would then
     # skip the dependency update that was the whole point of the upgrade.
     application_matches: bool = False
+    # How far from matching, when it does not: the counts a report names, so "the application is
+    # two releases behind" is a number an operator can act on rather than an adjective (#55).
+    application_drift: Diff = field(default_factory=Diff)
     environment_matches: bool = False
     # Whether the environment that is there has an entry point in it. Separate from
     # `environment_matches` because the two fail differently: a stamp that disagrees with the
@@ -784,7 +802,7 @@ def observe(
     probe = http if http is not None else LiveHttpProbe()
     staged = layout.staged
     service = machine.service(SERVICE_NAME)
-    code_matches, environment_matches = _source_matches(machine, layout, source)
+    drift, environment_matches = _source_matches(machine, layout, source)
     runnable = machine.stat(staged(f"{layout.venv}/bin/encore-server")).exists
     interpreter, blocker = _interpreter(machine, layout, staged)
     runtime_db = f"{layout.state}/runtime.db"
@@ -821,7 +839,8 @@ def observe(
             if service.active
             else None
         ),
-        application_matches=code_matches,
+        application_matches=drift.identical,
+        application_drift=drift,
         environment_matches=environment_matches,
         environment_runnable=runnable if source is not None else True,
         interpreter=interpreter,
@@ -865,25 +884,28 @@ def _interpreter(
     return interpreter, interpreter_blocker(machine, interpreter, account)
 
 
-def _source_matches(machine: Machine, layout: Layout, source: Path | None) -> tuple[bool, bool]:
-    """Whether the code and the environment already are what is being offered.
+def _source_matches(machine: Machine, layout: Layout, source: Path | None) -> tuple[Diff, bool]:
+    """How far the installed trees are from the ones being offered.
 
-    Two content comparisons rather than a version query, because the two things that change
-    between releases are the files and the lockfile, and both are readable without running
-    anything. `uv.lock` is what the stamp inside the venv is matched against, so an operator
-    who pulled a new release by hand still gets the dependency sync on the next upgrade.
+    The code question is asked of the **trees**, file by file, and not of `pyproject.toml`.
+    #55 is the whole of the reason: the comparison was one manifest read on each side, and a
+    release that changes only Python — every bug fix this project has shipped since the
+    installer did — changes no byte of it. Sixteen source files differed on an appliance two
+    releases behind, the plan saw four steps and none of them was a copy, and #51 reached that
+    machine only because somebody rsynced it by hand.
+
+    The environment question stays a comparison of one file's content, because that is what it
+    is about: `uv.lock` is what the stamp inside the venv is matched against, so an operator who
+    pulled a new release by hand still gets the dependency sync on the next upgrade.
     """
 
     if source is None:
-        return False, False
+        return Diff(), False
     application = layout.staged(layout.application)
-    offered = machine.read(source / "pyproject.toml")
-    installed = machine.read(application / "pyproject.toml")
-    present = machine.stat(application / "encore" / "__init__.py").exists
-    code_matches = bool(offered) and offered == installed and present
+    drift = difference(machine.tree(source), machine.tree(application))
     lock = machine.read(source / "uv.lock")
     stamp = machine.read(layout.staged(f"{layout.venv}/.encore-lock"))
-    return code_matches, code_matches and bool(lock) and stamp == lock
+    return drift, drift.identical and bool(lock) and stamp == lock
 
 
 def _looks_ipv4(host: str) -> bool:

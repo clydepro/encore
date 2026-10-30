@@ -505,6 +505,52 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Fixed
 
+- `sudo encore-install upgrade` decided it had nothing to install by reading one file,
+  so an appliance two merged pull requests behind planned four steps, copied nothing
+  and reported success (#55). `_source_matches` compared `pyproject.toml` in the
+  checkout against `pyproject.toml` in `/opt/encore/application`; a release that changes
+  only Python changes no byte of a manifest, and every release this project has shipped
+  since the installer did exactly that. Measured on the hardware where it was found:
+  seven files differing under `encore/`, nine under `apps/` — one of them
+  `encore/playback/fault.py`, which was not on the appliance at all, because it is
+  #48's — and `diff -q` on the two manifests answering `identical`. `install` used the
+  same predicate, so re-running the documented first command was equally blind, and no
+  line of the acceptance list could have caught it: the question had never been asked
+  of the filesystem. That is #46's shape again — a check that is true about the wrong
+  subject, printed over fifteen other true things.
+
+  `apps/installer/application.py` is now the one place that says what "the code" means,
+  because three modules had to agree about it and only one of them had a list: the
+  copier, which had *two* hand-maintained exclusion lists in two glob dialects
+  (`shutil.ignore_patterns` and `rsync --exclude=`, 20 entries each, 12 of the rsync
+  ones carrying a trailing slash the shutil ones did not — which is the same rule
+  written twice, and the reason it drifts); the observer, which had no list because it
+  was not looking at the tree; and the planner, which said in its own docstring that
+  "the files in `application/` match the ones being offered" while a branch three lines
+  below asked about one file. One tuple, both dialects derived from it, one walk that
+  digests `size:sha256` per file, and `observe()` answers the sentence the docstring
+  claims it answers. The count rides along in `ApplianceState.application_drift` so a
+  plan line and a check can name it — `16 differ of 396 files: apps/builder/artwork.py,
+  encore/playback/fault.py …` in a dry run — and `verify` grew the acceptance-list line
+  #46 never had, WARN on `install`/`upgrade` and FAIL on `verify`, which is #43's
+  distinction applied to a new observation rather than a new rule.
+
+  Proving the fix surfaced a second disagreement, this one between the copier and the
+  observer rather than inside the observer: rsync's default is to skip a file whose size
+  and `mtime` agree, and it compares `mtime` at one-second granularity. A source file
+  rewritten in the same second as the last copy is "already transferred" to rsync and a
+  difference to a byte comparison, which is #55 arriving from the other direction — a
+  report ending in `nothing to do` about a file it did not copy. The copy now passes
+  `--checksum`, so the copier and the observer read the same property; `--ignore-times`
+  would have been correct and would have transferred all 4 MB every run.
+  Regression: `tests/regression/test_issue_55_application_tree.py` (9), which stages a
+  tree, copies it for real, changes one `.py` file and no manifest, and asserts both
+  that the second run copies and that an unchanged run still prints
+  `nothing to do — the machine already matches this request`; and
+  `tests/unit/test_installer_application.py` (11) for the exclusion rule itself,
+  including the sharp edge of pruning by path component: `build`, `dist` and `site` are
+  excluded at every depth, so a future `encore/static/dist/` would install a page with
+  no CSS in it and every installer test would stay green. That one is a test now.
 - An incremental rebuild — the default, and what you get when you add three albums —
   published a library with **no artwork references in it** (#52). It did not crash,
   it validated, it printed `Artwork 0` and renamed itself into place over a library

@@ -194,6 +194,58 @@ idempotence, which is a result), this command asks questions (`verify`), or noth
 was planned because the machine failed a check first. The report now distinguishes
 them, in text and in `--json` as `"planning": "planned" | "not-asked" | "blocked"`.
 
+### The upgrade said nothing to do, and the machine is behind
+
+`nothing to do` is an observation, and until
+[#55](https://github.com/clydepro/encore/issues/55) it was an observation of one file:
+`pyproject.toml` in the checkout against `pyproject.toml` in
+`/opt/encore/application`. On the machine it was found on, sixteen source files
+were different — seven under `encore/`, nine under `apps/`, among them
+`encore/playback/fault.py`, which was not on the appliance at all — and the two
+manifests were identical, because a release that fixes bugs has no reason to touch
+either of them:
+
+```console
+$ sudo diff -rq --exclude=__pycache__ /opt/encore/application/encore ./encore | wc -l
+7
+$ sudo diff -q /opt/encore/application/pyproject.toml ./pyproject.toml && echo identical
+identical
+```
+
+Four planned steps, none of them a copy, and the service restarted onto the code it
+already had. The comparison is of the trees now, file by file, by content, under the
+same exclusion list a copy uses — `.venv`, the caches, `__pycache__`, and any
+`library.db` sitting in a development checkout, which is the file that must not travel
+(ADR-006 allows one library per machine, in `/var/lib/encore`).
+
+Two commands read the answer, and they are not the same sentence:
+
+```bash
+sudo encore-install upgrade --dry-run   # the plan: "16 differ of 396 files: …"
+sudo encore-install verify              # FAIL  application: … is not this checkout
+```
+
+The rehearsal is where the count is worth reading. A real `upgrade` plans the copy it
+just found, so by the time it prints its acceptance list the line says `ok` — the run
+repaired the thing it was reporting on, which is the same rule #43 established for the
+service manager. `verify` keeps it a failure, because `verify` has no repair in its
+future and an appliance running code nobody installed from is not "fine".
+
+Two cases that still say `nothing to do`, correctly:
+
+- **You cloned straight into `/opt/encore/application` and pulled there.** Nothing is
+  copied, because there is nothing to copy from, and the run prints a note saying the
+  checkout and the application are the same directory. The dependency step still does
+  its work: that question is asked of `uv.lock` against the stamp inside the venv, and
+  a `git pull` changes the lockfile without changing where the code lives.
+- **A file the exclusions name.** `application/__pycache__` is neither a difference nor
+  a leftover, because the comparison never sees it — and `rsync --delete-excluded`
+  removes it anyway, which is the point: a stale `.pyc` is importable bytecode for a
+  module the release deleted.
+
+The whole tree is about 4 MB and 400 files, so an upgrade reads both copies of it to
+answer the question; on a Pi 4 that is a second, next to the `uv sync` it precedes.
+
 ### A rehearsal did not register the service
 
 `--root` installs into a tree, and `systemctl` cannot be pointed at a tree — it

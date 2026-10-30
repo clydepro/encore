@@ -177,6 +177,10 @@ and, unlike everything else in this repository, its subject is a machine it is n
   ownership of 13.5, the removal scopes of 13.10, and the fact that `owned_roots` is *derived* from
   `removals` rather than maintained beside it. Two lists, one for planning a deletion and one for
   allowing it, is a setup where a directory appears in the first and not the second.
+- `tests/unit/test_installer_application.py` — the one definition of "the code": the
+  exclusion rule both copy dialects are derived from, what it prunes at every depth, and the
+  tree comparison #55 was missing. No recorder and no fake in this file, because the module is
+  a rule about a tree rather than an actor on a machine.
 - `tests/unit/test_installer_plan.py` — the pure planner: order, second-run emptiness,
   interrupted-install repair, drift versus recreation, all four removal-scope combinations, and
   the upgrade's stop-before-backup-before-start. `ApplianceState` is built by hand in this file,

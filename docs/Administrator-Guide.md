@@ -67,7 +67,9 @@ no unit is a first install rather than a failed prerequisite (#43).
 Flags worth knowing:
 
 - `--dry-run` prints the plan and changes nothing. `remove --dry-run` does not
-  need `--yes`, because describing a deletion is not one.
+  need `--yes`, because describing a deletion is not one. An `upgrade` rehearsal
+  names the files it would copy, so "is this machine behind?" is one command and
+  no password.
 - `--root /prefix` rehearses the whole install into a self-contained tree. Every
   rendered file names the staged paths, which means the tree is bootable, which
   is how the test suite proves an installed appliance works (`tests/e2e`). It also
@@ -384,6 +386,25 @@ resuming and stopping are all announced.
   that copy is the way back, which the appliance will not take for you. Your
   configuration is not touched, and if it disagrees with a flag you passed, the run
   says so by name (SAPRS 13.8, 13.9).
+
+  Whether there is any code to replace is a question about **files**. The installer
+  walks this checkout and `/opt/encore/application`, digests every file a copy would
+  carry, and compares them — not version numbers, and not `pyproject.toml`, which a
+  release that changes only Python does not touch
+  ([#55](https://github.com/clydepro/encore/issues/55)). `install` asks
+  the same question, which is why re-running the first command is a repair. A run
+  that would copy the tree says how far apart the two are before it does:
+
+  ```text
+     2. install the application into /opt/encore/application (SAPRS 13.9 step 2)
+        — 16 differ of 396 files: apps/builder/artwork.py, apps/builder/state.py,
+          encore/playback/fault.py, encore/playback/supervisor.py (+12 more)
+  ```
+
+  If `upgrade` prints `nothing to do` and you know the machine is behind, that line
+  is the thing to read, and
+  [the upgrade said nothing to do](Troubleshooting.md#the-upgrade-said-nothing-to-do-and-the-machine-is-behind)
+  is the section for it.
 - **Check an install**: `sudo encore-install verify` prints 13.11's acceptance list
   with a fix under every line that is not green. It changes nothing and is safe to
   run during a party.

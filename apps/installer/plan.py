@@ -674,10 +674,11 @@ def _code_actions(
     """Copy the code and build the environment — when either would change anything.
 
     The two comparisons come from `observe()`, so the plan's idea of "already installed" is a
-    fact a report can name: the files in `application/` match the ones being offered, and the
-    stamp in `venv/` matches the lockfile being read. An operator who pulled a release by hand
-    still gets a dependency sync, which is the case a step skipped on assumption would
-    otherwise be silent about.
+    fact a report can name: the files in `application/` match the ones being offered — file by
+    file, by content, under the exclusion list `application.py` owns, which is what #55 was
+    about — and the stamp in `venv/` matches the lockfile being read. An operator who pulled a
+    release by hand still gets a dependency sync, which is the case a step skipped on
+    assumption would otherwise be silent about.
     """
 
     source = options.source if options.source is not None else checkout()
@@ -688,11 +689,13 @@ def _code_actions(
         )
     elif not state.application_matches:
         step = " (SAPRS 13.9 step 2)" if upgrade else ""
+        drift = state.application_drift.described() if state.application_drift.compared else ""
         actions.append(
             InstallApplication(
                 source=source,
                 destination=application,
-                detail=f"install the application into {application}{step}",
+                detail=f"install the application into {application}{step}"
+                + (f" — {drift} versus {source}" if drift else ""),
             )
         )
     if not state.environment_matches or state.interpreter_blocker is not None:

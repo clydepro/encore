@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from apps.installer.application import ignore, rsync_excludes
 from apps.installer.layout import Layout
 from apps.installer.plan import (
     Action,
@@ -59,58 +60,8 @@ from apps.installer.system import CommandResult, CommandRunner
 
 __all__ = ["Execution", "Executor", "Result", "Status"]
 
-#: What a copy of the source tree leaves out. Every entry is a build artifact, a cache, or
-#: somebody's database — and the last category is the one that matters: carrying a development
-#: `library.db` into `/opt/encore/application` would put a second library on a machine that is
-#: allowed to have exactly one, in the wrong place, owned by root (ADR-006).
-IGNORED = shutil.ignore_patterns(
-    ".git",
-    ".venv",
-    "__pycache__",
-    "*.py[cod]",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".coverage",
-    "coverage.xml",
-    "htmlcov",
-    "site",
-    "dist",
-    "build",
-    "*.egg-info",
-    ".encore-lock",
-    "library.db",
-    "runtime.db",
-    "artwork",
-    "*.db-wal",
-    "*.db-shm",
-)
-
-#: The same list in the dialect rsync speaks. Duplicated rather than derived because the two
-#: glob syntaxes are not the same language, and an exclusion that works on one code path and
-#: not the other is worse than an obvious list beside both.
-RSYNC_EXCLUDES = (
-    ".git/",
-    ".venv/",
-    "__pycache__/",
-    "*.py[cod]",
-    ".mypy_cache/",
-    ".pytest_cache/",
-    ".ruff_cache/",
-    ".coverage",
-    "coverage.xml",
-    "htmlcov/",
-    "site/",
-    "dist/",
-    "build/",
-    "*.egg-info/",
-    ".encore-lock",
-    "library.db",
-    "runtime.db",
-    "artwork/",
-    "*.db-wal",
-    "*.db-shm",
-)
+# The exclusions a copy of the source tree leaves out are not here: `application.py` owns that
+# list, because the copier, the observer and the planner all have to mean the same tree (#55).
 
 #: The paths the installer owns, and therefore the only ones it may delete (SAPRS 13.10).
 #: The SAPRS 13.3 tree, from `Layout.owned_roots`, is what a deletion may fall inside. Nothing
@@ -477,12 +428,19 @@ class Executor:
     def _install_application(
         self, action: InstallApplication, source: Path, destination: Path
     ) -> Result:
-        """Copy the project in, with the exclusions of `IGNORED`.
+        """Copy the project in, with the exclusions of `application.EXCLUDED`.
 
         `rsync --delete` when the machine has it, because pruning what a release removed is the
         difference between an upgrade and an accumulation: a module that no longer exists in the
         source but still sits in `application/` is importable, and that is how a half-upgraded
         appliance produces a traceback naming a file nobody can find in the repository.
+
+        `--checksum` because `observe()` now decides "already installed" by reading bytes, and
+        rsync's own default is mtime and size at one-second granularity. Two files the same size,
+        written in the same second, are "already transferred" to rsync and a difference to the
+        observer — which is #55 again, from the other side: a report that ends `nothing to do`
+        about a file it did not copy. A `git pull`, a `cp -r` of a release tarball and a test that
+        stages a tree all do this without trying.
         """
 
         if source == destination:
@@ -493,16 +451,17 @@ class Executor:
             argv = [
                 "rsync",
                 "--archive",
+                "--checksum",
                 "--delete",
                 "--delete-excluded",
                 "--quiet",
-                *(f"--exclude={pattern}" for pattern in RSYNC_EXCLUDES),
+                *rsync_excludes(),
                 f"{source}/",
                 f"{destination}/",
             ]
             return self._command(action, argv)
         try:
-            shutil.copytree(source, destination, ignore=IGNORED, dirs_exist_ok=True, symlinks=True)
+            shutil.copytree(source, destination, ignore=ignore(), dirs_exist_ok=True, symlinks=True)
         except OSError as error:
             return Result(action=action, status=Status.FAILED, detail=str(error))
         return Result(

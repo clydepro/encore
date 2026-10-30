@@ -108,6 +108,7 @@ def assess(
         _service_manager(state, options),
         _binaries(state, options),
         _environment(state, options),
+        *_application(state, options),
         _service_user(state, options),
         _port(state, config),
         _disk(state, options),
@@ -263,6 +264,56 @@ def _environment(state: ApplianceState, options: Options) -> Check:
         verdict=Verdict.FAIL,
         detail=f"{venv} has no encore-server in it",
         fix="sudo encore-install upgrade  # re-runs `uv sync` against the lockfile (13.4)",
+    )
+
+
+def _application(state: ApplianceState, options: Options) -> tuple[Check, ...]:
+    """13.9's step 2 as an acceptance item: is the code here the code this release is?
+
+    #55 is why this line exists at all. The comparison that decided it read `pyproject.toml`,
+    and a release that changes only Python changes no byte of that file — so sixteen source
+    files differed on an appliance two releases behind, every line of the report was true, and
+    `nothing to do` was printed over a machine running code this checkout does not contain.
+    The question was not wrong about the file it read; it read the wrong file.
+
+    The verdict follows #43's rule rather than a new one. `install` and `upgrade` are the
+    commands that copy a tree, so drift there is a fact about what this run is about to do;
+    `verify` has no repair in its future, and an appliance running an application nobody
+    installed from is a failure it should say out loud. `remove` and `reset-credential` copy
+    nothing, so the currency of a tree they are about to delete or leave alone is not a
+    question either of them should be answering with a verdict.
+    """
+
+    if options.command not in {Command.INSTALL, Command.UPGRADE, Command.VERIFY}:
+        return ()
+    application = options.layout.staged(options.layout.application)
+    drift = state.application_drift
+    if state.application_matches:
+        return (
+            Check(name="application", verdict=Verdict.OK, detail=f"{application} is this checkout"),
+        )
+    if not drift.compared:
+        return (
+            Check(
+                name="application",
+                verdict=Verdict.WARN,
+                detail=f"neither {application} nor the checkout could be read",
+                fix="Run this from the clone to install, or pass --source PATH.",
+            ),
+        )
+    repairs = options.command in {Command.INSTALL, Command.UPGRADE}
+    command = "upgrade" if options.command is Command.VERIFY else options.command.value
+    # An upgrade's own report is assembled *after* the copy, so the WARN this line produces
+    # normally arrives on the way to an OK; a dry run is where it stays, and it would be a lie
+    # to tell an operator a rehearsal copied anything.
+    note = "  # a rehearsal; the tree was not copied" if repairs and options.dry_run else ""
+    return (
+        Check(
+            name="application",
+            verdict=Verdict.WARN if repairs else Verdict.FAIL,
+            detail=f"{application} is not this checkout: {drift.described()}",
+            fix=f"sudo encore-install {command}{note}",
+        ),
     )
 
 
