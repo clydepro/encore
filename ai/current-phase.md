@@ -20,6 +20,11 @@ that publishes zero artwork, and [#55](https://github.com/clydepro/encore/issues
 `encore-install upgrade` deciding the code is already installed by comparing `pyproject.toml` — both
 fixed on this branch, and #52's grey tiles turned out to have a third cause of their own, which is
 what "What an appliance asked MusicBrainz about (#57)" below is about.
+A ninth one came from the same library rather than the same commands:
+[#59](https://github.com/clydepro/encore/issues/59), a build that published no covers and blamed the
+network for it, open as
+[#60](https://github.com/clydepro/encore/pull/60) — see "What an appliance's build report could not
+say (#59)".
 **Phase 7 — the dependency-alert chore — merged as
 [#40](https://github.com/clydepro/encore/pull/40), closing
 [#39](https://github.com/clydepro/encore/issues/39).** Phases 1–5 are merged:
