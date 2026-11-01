@@ -361,18 +361,22 @@ Four defects, and each had a comment in the code saying the opposite of what the
    had always advertised and nothing had ever enforced. A refused album additionally goes to the
    *back of the pass* rather than the bin — "try again later", and later is what a queue of
    several hundred requests at one per second actually offers, minutes rather than a sleep.
+   Five in a row, in turn, now cost the client a minute of silence (`COOLDOWN`) rather than the
+   rest of the build, and only three such minutes with nothing answered between them
+   (`COOLDOWNS_PER_RUN`) end the asking. That is the difference between weather and an absence,
+   and the appliance measured both on one afternoon: 16 of 24 release searches refused at 10:11,
+   none of 189 refused at 11:20, same tags, same machine, same rate limit.
 2. **`available` counted failures in a run, not in a row.** `MAX_FAILURES = 5` is documented as
    "five in a row, because a single dropped request in a 20-minute build is the internet", and
    `_failures` was never cleared by a success. A thousand-request build was down by its fifth blink
    of the afternoon. A success resets it, and a question that fails and is repeated counts once.
-3. **8 seconds was a guess, and it was the wrong kind of wrong.** Measured here: a release search's
-   ninetieth percentile of a release search is 6.1 s and its tail passes 45 s; a lookup of a
-   recording by MBID sits at a
-   13.7 s median; one Cover Art Archive `front` took 20.9 s and arrived perfectly well. A timeout
-   that arrives before the answer is indistinguishable, downstream, from a service that never
-   answers — 41% of a 200-request sample were socket timeouts against a service holding 86% of the
-   lookups in its own database. The default is 45 s now, and the 1 request/second rule is what
-   actually bounds a build, which is the sentence the Administrator Guide had not been saying.
+3. **The timeout was a habit, and the diagnosis it supported was wrong.** 8 s per request looked
+   like the cause — 41% of a 200-request sample came back as socket timeouts — but measured raw, with
+   no client and no queue in the way, this library's own albums answer at a 0.68 s median and the
+   slowest of forty answers is 4.9 s. What made those 200 requests slow was asking them in a
+   sustained queue of a service already having an hour. So the timeout is not why an album had no
+   cover; it is why the build could not tell it had been refused. The default is 30 s because a
+   timeout and an outage are one event downstream and that much should at least be chosen.
 4. **The report had four words for three states.** `unmatched` (this library could not name the
    release exactly — the policy working), `uncovered` (named, no image), `unanswered` (asked twice,
    never answered) and `not_reached` (the pass stopped before getting there) are now four numbers,
@@ -386,10 +390,10 @@ hour. Before: **0 images written, 24.8 s, both services reported down**. After, 
 | When | Code | Requests | Albums asked | Images | Left to ask |
 | ---- | ---- | -------- | ------------ | ------ | ----------- |
 | 09:57 | fixed, 5 s wait, 30 s timeout | 578 | 414 of 417 | **307** | 3 |
-| 10:56 | fixed, 2 s wait, 45 s timeout | 152 | 99 | 243 | 318 |
+| 10:56 | fixed, 2 s before a repeat | 152 | 99 | 243 | 318 |
 | 11:10 | fixed, 5 s wait, 45 s timeout | 80 | 48 | 232 | 369 |
 | 11:20 | the client alone, 189 release searches | 189 | — | — | **no failures at all** |
-| 11:32 | fixed, as shipped | running | | | |
+| 11:47 | fixed, as shipped | 57 | 34 | 232 | 383 |
 
 Read as one experiment it says something better than "the bug is fixed": the asking now continues for
 exactly as long as the service continues answering, and stops reporting a network fault when it was a

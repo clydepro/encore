@@ -218,12 +218,15 @@ two requests — name the release, fetch the picture; once it has been identifie
 same album costs one, forever, because the release's identifier is stored on the
 album row. Measured on this appliance, first build with the feature on: 417 albums
 with no picture of their own, 578 requests, 1,991 seconds, 307 images in the cache
-at the end of it. Half an hour, and the rate limit is most of it — though a release
-search takes five seconds to answer even when nothing is wrong, so a build that is
-working is not a build that is finished. A service having a busy afternoon adds to
+at the end of it. Half an hour, and the rate limit is most of it — a release search answers in
+about two thirds of a second when the service is well, so the duration is the one-request-per-second
+rule rather than anybody's latency. A service having a busy afternoon adds to
 that rather than subtracting from it, because a refused question is asked again later
 in the same run and again on the next build
-([#59](https://github.com/clydepro/encore/issues/59)). Run it before a party rather
+([#59](https://github.com/clydepro/encore/issues/59)). Five questions in a row that nobody answers
+costs the build a minute of silence, up to ten minutes of silence per run; that is the whole of the
+time the Builder spends waiting rather than asking, and a run out of waiting budget carries on at
+the ordinary rate and says in the report how far it got. Run it before a party rather
 than during one, and remember that `--dry-run` pays the same price. The Server is not
 involved in any of this: it never opens a connection because of anything in this
 section, and it does not read it (ADR-001, ADR-016).

@@ -202,20 +202,32 @@ service keeps answering, repeats a refused question once, gives an album the res
 giving up on it, counts failures *in a row* as `available` always claimed to, and reports how far it
 got when the asking does stop.
 
+**Five in a row became a pause rather than a full stop.** `MAX_FAILURES` still counts the row, and a
+full row now costs `COOLDOWN` seconds of silence instead of the rest of the build;
+`COOLDOWNS_PER_RUN` rows with nothing answered between them are what `available` calls an outage.
+The appliance's own numbers are the argument. The same 417 grey albums, built four times in two
+hours at the same pacing from the same machine, got 578 requests out of musicbrainz.org and then
+152, 80 and 57 — and the 307 covers are all in the first of those four. A run that quits at its
+first five-in-a-row reports somebody else's afternoon as an absence, and the operator's next
+command is the one that proves it. Patience is a budget rather than a habit: `PATIENCE` seconds is
+what a run may spend asleep in total, after which rows still count and only the sleeping stops,
+because a client that is generous one question at a time can still be idle for an hour.
+
 **"Covered" is not one number.** `albumart.CoverOutcome` separates `unmatched` (the release could
 not be named exactly — the policy working), `uncovered` (named, no image), `unanswered` (refused
  twice) and `not_reached` (never got to), because a build over 417 grey albums once asked three
 questions and reported zero of the other three, which read as "the archive has nothing".
 
-**Measured, for the next person setting a timeout.** The endpoints are not one speed. Over this
-library's own unanswered albums: a recording search runs at a 0.46 s median, a release search at a
-5.3 s median with a tail past 45 s, a lookup of a recording by identifier at a 13.7 s median, and
-one Cover Art Archive `front` took 20.9 s and arrived perfectly well. The 8 s this client shipped
-with turned a fifth of a 200-request sample into socket timeouts against a service holding 86% of
-the lookups in its own database — and a timeout is, to everything downstream, indistinguishable
-from the outage decision 6 was written to avoid. The default is 45 s, which is the slowest answer
-actually observed. The 1 request/second rule above is what bounds a build; the timeout only decides
-whether a build waits for an answer or throws one away.
+**Measured, for the next person setting a timeout.** With nothing in the way — no client, no retry,
+no queue — this library's own unanswered albums answer in a 0.68 s median for a recording search,
+0.66 s for a release search and 0.55 s for the archive's front image, the slowest of forty answers
+4.9 s. The 8 s this client shipped with was therefore not why an album had no picture; it is why the
+build could not tell that the picture had been refused, which is how it came to be blamed on the
+network. The default is 15 s — three times the slowest answer measured, and deliberately not more:
+patience is no longer a per-request property, since the client now waits out a bad minute between
+rows rather than sitting on one slow socket. A timeout and an outage are still the same event to
+everything downstream, which is why the number is chosen at all; the 1 request/second rule above is
+what bounds a build.
 
 **The cost stated above was a guess, and the appliance's is higher.** "About a minute per hundred
 files" counts files; the asking is per *album*, and the dominant term is one request per second

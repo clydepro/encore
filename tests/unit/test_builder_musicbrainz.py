@@ -32,6 +32,9 @@ import pytest
 
 from apps.builder import musicbrainz
 from apps.builder.musicbrainz import (
+    ATTEMPTS_PER_REQUEST,
+    COOLDOWNS_PER_RUN,
+    MAX_FAILURES,
     MAX_RETRY_WAIT,
     RETRY_WAIT,
     HttpMusicBrainzClient,
@@ -128,10 +131,14 @@ def _refused(reason: str) -> urllib.error.URLError:
 
 
 def client(*responses: Any, minimum_interval: float = 0.0, **kwargs: Any) -> HttpMusicBrainzClient:
+    # Both waits are parameters a test can set, and both are zero by default. The policy these
+    # assert is about *ordering* — what is asked, how many times, and when the asking stops — and a
+    # suite that slept 5 s per refusal and 60 s per row would be a suite nobody runs before a commit.
     return HttpMusicBrainzClient(
         opener=FakeOpener(*responses),
         minimum_interval=minimum_interval,
         retry_wait=0.0,
+        cooldown=0.0,
         **kwargs,
     )
 
@@ -301,16 +308,93 @@ def test_malformed_json_is_an_outage_and_not_a_crash() -> None:
         service.recording("r")
 
 
-def test_five_failures_switch_enrichment_off_for_the_run() -> None:
-    # `available` is the whole degradation policy, so it is worth its own test. Ten refusals,
-    # five questions: the repeat is part of the policy now, and the sixth question is still
-    # never asked.
-    service = client(*[_refused("down") for _ in range(10)])
+def _row(questions: int) -> list[Any]:
+    """Refusals enough for `questions` to be asked and repeated, which is what one now costs."""
+
+    return [_refused("down")] * ATTEMPTS_PER_REQUEST * questions
+
+
+def test_five_failures_cost_a_minute_of_silence_and_three_end_the_run() -> None:
+    # `available` is the whole degradation policy, so it is worth its own test. Five in a row no
+    # longer ends it: it buys the client a minute of quiet, and only three such minutes with nothing
+    # answered between them end the asking. #59's build stopped on the first five because the five it
+    # counted were five in the *run* — and the appliance that gave up after 57 requests had a service
+    # that answered 414 of them twenty minutes later, which is the entire argument for waiting.
+    service = client(*_row(MAX_FAILURES * COOLDOWNS_PER_RUN))
+    for row in range(COOLDOWNS_PER_RUN):
+        for _ in range(MAX_FAILURES):
+            with pytest.raises(MusicBrainzUnavailableError):
+                service.recording("r")
+        assert service.available == (row < 2), f"the third row ends it, not the {row + 1}"
+    asked = MAX_FAILURES * COOLDOWNS_PER_RUN
+    assert len(service._opener.calls) == ATTEMPTS_PER_REQUEST * asked, "twice each, then quiet"
+    assert service.recording("r") is None, "and a run that has stopped asks nothing further"
+    assert len(service._opener.calls) == ATTEMPTS_PER_REQUEST * asked
+
+
+def test_an_answer_between_two_bad_rows_starts_the_next_one_at_one() -> None:
+    """The counter that ends a run is one the service can reset by being itself again.
+
+    Weather arrives in stretches, so a policy that counts stretches must also forget them. Two rows
+    with an answer in the middle are two rows that never happened to the run: the first is a bad
+    minute, the second is a different bad minute, and #59's build had a hundred minutes of both and
+    blamed the whole afternoon on the first five (#59).
+    """
+
+    service = client(*_row(MAX_FAILURES), recording_payload(), *_row(MAX_FAILURES))
+    for _ in range(MAX_FAILURES):
+        with pytest.raises(MusicBrainzUnavailableError):
+            service.recording("r")
+    assert service.available is True, "one row is a pause"
+    found = service.recording("r")
+    assert found is not None
+    assert found.recording_id == "recording-1"
     for _ in range(5):
         with pytest.raises(MusicBrainzUnavailableError):
             service.recording("r")
-    assert service.available is False
-    assert len(service._opener.calls) == 10
+    assert service.available is True, "and the second row started at one, as a row does"
+
+
+def test_a_404_ends_a_row_because_saying_no_is_an_answer() -> None:
+    """A miss clears the streak, and an identifier in a tag that does not exist is not weather.
+
+    The 404 was already excluded from the failure count, which is the right half; it did not end a
+    row, so a build walking a list of mistyped MBIDs with one real lookup among them could still be
+    told the service had gone away.
+    """
+
+    service = client(*_row(MAX_FAILURES - 1), _http_error(404))
+    for _ in range(MAX_FAILURES - 1):
+        with pytest.raises(MusicBrainzUnavailableError):
+            service.recording("r")
+    assert service.available is True
+    assert service.recording("r") is None
+    assert service._failures == 0, "the row restarted at the no, as a row does"
+
+
+def test_patience_is_a_budget_so_the_cooldown_cannot_run_the_build() -> None:
+    """A row costs a minute, and the run can afford only `PATIENCE` of them in total.
+
+    Without the budget the policy has no worst case. A service that refuses five, answers six,
+    refuses five more and answers six again never reaches `COOLDOWNS_PER_RUN` — an answer clears it —
+    so every fifth question would cost a minute of sleeping, and a build whose network is healthy
+    two thirds of the time would spend an hour on a ten-minute job and look hung, which is the
+    failure this whole file exists to avoid. The budget spends the *sleeping*, not the asking: rows
+    still count, so the third one still ends a run that has learned nothing.
+    """
+
+    service = HttpMusicBrainzClient(
+        opener=FakeOpener(*_row(MAX_FAILURES * COOLDOWNS_PER_RUN)),
+        minimum_interval=0.0,
+        retry_wait=0.0,
+        cooldown=3_600.0,
+        patience=0.05,
+    )
+    for _ in range(MAX_FAILURES * COOLDOWNS_PER_RUN):
+        with pytest.raises(MusicBrainzUnavailableError):
+            service.recording("r")
+    assert service._slept < 1.0, "an hour of cooldown, charged to a budget of fifty milliseconds"
+    assert service.available is False, "and the rows counted anyway, which was the point of them"
 
 
 def test_a_cap_stops_the_asking_without_an_error() -> None:
@@ -324,14 +408,19 @@ def test_a_cap_stops_the_asking_without_an_error() -> None:
 def test_the_default_timeout_is_longer_than_the_slowest_answer_measured() -> None:
     """8 seconds was a guess, and the endpoints are not one speed.
 
-    Measured on this library's own unanswered albums: a recording search at a 0.46 s median, a
-    release search at 5.3 s with a tail past 45, a lookup by identifier at a 13.7 s median, and one
-    Cover Art Archive `front` in 20.9 s that arrived perfectly well. A timeout shorter than the
-    slowest of those is an outage the caller cannot distinguish from a real one, which is half of
-    what #59's report labelled "unavailable" (#59).
+    Measured raw, with no client, no retry and no queue in the way — which is the only way to
+    measure the service rather than this build's argument with it: a recording search at a 0.68 s
+    median, a release search at 0.66 s, a Cover Art Archive front image at 0.55 s, and the slowest
+    of forty answers at 4.9 s. A timeout below the slowest answer is an outage the caller cannot
+    distinguish from a real one, which is half of what #59's report labelled "unavailable".
+
+    It is not the whole of it, and this assertion is where the two claims are kept apart. The
+    patience that matters is `COOLDOWN`'s, because weather ends and a hung socket may not; a build
+    that waits 45 s on each of two attempts is a build that spent a minute on a question the service
+    refused in 0.43 s, as measured in the sample above.
     """
 
-    assert HttpMusicBrainzClient()._timeout >= 45.0
+    assert HttpMusicBrainzClient()._timeout >= 3 * 4.9
 
 
 def test_requests_are_spaced_at_a_second_apart() -> None:

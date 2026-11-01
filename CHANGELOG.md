@@ -555,10 +555,28 @@ The release process moves the section into a dated, bracketed version heading.
   so a long build was dead by its fifth blink of the afternoon. And a refusal was counted as a
   failure rather than as a direction: a refused request is now repeated once, spaced by whatever
   `Retry-After` it sent (floored at 5 s, because the real header on that page is `retry-after: 0`,
-  and capped at 60), and an album whose repeat was refused too goes to the back of the pass rather
+  and capped at 30), and an album whose repeat was refused too goes to the back of the pass rather
   than the bin — which on a real library is several hundred requests, and therefore minutes, away.
-  Repeating immediately was rejected: it is asking faster than the rate limit at the expense of every
-  later question, and it makes the count in `available` a lie twice over.
+  Repeating immediately was rejected: it is asking faster than the rate limit at the expense of
+  every later question, and it makes the count in `available` a lie twice over. Five questions in a
+  row that came back unanswered no longer end the asking at all: they cost the client `COOLDOWN`
+  seconds of silence, and only three such silences with nothing answered between them
+  (`COOLDOWNS_PER_RUN`) are an outage. Patience is bounded by `PATIENCE` seconds per run rather than
+  by enthusiasm: a row after the budget is spent still counts and no longer sleeps, because a build
+  that is idle for an hour on a ten-minute job is indistinguishable from a hung one. That is the
+  difference between weather and absence, and this build is now the one that waits out the first.
+
+  The transport's own half of the story is not the one this entry first told, and the correction is
+  worth keeping. 8 s per request looked like the cause because a 200-request sample came back 41%
+  socket timeouts; measured *raw*, with no client, no retry and no queue in the way, the same
+  library's unanswered albums answer in 0.68 s median for a recording search, 0.66 s for a release
+  search and 0.55 s for the archive, the slowest of forty answers 4.9 s. What produced those timeouts
+  was asking in a sustained queue — which is what a build is — of a service that was already having
+  an hour. So the timeout was never why an album had no cover; it is why the build could not tell
+  that the album had been refused. The default is 15 s, three times the slowest answer measured,
+  because to the caller a timeout and an outage are one event and that at least should be a choice —
+  and because patience stopped being a per-request property the moment five in a row began to cost a
+  minute of silence rather than the rest of the build.
 
   What the change actually buys is the asking surviving the weather, and one unchanged library
   measured it five times. Before: 0 images written, 24.8 seconds, both services reported down. After,
@@ -570,9 +588,9 @@ The release process moves the section into a dated, bracketed version heading.
   build and the fix's 578-request one is not that the network improved. It is that a build now keeps
   asking while the service keeps answering, and when it stops it says how far it got: the 80-request
   build ends its line `369 left to ask`, those albums keep no identifier so tonight's build asks them
-  from the start, and nobody has to guess which of the two afternoons they are reading. A cooldown
-  that recovers, rather than a switch that latches, is the shape of what is left here, and it is
-  named rather than quietly half-done.
+  from the start, and nobody has to guess which of the two afternoons they are reading. The five-in-a
+  row rule those three builds died of is a cooldown now rather than a full stop, which is the last
+  half of what #59 was describing.
 
   What the report can say grew from two words to five numbers. `CoverOutcome` gained `unanswered`
   (asked twice, never answered) and a derived `not_reached` (the pass stopped before getting there),

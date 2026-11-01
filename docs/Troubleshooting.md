@@ -482,13 +482,17 @@ three requests before it stopped making them. That is
 answers a busy moment with `HTTP 503` and the sentence *"The MusicBrainz web server is currently
 busy. Please try again later."*, and the Builder heard "later" as "gone". One refused question ended
 the run's enrichment for every later track and the cover stage for every later album, the failure
-counter that was supposed to measure five *in a row* never subtracted a success, and 8 seconds was
-the per-request timeout on a service whose search regularly takes longer than that.
+counter that was supposed to measure five *in a row* never subtracted a success, and — this is the
+part that fooled the first diagnosis — 41% of a long sample came back as 8-second socket timeouts,
+which looks like a service too slow to answer and is a service too busy to answer *in the order you
+are asking*. Measured one at a time, the same queries answer in about two thirds of a second.
 
-Now it asks again. A refused request is repeated once, after the wait the answer named or two
+Now it asks again. A refused request is repeated once, after the wait the answer named or five
 seconds, and an album whose repeat was refused too goes to the back of the pass — which on a real
-library is several hundred requests later, and so minutes: what "try again later" asked for. The
-line you get when the service really is unwell still counts what the run managed:
+library is several hundred requests later, and so minutes: what "try again later" asked for. Five
+questions in a row that the service could not answer at all cost the run a minute of silence rather
+than the rest of the build, and only three such minutes with nothing answered between them end the
+asking. The line you get when the service really is unwell still counts what the run managed:
 
 ```console
   MusicBrainz        unavailable after 9 lookups, 0 fields repaired, 8 refused

@@ -46,6 +46,7 @@ from __future__ import annotations
 import http.client
 import io
 import json
+import re
 import sqlite3
 import urllib.error
 from collections.abc import Mapping, Sequence
@@ -73,6 +74,15 @@ from tests.support.media import AlbumSpec, MediaSpec, cover_image, generate_albu
 pytestmark = pytest.mark.regression
 
 _ALBUMS = ("Ambient", "Discovery", "Houses")
+_SIX = ("Ambient", "Discovery", "Houses", "Kid", "Origin", "Replay")
+
+
+def _six(root: Path) -> list[Any]:
+    return [_track(root, f"{name}.mp3", title=f"{name} Song", album=name) for name in _SIX]
+
+
+def _covers(names: Sequence[str]) -> dict[str, bytes]:
+    return {f"rel-{name}": cover_image() for name in names}
 
 
 class Service:
@@ -88,6 +98,10 @@ class Service:
         gone_from: Request number from which the service has stopped answering at all. This is an
             outage, and it is the only thing allowed to end a build's asking: `available` goes
             false with it, which is what the stages now read instead of their own alarm.
+        refuse_first: Question number, counted across kinds, up to which the service is merely
+            busy. Weather, in other words: it ends, and everything after it is answered. Distinct
+            from `gone_from` because the two are different claims about the service, which is the
+            distinction #59 was missing.
     """
 
     def __init__(
@@ -100,6 +114,7 @@ class Service:
         refuse_releases: Mapping[str, int] | None = None,
         refuse_covers: Mapping[str, int] | None = None,
         gone_from: int | None = None,
+        refuse_first: int | None = None,
     ) -> None:
         self.recordings = recordings or {}
         self.catalog = catalog or {}
@@ -110,6 +125,7 @@ class Service:
             "cover": dict(refuse_covers or {}),
         }
         self.gone_from = gone_from
+        self.refuse_first = refuse_first
         self.asked: list[str] = []
 
     @property
@@ -122,6 +138,8 @@ class Service:
         self.asked.append(kind)
         if not self.available:
             raise MusicBrainzUnavailableError("simulated outage")
+        if self.refuse_first is not None and len(self.asked) <= self.refuse_first:
+            raise MusicBrainzUnavailableError("HTTP 503 from https://musicbrainz.org/ws/2/release")
         left = self.refuse[kind].get(name, 0)
         if left:
             self.refuse[kind][name] = left - 1
@@ -196,6 +214,12 @@ def _build(home: Path, music: Path, **overrides: object) -> BuildReport:
     report = run(_options(home, music, **overrides))
     assert report.published_to is not None, report.text()
     return report
+
+
+def _release(release_id: str, *, title: str) -> dict[str, Any]:
+    """A release document with both names on it, which is what `albumart` insists on."""
+
+    return {"id": release_id, "title": title, "artist-credit": [{"name": "An Artist"}]}
 
 
 def _artwork_rows(report: BuildReport) -> int:
@@ -371,6 +395,45 @@ def test_five_busy_minutes_in_a_row_are_an_outage_but_a_hundred_spread_out_are_n
 # -- the report: the reason, and the two sentences that used to be one ------
 
 
+def test_a_bad_minute_costs_a_minute_and_not_the_rest_of_the_build(tmp_path: Path) -> None:
+    """The last inch of #59: five refusals in a row used to end the asking, for the whole run.
+
+    Six albums, and a service that says "try again later" to the first five questions it is asked —
+    ten requests, two attempts each — and answers everything after that. All six covers have to
+    arrive, because `MAX_FAILURES` now measures a minute of someone else's bad afternoon rather than
+    the length of this build. It used to count the run: five blinks anywhere in an hour ended it,
+    and every answer on either side of them counted for nothing.
+    """
+
+    outcome = fetch(_six(tmp_path), _weather(refuse_requests=10, albums=_SIX, images=_covers(_SIX)))
+    assert outcome.covered == 6, "the row cost the client a minute; the build never noticed"
+    assert outcome.unavailable is False
+    assert outcome.not_reached == 0
+
+
+def test_a_service_that_stays_refused_is_asked_three_times_and_then_left_alone(
+    tmp_path: Path,
+) -> None:
+    """The other half, which is a promise to the service rather than to the operator.
+
+    Weather ends, so the client waits it out. An absence does not, and a build that asked five
+    questions, waited a minute, asked five more, waited, and asked five more has learned what it
+    needs to: that nobody is there. That is `COOLDOWNS_PER_RUN` rows of `MAX_FAILURES`, fifteen
+    questions and thirty requests, and the twenty albums still in the queue become the report's
+    `left to ask` rather than a second silence of the same kind.
+    """
+
+    needy = [
+        _track(tmp_path, f"{index}.mp3", title=f"Song {index}", album=f"Album {index}")
+        for index in range(20)
+    ]
+    outcome = fetch(needy, _weather(refuse_requests=10_000, albums=(), images={}))
+    assert outcome.unavailable is True, "three rows with nothing answered between them is an outage"
+    assert outcome.albums == 20
+    assert outcome.covered == 0
+    assert outcome.not_reached + outcome.unanswered == 20, "none of them silently absent"
+
+
 def test_the_report_says_why_musicbrainz_was_unavailable(tmp_path: Path) -> None:
     """#52's bug class, one layer up: the stage recorded the sentence and nobody read it."""
 
@@ -461,11 +524,78 @@ class _Script:
         outcome = self.outcomes[index]
         if isinstance(outcome, Exception):
             raise outcome
+        if isinstance(outcome, bytes):
+            return _Response(outcome)  # an archive serving a picture, which is not JSON
         return _Response(json.dumps(outcome).encode())
 
 
+class _Weather:
+    """The real client's opposite number: a service that is busy for a while and fine afterwards.
+
+    `refuse_requests` is how many *requests* — not questions, since a question is two — come back
+    "try again later". Everything after that is answered from the catalog, by URL, because the
+    order a pass asks in is what this file is there to find out, and a fixture that predicted it
+    would have to be wrong in the same way twice (#59).
+    """
+
+    def __init__(
+        self, *, refuse_requests: int, catalog: Mapping[str, str], images: Mapping[str, bytes]
+    ) -> None:
+        self.refuse_requests = refuse_requests
+        self.catalog = catalog
+        self.images = images
+        self.calls: list[str] = []
+
+    def __call__(self, request: Any, timeout: float = 0.0) -> Any:
+        del timeout
+        url = str(request.full_url)
+        self.calls.append(url)
+        if len(self.calls) <= self.refuse_requests:
+            raise _http(503)
+        if "coverartarchive" in url:
+            release_id = url.rsplit("/release/", 1)[-1].rsplit("/front", 1)[0]
+            image = self.images.get(urllib.parse.unquote(release_id))
+            if image is None:
+                raise _http(404)
+            return _Response(image)
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get("query", [""])[0]
+        album = re.search(r'release:"([^"]*)"', query)
+        release_id = self.catalog.get(album.group(1) if album else "", "")
+        return _Response(
+            json.dumps(
+                {
+                    "releases": [
+                        {
+                            "id": release_id,
+                            "title": album.group(1) if album else "",
+                            "artist-credit": [{"name": "An Artist"}],
+                        }
+                    ]
+                    if release_id
+                    else []
+                }
+            ).encode()
+        )
+
+
+def _weather(
+    *, refuse_requests: int = 0, albums: Sequence[str] = (), images: Mapping[str, bytes] = {}
+) -> HttpMusicBrainzClient:
+    """A client facing `refuse_requests` refusals and then a normal archive."""
+
+    catalog = {album: f"rel-{album}" for album in albums}
+    return HttpMusicBrainzClient(
+        opener=_Weather(catalog=catalog, images=images, refuse_requests=refuse_requests),
+        minimum_interval=0.0,
+        retry_wait=0.0,
+        cooldown=0.0,
+    )
+
+
 def _scripted(*outcomes: Any) -> HttpMusicBrainzClient:
-    return HttpMusicBrainzClient(opener=_Script(*outcomes), minimum_interval=0.0, retry_wait=0.0)
+    return HttpMusicBrainzClient(
+        opener=_Script(*outcomes), minimum_interval=0.0, retry_wait=0.0, cooldown=0.0
+    )
 
 
 def _calls(service: HttpMusicBrainzClient) -> Sequence[str]:

@@ -146,10 +146,12 @@ def fetch(
 
     while pending:
         if not client.available:
-            # The client is the only thing that knows how many failures it has counted, and it
-            # says "in a row". This loop used to stop at the first exception of its own, which is
-            # how a build over 481 grey albums asked three questions and then blamed the network
-            # for the other 478 (#59).
+            # The client is the only thing that knows how many failures it has counted, and it says
+            # "in a row" — and since #59 a row costs it a minute of silence rather than the end of
+            # this loop, so reaching here means the silence ran out three times, not that the pass
+            # met an exception. This loop used to stop at the first one of its own, which is how a
+            # build over 481 grey albums asked three questions and then blamed the network for the
+            # other 478.
             break
         key, album = pending.popleft()
         release_id = identifiers.get(key) or album.release_id

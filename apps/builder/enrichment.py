@@ -161,7 +161,9 @@ def enrich(
             if refused:
                 outcome.failed += 1
                 # The client's count of failures in a row, not this loop's: one refused question
-                # in a busy minute is a reason to carry on asking, and five is a reason to stop.
+                # in a busy minute is a reason to carry on asking, five are a reason to be quiet for
+                # a minute, and only three such minutes with nothing answered between them are a
+                # reason to stop. None of those is this stage's judgement to make.
                 down = not client.available
             elif recording is not None:
                 outcome.looked_up += 1
