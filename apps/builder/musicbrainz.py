@@ -15,17 +15,17 @@ and only the first may be cached.
 
 There is a third answer, and #59 is the build that could not tell it apart from the second one.
 `HTTP 503` from musicbrainz.org is a page that says *"The MusicBrainz web server is currently
-busy. Please try again later."* — not unreachable, not a miss, an invitation to ask again in a
-minute. Measured over this library's own unidentified albums: 19 of 24 release searches came back
-unusable, 16 of them that way — and pacing explains none of it, because asking the same 24 once
-every three seconds failed 16 times as well, and `HTTP 429`, the status that *is* the published
-rate limit, never appeared at all. It is somebody else's search service having a busy hour, and a
-client that reads that as an outage stops drawing covers over a service asking, by name, to be
-asked again later. Three things follow, and they are
-most of this file's policy: a refused request is repeated once, after a wait the answer may name;
-`available` counts failures *in a row* rather than in a run; and the wait for an answer is long
-enough for the slowest endpoint this client uses, because to everyone downstream a timeout and an
-outage are the same event.
+busy. Please try again later."* — not unreachable, not a miss, an invitation to ask again later. It
+is weather rather than arithmetic, and it was measured as weather: 16 of 24 release searches came
+back that way at ten past ten, the same 24 asked once every three seconds failed 16 times too, and
+a 189-request probe of the same endpoint at the ordinary pacing twenty minutes later returned no
+failures at all. No `HTTP 429` appeared in any of the three, so it is not this client asking too
+fast; it is somebody else's search service having an hour. Three things follow, and they are most
+of this file's policy: a refused request is repeated once, after a wait the answer may name;
+`available` counts failures *in a row* rather than in a run, and an album nobody answered is asked
+for again at the end of the pass rather than written off; and the wait for an answer is long enough
+for the slowest endpoint this client uses, because to everyone downstream a timeout and an outage
+are the same event.
 
 The identifiers Encore already has in tags are looked up directly; searching by
 name is available but off unless asked for, because ADR-010 measured these tags as
@@ -82,15 +82,12 @@ RETRYABLE_STATUS: Final = frozenset({429, 500, 502, 503, 504})
 #: still one request per second at minimum, because being refused is not a licence to ask faster.
 ATTEMPTS_PER_REQUEST: Final = 2
 
-#: How long a repeat waits when the answer did not say. This number is load-bearing in a way the
-#: comment around it does not suggest, and two builds of the same library proved it. At 2 s the
-#: repeat landed while the service was still busy, so a question failed twice, `available` counted
-#: five of those in a row and the pass ended with **318 of 417 albums left to ask** in 420 seconds.
-#: At 5 s the repeat usually arrived *after* the busy moment, failures stopped stacking, and the
-#: same build made 578 requests, asked about 414 albums and finished its list in 1,991. The wait
-#: between attempts is therefore not politeness toward the service, it is the run's own survival:
-#: `MAX_FAILURES` measures consecutive questions, and this decides how many of them a single bad
-#: minute gets to burn. `albumart`'s end-of-pass deferral is the second chance; this is the first.
+#: How long a repeat waits when the answer did not say, and the floor on a wait the service asked
+#: for by name. Longer than the ordinary spacing, so that "later" means later: the 503s arrive in
+#: stretches rather than one at a time, so a repeat one request-interval later is the same question
+#: asked louder, and five questions in a row — two attempts each — is what `MAX_FAILURES` counts.
+#: The *long* wait a needy album really gets is `albumart`'s end-of-pass deferral, several hundred
+#: requests away; this is the short one that comes first.
 RETRY_WAIT: Final = 5.0
 
 #: The ceiling on a wait the service asked for by name. `Retry-After` is honoured, and a service

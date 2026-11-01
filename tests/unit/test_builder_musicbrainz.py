@@ -493,10 +493,10 @@ def test_the_wait_when_the_service_said_nothing_is_the_policy_not_the_spacing() 
     """The floor is a number someone chose, so it is written where a reader can disagree.
 
     5 s, not the 1 s ordinary spacing: a repeat one interval later is the same question asked
-    louder, and at 2 s the appliance's own build ended its cover pass with 318 of 417 albums
-    unasked, because the repeats kept failing and `available` counts questions in a row. At 5 s the
-    same library finished its list. The long wait is `albumart`'s end-of-pass deferral; this is the
-    chance that comes before it (#59).
+    louder. The refusals arrive in stretches rather than one at a time — 16 of 24 release searches
+    at ten past ten, none of 189 at twenty past eleven, at the same pacing both — so what a short
+    floor buys is a second failure on the same busy minute, and five questions in a row is what
+    `available` counts (#59).
     """
 
     assert _retry_after(_http_error(503), default=RETRY_WAIT) == RETRY_WAIT

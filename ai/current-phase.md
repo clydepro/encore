@@ -366,7 +366,8 @@ Four defects, and each had a comment in the code saying the opposite of what the
    `_failures` was never cleared by a success. A thousand-request build was down by its fifth blink
    of the afternoon. A success resets it, and a question that fails and is repeated counts once.
 3. **8 seconds was a guess, and it was the wrong kind of wrong.** Measured here: a release search's
-   ninetieth percentile is 6.1 s and its tail passes 45 s; a lookup of a recording by MBID sits at a
+   ninetieth percentile of a release search is 6.1 s and its tail passes 45 s; a lookup of a
+   recording by MBID sits at a
    13.7 s median; one Cover Art Archive `front` took 20.9 s and arrived perfectly well. A timeout
    that arrives before the answer is indistinguishable, downstream, from a service that never
    answers — 41% of a 200-request sample were socket timeouts against a service holding 86% of the
@@ -379,16 +380,27 @@ Four defects, and each had a comment in the code saying the opposite of what the
    carried the transport's own sentence since #57, is finally read by `_warnings`: "unavailable" is
    not actionable, "`HTTP 503 from https://musicbrainz.org/ws/2/recording`" is.
 
-The verified before-and-after is the appliance's own library, unchanged, one build with the fix in
-place: **578 requests over the 417 albums that had no picture, 307 images written into an empty
-cache where the report had said 0, 325 of 703 albums carrying artwork where it had said 240, in
-1,991 seconds, with 3 albums left to ask.** The line that build would print now reads
-`Cover art: 85 of 417 albums without embedded art, 578 requests, 291 not named exactly, 26 with no
-image, 12 refused, 3 left to ask`, and the big number in it is the policy working: 291 releases this
-library could not name exactly are ADR-016 declining to guess, not the network failing. What the
-issue asked for is the last column and the word count: the build is now long because it asked.
+The verified before-and-after is the appliance's own library, unchanged, built four times in an
+hour. Before: **0 images written, 24.8 s, both services reported down**. After, the same tags:
 
-The tenth instance of the standing finding, after #38, #41, #43, #44, #46, #48, #51, #52 and #55:
+| When | Code | Requests | Albums asked | Images | Left to ask |
+| ---- | ---- | -------- | ------------ | ------ | ----------- |
+| 09:57 | fixed, 5 s wait, 30 s timeout | 578 | 414 of 417 | **307** | 3 |
+| 10:56 | fixed, 2 s wait, 45 s timeout | 152 | 99 | 243 | 318 |
+| 11:10 | fixed, 5 s wait, 45 s timeout | 80 | 48 | 232 | 369 |
+| 11:20 | the client alone, 189 release searches | 189 | — | — | **no failures at all** |
+| 11:32 | fixed, as shipped | running | | | |
+
+Read as one experiment it says something better than "the bug is fixed": the asking now continues for
+exactly as long as the service continues answering, and stops reporting a network fault when it was a
+network *moment*. 307 images where the report said 0, and 325 of 703 albums carrying artwork where the
+published library had 240. The 80-request build is the honest half: five consecutive unanswered
+questions still end a run, which is ADR-016 declining to hammer someone else's server, those albums
+keep no identifier so tonight's build asks them from the start, and the line ends in `369 left to
+ask` instead of a word that meant three things. A cooldown that recovers rather than a switch that
+latches is the shape of the rest of it, and it is named in the issue rather than half-done here.
+
+The eleventh instance of the standing finding, after #38, #41, #43, #44, #46, #48, #51, #52 and #55:
 **an error string is not a diagnosis, and a report that paraphrases one has stopped reporting.**
 "unavailable" was the client's word for a state it had never been asked about, and it was printed
 over a network that was fine, a queue that was never reached, and a disabled client that was never

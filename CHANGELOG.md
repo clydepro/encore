@@ -539,8 +539,7 @@ The release process moves the section into a dated, bracketed version heading.
   `Artwork 0 images written to the cache (222 in this library)`, `MusicBrainz: unavailable`,
   `Cover art: archive unavailable`, and a duration of 24.8 seconds. The duration is the finding: at
   the client's own one request per second, 481 needy albums are about sixteen minutes of asking, so
-  the build had asked three questions and stopped talking to the internet. Nothing was down. A probe
-  probe of 24 of this library's own unidentified albums, answered properly, named 16 releases and
+  the build had asked three questions and stopped talking to the internet. Nothing was down: a probe of 24 of this library's own unidentified albums, answered properly, named 16 releases and
   fetched 5 real covers — and 16 of those 24 had come back `HTTP 503`, which is musicbrainz.org's
   *"The MusicBrainz web server is currently busy. Please try again later."* page. Pacing explains
   none of it: the same 24 asked once every three seconds failed 16 times too, and `HTTP 429`, the
@@ -561,23 +560,19 @@ The release process moves the section into a dated, bracketed version heading.
   Repeating immediately was rejected: it is asking faster than the rate limit at the expense of every
   later question, and it makes the count in `available` a lie twice over.
 
-  The interval before a repeat turned out to be the load-bearing number in the change, and the same
-  library measured it both ways. At 2 s the repeat landed inside the busy moment it was answering, so
-  questions failed twice, five landed in a row, `available` said what it was told and the cover pass
-  stopped with **318 of its 417 albums never asked**, in 420 seconds. At 5 s the repeat landed after
-  it, failures stopped stacking, and the same build asked 578 times, published 307 images and
-  finished its list in 1,991. One constant, two builds, and the difference is the issue.
-
-  The transport's other half was a guess of a different kind: 8 s per request. Measured per endpoint,
-  on the queries this build actually makes — a recording search runs at a 0.46 s median, a release
-  search at 5.3 s with a tail past 45 s, a lookup of a recording by identifier at a 13.7 s median,
-  and one Cover Art Archive `front` took 20.9 s and arrived perfectly well. To everyone downstream a
-  timeout *is* an outage, indistinguishable from a service that never answers, which is how 41% of a
-  200-request sample came to be reported as "unavailable" against a service holding 86% of the
-  lookups in its own database. The default is 45 s now — the slowest answer actually observed — and
-  the published one request per second is what bounds a build, which is the sentence the
-  Administrator Guide had not been saying: this appliance's first asking build was 417 albums, 578
-  requests and 1,991 seconds.
+  What the change actually buys is the asking surviving the weather, and one unchanged library
+  measured it five times. Before: 0 images written, 24.8 seconds, both services reported down. After,
+  at the service's own pace: 578 requests over 414 of its 417 needy albums and **307 images written
+  into an empty cache**, in 1,991 seconds. Two builds into a bad stretch, 152 requests and 80 — each
+  of them stopping at the fifth unanswered question in a row, which is decision 6's rule and not
+  anything #59 changed — and a 189-request probe of the same endpoint, at the same one-per-second
+  pacing twenty minutes later, met no failures at all. The difference between the issue's 24.8-second
+  build and the fix's 578-request one is not that the network improved. It is that a build now keeps
+  asking while the service keeps answering, and when it stops it says how far it got: the 80-request
+  build ends its line `369 left to ask`, those albums keep no identifier so tonight's build asks them
+  from the start, and nobody has to guess which of the two afternoons they are reading. A cooldown
+  that recovers, rather than a switch that latches, is the shape of what is left here, and it is
+  named rather than quietly half-done.
 
   What the report can say grew from two words to five numbers. `CoverOutcome` gained `unanswered`
   (asked twice, never answered) and a derived `not_reached` (the pass stopped before getting there),

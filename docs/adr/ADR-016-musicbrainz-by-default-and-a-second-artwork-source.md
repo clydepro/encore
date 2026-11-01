@@ -190,21 +190,32 @@ Rejected: that is the bug, cached. ADR-010 priced this exact trade and the price
 Found while turning the two flags on, and changing nothing decided above.
 
 **A public service answers three ways, and the code had two words for them.** A miss, a refusal and
-an absence. `None` was the answer to the last two, which is how one 503 — musicbrainz.org's
-*"currently busy, please try again later"*, three quarters of the requests in a measured sample —
-ended the run's asking and appeared in the report as an outage. The client now repeats a refused
-request once, spaced by any `Retry-After` it was given, and `available` counts failures *in a row*
-as its docstring always claimed; it had been counting them cumulatively and clearing none.
+an absence. `None` was the answer to the last two, which is how one `HTTP 503` — musicbrainz.org's
+*"currently busy, please try again later"* — ended a whole run's asking and appeared in the report
+as an outage. It is worth being clear about what that status is, because the obvious reading is
+wrong and the code inherited it. It is not the published rate limit: no `HTTP 429` appeared in any
+of the four samples below, and asking once every three seconds failed exactly as often as asking
+once per second. It is weather — 16 of 24 release searches at ten past ten, none of 189 at twenty
+past eleven, the same endpoint, the same pacing, the same machine. So the fix is not a better
+request rate, and no client can have one against weather; it is a policy that keeps asking while the
+service keeps answering, repeats a refused question once, gives an album the rest of the pass before
+giving up on it, counts failures *in a row* as `available` always claimed to, and reports how far it
+got when the asking does stop.
 
 **"Covered" is not one number.** `albumart.CoverOutcome` separates `unmatched` (the release could
 not be named exactly — the policy working), `uncovered` (named, no image), `unanswered` (refused
-twice) and `not_reached` (never got to), because a build over 481 grey albums once asked three
+ twice) and `not_reached` (never got to), because a build over 417 grey albums once asked three
 questions and reported zero of the other three, which read as "the archive has nothing".
 
-**Measured, for the next person setting a timeout.** A release search runs 0.4 s usually and past
-8 s often; one Cover Art Archive `front` took 20.9 s and was fine. 8 s per request turned 41% of a
-200-request sample into socket timeouts against a service holding 86% of the lookups in its
-database. The default is 30 s now; the 1 request/second rule above is what actually bounds a build.
+**Measured, for the next person setting a timeout.** The endpoints are not one speed. Over this
+library's own unanswered albums: a recording search runs at a 0.46 s median, a release search at a
+5.3 s median with a tail past 45 s, a lookup of a recording by identifier at a 13.7 s median, and
+one Cover Art Archive `front` took 20.9 s and arrived perfectly well. The 8 s this client shipped
+with turned a fifth of a 200-request sample into socket timeouts against a service holding 86% of
+the lookups in its own database — and a timeout is, to everything downstream, indistinguishable
+from the outage decision 6 was written to avoid. The default is 45 s, which is the slowest answer
+actually observed. The 1 request/second rule above is what bounds a build; the timeout only decides
+whether a build waits for an answer or throws one away.
 
 **The cost stated above was a guess, and the appliance's is higher.** "About a minute per hundred
 files" counts files; the asking is per *album*, and the dominant term is one request per second
