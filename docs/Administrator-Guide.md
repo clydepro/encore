@@ -211,12 +211,23 @@ builder:
 ```
 
 **What asking costs.** One request per second, which is MusicBrainz's published
-policy and the reason this feature was slow to be worth turning on: a first build
-of 3,000 files with holes in them takes about two minutes longer than the same
-build without them, and a rebuild where nothing changed asks almost nothing. An
-album that has never been identified costs two requests — name the release, fetch
-the picture; once it has been identified the same album costs one, forever,
-because the release's identifier is stored on the album row. The Server is not
+policy and the reason this feature was slow to be worth turning on: the asking is
+what makes a first build long, not the reading of your files. A rebuild where
+nothing changed asks almost nothing. An album that has never been identified costs
+two requests — name the release, fetch the picture; once it has been identified the
+same album costs one, forever, because the release's identifier is stored on the
+album row. Measured on this appliance, first build with the feature on: 417 albums
+with no picture of their own, 578 requests, 1,991 seconds, 307 images in the cache
+at the end of it. Half an hour, and the rate limit is most of it — a release search answers in
+about two thirds of a second when the service is well, so the duration is the one-request-per-second
+rule rather than anybody's latency. A service having a busy afternoon adds to
+that rather than subtracting from it, because a refused question is asked again later
+in the same run and again on the next build
+([#59](https://github.com/clydepro/encore/issues/59)). Five questions in a row that nobody answers
+costs the build a minute of silence, up to ten minutes of silence per run; that is the whole of the
+time the Builder spends waiting rather than asking, and a run out of waiting budget carries on at
+the ordinary rate and says in the report how far it got. Run it before a party rather
+than during one, and remember that `--dry-run` pays the same price. The Server is not
 involved in any of this: it never opens a connection because of anything in this
 section, and it does not read it (ADR-001, ADR-016).
 
@@ -233,7 +244,12 @@ and the album title match a release exactly (case and punctuation may differ); a
 near match is refused, because a wrong cover is a lie about where something is and a
 missing one is only a gap. `Cover art: 380 of 463 albums without embedded art, 926
 requests, 79 not named exactly` is that policy in one line, and the last number is
-the policy working rather than failing.
+the policy working rather than failing. Four numbers can follow, and they mean four
+different things: *not named exactly* and *with no image* are answers about your
+library, *refused* is an album the service never answered twice, and *albums left to
+ask* is the run stopping early — the first two are ordinary, the last two are about
+the network, and only the last one asks you to rebuild. See
+[Troubleshooting](Troubleshooting.md#half-the-library-is-grey-and-the-files-have-no-picture-in-them).
 
 It prints a report and exits. The exit code is meant to be read by a cron
 wrapper as well as by you:

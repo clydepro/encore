@@ -465,6 +465,83 @@ your session cookie, so `curl` without one is not the way to ask).
 The other number to check is `select count(*) from songs where artwork_id is not
 null`, which should be within a few percent of how many files carry a picture.
 
+### The build says MusicBrainz is unavailable, and it finished in 25 seconds
+
+```console
+$ sudo encore-builder --full
+  MusicBrainz        unavailable
+  Cover art          archive unavailable
+  Duration           24.8 s
+```
+
+Read the duration first. An asking build cannot be fast: one request per second is the published
+rule, so a library with 481 grey albums costs minutes on the archive alone, and a build that
+discovered the whole library and reported both services down inside half a minute made perhaps
+three requests before it stopped making them. That is
+[#59](https://github.com/clydepro/encore/issues/59), and it was not a network fault: musicbrainz.org
+answers a busy moment with `HTTP 503` and the sentence *"The MusicBrainz web server is currently
+busy. Please try again later."*, and the Builder heard "later" as "gone". One refused question ended
+the run's enrichment for every later track and the cover stage for every later album, the failure
+counter that was supposed to measure five *in a row* never subtracted a success, and — this is the
+part that fooled the first diagnosis — 41% of a long sample came back as 8-second socket timeouts,
+which looks like a service too slow to answer and is a service too busy to answer *in the order you
+are asking*. Measured one at a time, the same queries answer in about two thirds of a second.
+
+Now it asks again. A refused request is repeated once, after the wait the answer named or five
+seconds, and an album whose repeat was refused too goes to the back of the pass — which on a real
+library is several hundred requests later, and so minutes: what "try again later" asked for. Five
+questions in a row that the service could not answer at all cost the run a minute of silence rather
+than the rest of the build, and only three such minutes with nothing answered between them end the
+asking. The line you get when the service really is unwell still counts what the run managed:
+
+```console
+  MusicBrainz        unavailable after 9 lookups, 0 fields repaired, 8 refused
+  Cover art          85 of 417 albums without embedded art, 578 requests, 291 not named exactly,
+                     26 with no image, 12 refused, 3 left to ask
+```
+
+and a build that finished its list carries no `left to ask` column at all, whatever the service did
+in the middle of it. `refused` there is the number of *questions* the service could not answer, so
+a line with counts and no tail means a run that was annoyed rather than shut out.
+
+Waiting is why the two differ in duration as well. One library, built twice into weather of the same
+kind, took 33 minutes and 43 minutes; the longer of the two is the build that asked 587 questions
+about all 417 of its grey albums and stopped for a minute every fifth one, and the shorter stopped at
+album 34 with `3 left to ask`. A `Duration` that surprises you is usually this, and the totals either
+side of it are the same 417 albums.
+
+`archive unavailable`, with no numbers at all, means the asking never started.
+
+Two commands tell you whether it is the service or the box. The first is the report's own
+`Warnings:` block, which since #59 carries the sentence the transport actually said — `timed out`,
+`HTTP 503`, `Name or service not known`:
+
+```console
+$ sudo encore-builder
+  Warnings           cannot reach https://musicbrainz.org/ws/2: timed out
+```
+
+The second is the service, from the same machine:
+
+```console
+$ curl -sS -o /dev/null -w '%{http_code} %{time_total}s\n' \
+    -A 'EncoreJukebox/0.1 ( https://github.com/clydepro/encore )' \
+    'https://musicbrainz.org/ws/2/recording?query=recording%3A%22morning%22&fmt=json'
+200 0.41s
+```
+
+A `200` there and `unavailable` in the report means the Builder's reading of the service, which is
+the bug; go find out which version of `apps/builder/musicbrainz.py` ran. A `503`, or a connect that
+never completes, is somebody else's afternoon: rebuild later, and the albums that were identified
+keep their release ids, so the second pass asks about them once instead of twice. A `000` or a
+dns failure is this machine's network, and
+[the installer's section on it](#the-service-will-not-start) applies to the Builder the same way.
+
+Nothing is lost meanwhile, and nothing is guessed. A build that could not ask publishes what the
+tags and the previous build already knew — SAPRS 6.6 says an outage must not stop valid music being
+processed, and an album nobody answered for stays grey rather than taking a near neighbour's
+sleeve.
+
 ### Half the library is grey and the files have no picture in them
 
 ```console
@@ -503,13 +580,20 @@ $ sudo encore-builder
   punctuation. A near match is refused, because an album illustrated with someone
   else's sleeve is worse than a grey tile: one is a gap and the other is a lie about
   where something is.
+- `3 refused` — asked, and the service did not answer, twice. An afternoon rather than a
+  library: the next build asks those albums again, and they are the only column here that says
+  something about the network instead of about your files. Albums left over because the run
+  stopped early are counted in the `unavailable` line instead, as `albums left to ask`.
 
 Nothing to do but rebuild, and the tiles fill in as the albums are identified. Expect
-roughly one second per request, so a first pass over 463 albums is a few minutes; the
+roughly one second per request, so a first pass over 463 albums is tens of minutes; the
 second pass costs half as much per album, because the identifier found the first time
 is stored on the album row. Where #52 applies — an unchanged file whose artwork the
 last build already resolved — the album is not asked about at all, and the line reads
-`0 of 1 albums without embedded art`.
+`0 of 1 albums without embedded art`. If the first pass came back saying nothing was
+reachable at all, in 25 seconds, read
+[the build says MusicBrainz is unavailable](#the-build-says-musicbrainz-is-unavailable-and-it-finished-in-25-seconds)
+before you believe it.
 
 ### An artist named 01, or a release year of 24
 

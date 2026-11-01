@@ -20,6 +20,11 @@ that publishes zero artwork, and [#55](https://github.com/clydepro/encore/issues
 `encore-install upgrade` deciding the code is already installed by comparing `pyproject.toml` — both
 fixed on this branch, and #52's grey tiles turned out to have a third cause of their own, which is
 what "What an appliance asked MusicBrainz about (#57)" below is about.
+A ninth one came from the same library rather than the same commands:
+[#59](https://github.com/clydepro/encore/issues/59), a build that published no covers and blamed the
+network for it, open as
+[#60](https://github.com/clydepro/encore/pull/60) — see "What an appliance's build report could not
+say (#59)".
 **Phase 7 — the dependency-alert chore — merged as
 [#40](https://github.com/clydepro/encore/pull/40), closing
 [#39](https://github.com/clydepro/encore/issues/39).** Phases 1–5 are merged:
@@ -329,6 +334,99 @@ feature whose only switch is typed in a terminal is off, and a default nobody ca
 configuration file is a default that has never been examined.** `MusicBrainz: disabled` printed on
 100% of this appliance's builds without one person choosing it, and the report line nobody could
 account for was the same document that said the library was healthy.
+
+## What an appliance's build report could not say (#59)
+
+The #57 fix shipped, the appliance was rebuilt with both flags on, and the tiles were grey a third
+time — with a report that said why, in words that were not the reason:
+
+```console
+$ sudo encore-builder
+  Artwork            0  images written to the cache (222 in this library)
+  MusicBrainz        unavailable; what the last build knew was reused
+  Cover art          archive unavailable
+  Build: full, 24.8s
+```
+
+24.8 seconds is the whole finding. At the client's own one request per second, 481 needy albums are
+about sixteen minutes of asking; the build asked three questions and stopped talking to the
+internet. MusicBrainz was not down — a probe of 24 of the library's own unidentified albums,
+answered properly, found 16 releases and fetched 5 real covers, and 18 of those 24 requests had
+come back `HTTP 503`, which is musicbrainz.org's *"The MusicBrainz web server is currently busy.
+Please try again later."* page. Asking the same 24 at three-second spacing instead of one failed
+16 rather than 18, on the same queries both times: someone else's search server having a busy hour,
+and a client that had no word for it.
+
+Four defects, and each had a comment in the code saying the opposite of what the code did.
+
+1. **Two stages kept a stricter outage policy than the client's.** `enrichment._lookup` returned
+   "the service is down" for its first exception and `enrich` latched off for the remaining 3,042
+   tracks; `albumart.fetch` did the same with a `break`, ending the pass over 478 unasked albums.
+   Both now continue while `client.available` says to, which is the contract the module docstring
+   had always advertised and nothing had ever enforced. A refused album additionally goes to the
+   *back of the pass* rather than the bin — "try again later", and later is what a queue of
+   several hundred requests at one per second actually offers, minutes rather than a sleep.
+   Five in a row, in turn, now cost the client a minute of silence (`COOLDOWN`) rather than the
+   rest of the build, and only three such minutes with nothing answered between them
+   (`COOLDOWNS_PER_RUN`) end the asking. That is the difference between weather and an absence,
+   and the appliance measured both on one afternoon: 16 of 24 release searches refused at 10:11,
+   none of 189 refused at 11:20, same tags, same machine, same rate limit.
+2. **`available` counted failures in a run, not in a row.** `MAX_FAILURES = 5` is documented as
+   "five in a row, because a single dropped request in a 20-minute build is the internet", and
+   `_failures` was never cleared by a success. A thousand-request build was down by its fifth blink
+   of the afternoon. A success resets it, and a question that fails and is repeated counts once.
+3. **The timeout was a habit, and the diagnosis it supported was wrong.** 8 s per request looked
+   like the cause — 41% of a 200-request sample came back as socket timeouts — but measured raw, with
+   no client and no queue in the way, this library's own albums answer at a 0.68 s median and the
+   slowest of forty answers is 4.9 s. What made those 200 requests slow was asking them in a
+   sustained queue of a service already having an hour. So the timeout is not why an album had no
+   cover; it is why the build could not tell it had been refused. The default is 30 s because a
+   timeout and an outage are one event downstream and that much should at least be chosen.
+4. **The report had four words for three states.** `unmatched` (this library could not name the
+   release exactly — the policy working), `uncovered` (named, no image), `unanswered` (asked twice,
+   never answered) and `not_reached` (the pass stopped before getting there) are now four numbers,
+   and they sum to the candidates they were taken from. And `EnrichmentOutcome.notes`, which has
+   carried the transport's own sentence since #57, is finally read by `_warnings`: "unavailable" is
+   not actionable, "`HTTP 503 from https://musicbrainz.org/ws/2/recording`" is.
+
+The verified before-and-after is the appliance's own library, unchanged, built six times in an
+afternoon. Before: **0 images written, 24.8 s, both services reported down**. After, the same tags:
+
+| When | Code | Requests | Albums asked | Images | Left to ask |
+| ---- | ---- | -------- | ------------ | ------ | ----------- |
+| 09:57 | 5 s wait, 30 s timeout | 578 | 414 of 417 | **307** | 3 |
+| 10:56 | 2 s before a repeat | 152 | 99 | 243 | 318 |
+| 11:10 | 5 s wait, 45 s timeout | 80 | 48 | 232 | 369 |
+| 11:20 | the client alone, 189 release searches | 189 | — | — | **no failures at all** |
+| 11:47 | as first committed | 57 | 34 | 232 | 383 |
+| 12:21 | five in a row costs a minute | **587** | **417 of 417** | 305 | **none** |
+| 12:21 | five in a row = a cooldown | **587** | **417 of 417** | **305** | **none** |
+
+The last row is the one the first five asked for. The same afternoon's weather, met with a minute of
+silence rather than a full stop, let the pass reach the end of its own list: 587 requests, every one
+of the 417 needy albums asked, `293 not named exactly, 22 with no image, 19 refused` and no `left to
+ask` anywhere in the line — which is the first time this appliance reported a cover stage that
+*finished* rather than one that gave up. 43 minutes, against 33 for the healthiest run above; that is
+what waiting out a bad stretch costs, and the `Duration` line is where an operator sees it.
+
+Read as one experiment it says something better than "the bug is fixed": the asking now continues for
+exactly as long as the service continues answering, and stops reporting a network fault when it was a
+network *moment*. 307 images where the report said 0, and 325 of 703 albums carrying artwork where the
+published library had 240. The 57-request build is the honest half of the picture: five consecutive
+unanswered questions ended it, which was ADR-016 declining to hammer someone else's server, those
+albums kept no identifier so the next build asked them from the start, and the line ended in `383
+left to ask` instead of a word that meant three things. The last row is what happens when that rule
+becomes a minute of waiting instead of a full stop: 587 requests, every one of the 417 needy albums
+asked about, and the first cover pass this appliance has run that had nothing left to ask. 43 minutes
+rather than 33, 305 images, 19 albums the service refused twice — a build that finished, and a report
+that says which parts of it did not.
+
+The eleventh instance of the standing finding, after #38, #41, #43, #44, #46, #48, #51, #52 and #55:
+**an error string is not a diagnosis, and a report that paraphrases one has stopped reporting.**
+"unavailable" was the client's word for a state it had never been asked about, and it was printed
+over a network that was fine, a queue that was never reached, and a disabled client that was never
+given a socket to open. The lesson for step 16 generalises further than this bug: when a boolean
+means three things, the third is the one that gets believed.
 
 ## What running it on a machine with systemd found (#43, #44)
 

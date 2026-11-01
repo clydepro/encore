@@ -40,7 +40,12 @@ class FakeArchive:
             looks up a query string is a test of this module's spelling.
         images: Release id → bytes. A release missing from here is the archive's honest "we have
             no front image for that", which is most of them.
-        fail_after: Raise an outage instead of the answer after this many requests.
+        fail_after: Raise an outage instead of every further answer after this many requests — a
+            service that went away, which is the kind of no `available` reports.
+        refuse_covers: Release ids refused *once* and answered on the repeat. This is the kind of
+            no that has a 503 in it, and #59 is what happened while no double in the suite could
+            say it.
+        deny_covers: Release ids refused every time they are asked about.
     """
 
     def __init__(
@@ -49,23 +54,37 @@ class FakeArchive:
         *,
         images: dict[str, bytes] | None = None,
         fail_after: int | None = None,
+        refuse_covers: Sequence[str] = (),
+        deny_covers: Sequence[str] = (),
     ) -> None:
         self.catalog = catalog or {}
         self.images = images or {}
         self.fail_after = fail_after
+        self.refuse = dict.fromkeys(refuse_covers, 1) | dict.fromkeys(deny_covers, 2)
         self.queries: list[tuple[str, str]] = []
         self.covers: list[str] = []
+        self.requests: list[tuple[str, str]] = []
 
     @property
     def available(self) -> bool:
-        return True
+        """False from `fail_after` onwards, because that is what an outage is."""
 
-    def _asked(self) -> bool:
-        """Whether the run has spent its allowance. Outages arrive on their own schedule."""
+        return not self._gone()
 
-        return (
-            self.fail_after is not None and len(self.queries) + len(self.covers) > self.fail_after
-        )
+    def _gone(self) -> bool:
+        return self.fail_after is not None and len(self.requests) > self.fail_after
+
+    def _request(self, kind: str, name: str) -> None:
+        """Ledger one question — answered or not — and raise if the service has gone away.
+
+        Refusals are recorded because "how many times was the archive asked" is the number a
+        test of #59 has to be able to read, and an outage is a fact about the run rather than
+        about the album.
+        """
+
+        self.requests.append((kind, name))
+        if self._gone():
+            raise MusicBrainzUnavailableError("simulated outage")
 
     def search(self, *, artist: str, release: str, track: str) -> Recording | None:  # noqa: ARG002
         return None
@@ -74,14 +93,15 @@ class FakeArchive:
         return None
 
     def releases(self, *, artist: str, album: str) -> Sequence[Release]:
-        if self._asked():
-            raise MusicBrainzUnavailableError("simulated outage")
+        self._request("releases", album)
         self.queries.append((artist, album))
         return self.catalog.get(album, ())
 
     def cover(self, release_id: str) -> bytes | None:
-        if self._asked():
-            raise MusicBrainzUnavailableError("simulated outage")
+        self._request("cover", release_id)
+        if self.refuse.get(release_id, 0):
+            self.refuse[release_id] -= 1
+            raise MusicBrainzUnavailableError("the server is currently busy")
         self.covers.append(release_id)
         return self.images.get(release_id)
 
@@ -317,7 +337,7 @@ def test_an_identified_album_with_no_picture_is_still_recorded(tmp_path: Path) -
 
 
 def test_an_outage_ends_the_asking_and_keeps_what_was_found(tmp_path: Path) -> None:
-    """The stage degrades and reports rather than raising, and stops rather than retrying.
+    """The stage degrades and reports rather than raising, and stops when the client has stopped.
 
     Two albums, an archive that dies after the second request: the first album's cover is in the
     outcome, the second is never mentioned again, and the report says unavailable. An album the
@@ -342,6 +362,85 @@ def test_an_outage_ends_the_asking_and_keeps_what_was_found(tmp_path: Path) -> N
     assert outcome.unavailable is True
     assert (outcome.covered, outcome.unmatched, outcome.uncovered) == (1, 0, 0)
     assert len(outcome.payloads) == 1
+    assert outcome.not_reached == 1, "the album never asked about is a number, not a shrug"
+
+
+def test_a_refused_album_is_asked_again_after_the_rest_of_the_pass(tmp_path: Path) -> None:
+    # "Try again later", and the later this run can offer is the end of the pass. The archive
+    # refuses `rel-2` once; the stage must not spend its second chance one second later on a
+    # service that said *later*, and must not spend it forever either.
+    tracks = [
+        _track(tmp_path, f"{index}.mp3", album=album, title=f"Song {index}")
+        for index, album in enumerate(("Discovery", "Random Access", "Homework"))
+    ]
+    archive = FakeArchive(
+        {
+            "Discovery": [_release("rel-1", title="Discovery")],
+            "Random Access": [_release("rel-2", title="Random Access")],
+            "Homework": [_release("rel-3", title="Homework")],
+        },
+        images={"rel-1": _PNG, "rel-2": _PNG, "rel-3": _PNG},
+        refuse_covers=["rel-2"],
+    )
+    outcome = fetch(tracks, archive)
+    assert outcome.covered == 3, "one busy answer does not leave an album grey"
+    asked = [name for kind, name in archive.requests if kind == "cover"]
+    assert asked[-1] == "rel-2", "the repeat comes after the rest, not immediately"
+    assert asked.count("rel-2") == 2, "and twice, not until the flash card wears out"
+
+
+def test_an_album_the_service_never_answers_is_refused_not_absent(tmp_path: Path) -> None:
+    # The fourth column: not covered, not unmatched, not uncovered, and not nothing (#59). An
+    # album whose question the service refuses twice is a fact about the afternoon. Counting it as
+    # `unmatched` would claim the library could not name the release, and counting it as
+    # `uncovered` would claim the archive has no picture for it — neither of which this run knows.
+    tracks = [
+        _track(tmp_path, "a.mp3", album="Discovery", title="One"),
+        _track(tmp_path, "b.mp3", album="Random Access", title="Two"),
+    ]
+    archive = FakeArchive(
+        {
+            "Discovery": [_release("rel-1", title="Discovery")],
+            "Random Access": [_release("rel-2", title="Random Access")],
+        },
+        images={"rel-1": _PNG},
+        deny_covers=["rel-2"],
+    )
+    outcome = fetch(tracks, archive)
+    assert (outcome.covered, outcome.uncovered, outcome.unmatched) == (1, 0, 0)
+    assert outcome.unanswered == 1
+    assert outcome.unavailable is False, "the service answered the rest, so the run was not down"
+    assert outcome.not_reached == 0
+    asked = [name for kind, name in archive.requests if kind == "cover"]
+    assert asked.count("rel-2") == 2, "twice, then left alone until the next build"
+
+
+def test_the_counts_close_over_the_albums_they_were_taken_from(tmp_path: Path) -> None:
+    # `albums` is the candidate list, and every candidate lands in exactly one column. The report
+    # prints these side by side so an operator can subtract them; #59 was found because 481
+    # candidates and 2 requests could both be true with nothing saying where the rest went.
+    tracks = [
+        _track(tmp_path, f"{index}.mp3", album=f"Album {index}", title=f"Song {index}")
+        for index in range(1, 6)
+    ]
+    archive = FakeArchive(
+        {
+            f"Album {index}": [_release(f"rel-{index}", title=f"Album {index}")]
+            for index in range(1, 6)
+        },
+        images={"rel-1": _PNG, "rel-2": _PNG},
+        refuse_covers=["rel-3"],
+        deny_covers=["rel-4"],
+    )
+    outcome = fetch(tracks, archive)
+    assert outcome.not_reached == 0
+    assert outcome.albums == (
+        outcome.covered
+        + outcome.unmatched
+        + outcome.uncovered
+        + outcome.unanswered
+        + outcome.not_reached
+    )
 
 
 def test_the_answer_is_a_count_of_decisions_not_of_bytes(tmp_path: Path) -> None:

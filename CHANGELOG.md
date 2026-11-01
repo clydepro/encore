@@ -534,6 +534,90 @@ The release process moves the section into a dated, bracketed version heading.
 
 ### Fixed
 
+- One busy minute stopped ending a build, and "unavailable" became a sentence with a reason
+  attached ([#59](https://github.com/clydepro/encore/issues/59)). A 3,049-file build reported
+  `Artwork 0 images written to the cache (222 in this library)`, `MusicBrainz: unavailable`,
+  `Cover art: archive unavailable`, and a duration of 24.8 seconds. The duration is the finding: at
+  the client's own one request per second, 481 needy albums are about sixteen minutes of asking, so
+  the build had asked three questions and stopped talking to the internet. Nothing was down: a probe of 24 of this library's own unidentified albums, answered properly, named 16 releases and
+  fetched 5 real covers — and 16 of those 24 had come back `HTTP 503`, which is musicbrainz.org's
+  *"The MusicBrainz web server is currently busy. Please try again later."* page. Pacing explains
+  none of it: the same 24 asked once every three seconds failed 16 times too, and `HTTP 429`, the
+  status that would mean this client was asking too fast, appeared in neither sample. Somebody
+  else's search service having a busy hour, and a client with no word for it.
+
+  Four defects, and each had a comment in the code saying the opposite. `enrichment._lookup` answered
+  its first exception with "the service is down" and `enrich` believed it, so the remaining 3,042
+  tracks were never offered anything; `albumart.fetch` did the same with a `break`, so every album
+  sorting after the unlucky one was skipped *and* the skipped ones were absent from the report, whose
+  "albums" counted candidates rather than questions. `HttpMusicBrainzClient.available`,
+  documented since #22 as five failures *in a row*, added every failure in the run and cleared none,
+  so a long build was dead by its fifth blink of the afternoon. And a refusal was counted as a
+  failure rather than as a direction: a refused request is now repeated once, spaced by whatever
+  `Retry-After` it sent (floored at 5 s, because the real header on that page is `retry-after: 0`,
+  and capped at 30), and an album whose repeat was refused too goes to the back of the pass rather
+  than the bin — which on a real library is several hundred requests, and therefore minutes, away.
+  Repeating immediately was rejected: it is asking faster than the rate limit at the expense of
+  every later question, and it makes the count in `available` a lie twice over. Five questions in a
+  row that came back unanswered no longer end the asking at all: they cost the client `COOLDOWN`
+  seconds of silence, and only three such silences with nothing answered between them
+  (`COOLDOWNS_PER_RUN`) are an outage. Patience is bounded by `PATIENCE` seconds per run rather than
+  by enthusiasm: a row after the budget is spent still counts and no longer sleeps, because a build
+  that is idle for an hour on a ten-minute job is indistinguishable from a hung one. That is the
+  difference between weather and absence, and this build is now the one that waits out the first.
+
+  The transport's own half of the story is not the one this entry first told, and the correction is
+  worth keeping. 8 s per request looked like the cause because a 200-request sample came back 41%
+  socket timeouts; measured *raw*, with no client, no retry and no queue in the way, the same
+  library's unanswered albums answer in 0.68 s median for a recording search, 0.66 s for a release
+  search and 0.55 s for the archive, the slowest of forty answers 4.9 s. What produced those timeouts
+  was asking in a sustained queue — which is what a build is — of a service that was already having
+  an hour. So the timeout was never why an album had no cover; it is why the build could not tell
+  that the album had been refused. The default is 15 s, three times the slowest answer measured,
+  because to the caller a timeout and an outage are one event and that at least should be a choice —
+  and because patience stopped being a per-request property the moment five in a row began to cost a
+  minute of silence rather than the rest of the build.
+
+  What the change actually buys is the asking surviving the weather, and one unchanged library
+  measured it six times. Before: 0 images written, 24.8 seconds, both services reported down. After,
+  at the service's own pace: 578 requests over 414 of its 417 needy albums and **307 images written
+  into an empty cache**, in 1,991 seconds. Two builds into a bad stretch asked 152 requests and then
+  80, each of them stopping at the fifth unanswered question in a row — a rule #59 had left in place
+  — and a 189-request probe of the same endpoint, at the same one-per-second pacing twenty minutes
+  later, met no failures at all. That contrast is the second half of this fix: five in a row is a
+  cooldown now rather than a full stop, and the build that changed it asked **587 requests**, worked
+  through **all 417** needy albums instead of the first 34 of them, wrote 305 images and printed no
+  `left to ask` for the first time, because there was nothing left. 2,586 seconds against 1,991 is
+  what waiting out a bad stretch costs, and `Duration` is the line that says so.
+
+  A third doubling, found while writing the tests for the second: `run` called its own `_client`
+  helper once per stage, so a build had two `HttpMusicBrainzClient` objects and every per-run number
+  in this file was really per-stage. The request cap was 4,000 rather than 2,000, six cooldowns were
+  allowed rather than three, twenty minutes of patience rather than ten, and the enforced one-second
+  spacing restarted at the boundary between the stages — two clients asking in turn is two requests
+  in a second, which is the one rule this client exists to keep. A build now constructs one client
+  and hands it to both, and `test_a_build_carries_its_whole_conversation_in_one_client` counts
+  constructions, because an injected client is shared by construction and would have passed either
+  way (#59).
+
+  What the report can say grew from two words to five numbers. `CoverOutcome` gained `unanswered`
+  (asked twice, never answered) and a derived `not_reached` (the pass stopped before getting there),
+  because "not named exactly", "with no image", "refused" and "left to ask" are four sentences about
+  four problems, the first two were being read as if they covered all four, and only the last two
+  have anything to do with the network. A run that stopped early prints its counts *and* the tail
+  rather than "archive unavailable" over covers it had already fetched and published; #57's rule —
+  that a build which asked nothing must not be described as though it had — holds, because
+  "unavailable" with no numbers now means `requested == 0`. And `EnrichmentOutcome.notes`, which has
+  carried the transport's own sentence since #57 — "timed out", "HTTP 503 from
+  `https://musicbrainz.org/ws/2/recording`", "Name or service not known" — is finally read by
+  `_warnings`, since those are words an operator can act on and "unavailable" is not.
+
+  Regression: `tests/regression/test_issue_59_musicbrainz_busy.py` (12), with 8 new tests in
+  `test_builder_musicbrainz.py` for the three answers a service can give, 3 in
+  `test_builder_albumart.py` for a pass that defers rather than stops, and 1 in
+  `test_builder_enrichment.py` that one refused track is one track and not a switched-off run. The
+  doubles could previously express an answer, a miss and an outage; they can now express a busy
+  afternoon, which is the state that had no name and so no test, and which was the whole of the bug.
 - An offline build stopped making a library worse, and a value that is present and cannot be true
   stopped being believed ([#57](https://github.com/clydepro/encore/issues/57)). Two defects, one
   sentence in the spec that had been implemented in half. SAPRS 6.6's second level is "fill gaps

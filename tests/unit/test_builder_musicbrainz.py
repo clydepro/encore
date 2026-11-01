@@ -32,11 +32,17 @@ import pytest
 
 from apps.builder import musicbrainz
 from apps.builder.musicbrainz import (
+    ATTEMPTS_PER_REQUEST,
+    COOLDOWNS_PER_RUN,
+    MAX_FAILURES,
+    MAX_RETRY_WAIT,
+    RETRY_WAIT,
     HttpMusicBrainzClient,
     MusicBrainzUnavailableError,
     Recording,
     Release,
     _lucene,
+    _retry_after,
 )
 
 
@@ -51,6 +57,14 @@ class FakeResponse(io.BytesIO):
 
 
 class FakeOpener:
+    """A scripted musicbrainz.org.
+
+    Running out of script is a mistake, not a success: an opener that answers `""` for every
+    question after the last one scripted is a double that agrees with whatever it is asked, which
+    is the #41 lesson. A repeat is now part of the protocol being tested, so a test that scripts
+    one answer for two attempts would otherwise watch the second attempt *succeed*.
+    """
+
     def __init__(self, *responses: Any) -> None:
         self.responses = list(responses)
         self.calls: list[str] = []
@@ -58,7 +72,12 @@ class FakeOpener:
     def __call__(self, request: Any, timeout: float = 0.0) -> Any:
         del timeout
         self.calls.append(str(request.full_url))
-        outcome = self.responses.pop(0) if self.responses else {}
+        if not self.responses:
+            raise AssertionError(
+                f"musicbrainz.org ran out of scripted answers after {len(self.calls)} "
+                "requests; a repeat is a second request, not the end of one"
+            )
+        outcome = self.responses.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
         return FakeResponse(json.dumps(outcome).encode())
@@ -96,17 +115,31 @@ def search_payload(**kwargs: Any) -> dict[str, Any]:
     return {"recordings": [recording_payload(**kwargs)]}
 
 
-def _http_error(code: int) -> urllib.error.HTTPError:
+def _http_error(code: int, headers: Mapping[str, str] | None = None) -> urllib.error.HTTPError:
     """An HTTPError with the headers argument its stubs insist on being."""
 
-    return urllib.error.HTTPError(
-        "https://musicbrainz.org", code, "status", http.client.HTTPMessage(), None
-    )
+    message = http.client.HTTPMessage()
+    for name, value in (headers or {}).items():
+        message.add_header(name, value)
+    return urllib.error.HTTPError("https://musicbrainz.org", code, "status", message, None)
+
+
+def _refused(reason: str) -> urllib.error.URLError:
+    """A transport failure, which is what `urllib` raises when there is no answer at all."""
+
+    return urllib.error.URLError(reason)
 
 
 def client(*responses: Any, minimum_interval: float = 0.0, **kwargs: Any) -> HttpMusicBrainzClient:
+    # Both waits are parameters a test can set, and both are zero by default. The policy these
+    # assert is about *ordering* — what is asked, how many times, and when the asking stops — and a
+    # suite that slept 5 s per refusal and 60 s per row would be a suite nobody runs before a commit.
     return HttpMusicBrainzClient(
-        opener=FakeOpener(*responses), minimum_interval=minimum_interval, **kwargs
+        opener=FakeOpener(*responses),
+        minimum_interval=minimum_interval,
+        retry_wait=0.0,
+        cooldown=0.0,
+        **kwargs,
     )
 
 
@@ -197,17 +230,72 @@ def test_a_four_zero_four_is_a_miss_and_keeps_the_client_available() -> None:
     assert service.available is True
 
 
-def test_a_five_oh_three_is_an_outage() -> None:
-    service = client(_http_error(503))
+def test_a_five_oh_three_is_asked_again_before_it_is_an_outage() -> None:
+    # The busy page says "try again later", so this client does, and the answer arrives. #59's
+    # whole story in one assertion: a refusal a repeat fixes used to be a failure, five failures
+    # were an outage, and so a build over 481 albums stopped drawing covers after the third one.
+    # The service was never unreachable. It was busy, which is a different sentence.
+    service = client(_http_error(503), recording_payload())
+    found = service.recording("r")
+    assert found is not None
+    assert found.recording_id == "recording-1"
+    assert service.available is True, "a repeated question is not yet a failure"
+    assert len(service._opener.calls) == 2, "one question, two attempts"
+
+
+def test_a_busy_answer_that_refuses_twice_is_one_failure() -> None:
+    service = client(_http_error(503), _http_error(503))
     with pytest.raises(MusicBrainzUnavailableError, match="503"):
         service.recording("r")
+    assert service._failures == 1, "a repeated question costs the run one failure, not two"
     assert service.available is True, "one failure is not yet a pattern"
 
 
+@pytest.mark.parametrize("code", [503, 429, 500, 502, 504])
+def test_the_answers_that_mean_come_back_are_the_ones_repeated(code: int) -> None:
+    service = client(_http_error(code), recording_payload())
+    assert service.recording("r") is not None
+    assert len(service._opener.calls) == 2
+
+
+def test_a_stated_wait_is_honoured_and_bounded() -> None:
+    # A rate limit is obeyed, and an unreasonable one is refused rather than slept through.
+    # `retry-after: 0`, which is what musicbrainz.org's busy page actually sends, is a fact about
+    # the gateway's window and not an invitation to fire the next request immediately.
+    assert _retry_after(_http_error(503, {"Retry-After": "0"}), default=5.0) == 5.0
+    assert _retry_after(_http_error(503, {"Retry-After": "12"}), default=5.0) == 12.0
+    assert _retry_after(_http_error(503, {"Retry-After": "3600"}), default=5.0) == MAX_RETRY_WAIT
+    assert _retry_after(_http_error(503), default=5.0) == 5.0
+    assert _retry_after(_http_error(503, {"Retry-After": "not a number"}), default=5.0) == 5.0
+
+
+def test_a_timeout_is_repeated_too_because_a_slow_answer_is_still_an_answer() -> None:
+    service = client(TimeoutError("The read operation timed out"), recording_payload())
+    assert service.recording("r") is not None
+    assert len(service._opener.calls) == 2
+    assert service._failures == 0
+
+
 def test_a_connection_refused_is_an_outage_too() -> None:
-    service = client(urllib.error.URLError("connection refused"))
+    service = client(_refused("connection refused"), _refused("nope"))
     with pytest.raises(MusicBrainzUnavailableError, match="cannot reach"):
         service.search(artist="A", release="B", track="C")
+    assert service._failures == 1
+
+
+def test_a_success_resets_the_failure_count_to_zero() -> None:
+    # `available` says "five in a row", and the counter had been counting a run (#59). Five blinks
+    # spread over an hour-long build — exactly the thing the docstring was written to excuse —
+    # switched enrichment off for the rest of the process, on a service that had answered nine
+    # hundred questions in between.
+    answers = [_refused("blink"), _refused("blink"), recording_payload()] * 4
+    service = client(*answers)
+    for _ in range(4):
+        with pytest.raises(MusicBrainzUnavailableError):
+            service.recording("r")
+        assert service.recording("r") is not None
+    assert service._failures == 0
+    assert service.available is True
 
 
 def test_malformed_json_is_an_outage_and_not_a_crash() -> None:
@@ -215,20 +303,98 @@ def test_malformed_json_is_an_outage_and_not_a_crash() -> None:
         del request, timeout
         return FakeResponse(b"<html>a proxy said no</html>")
 
-    service = HttpMusicBrainzClient(opener=refuse, minimum_interval=0)
+    service = HttpMusicBrainzClient(opener=refuse, minimum_interval=0, retry_wait=0)
     with pytest.raises(MusicBrainzUnavailableError, match="malformed"):
         service.recording("r")
 
 
-def test_five_failures_switch_enrichment_off_for_the_run() -> None:
-    """`available` is the whole degradation policy, so it is worth its own test."""
+def _row(questions: int) -> list[Any]:
+    """Refusals enough for `questions` to be asked and repeated, which is what one now costs."""
 
-    service = client(*[urllib.error.URLError("down") for _ in range(6)])
+    return [_refused("down")] * ATTEMPTS_PER_REQUEST * questions
+
+
+def test_five_failures_cost_a_minute_of_silence_and_three_end_the_run() -> None:
+    # `available` is the whole degradation policy, so it is worth its own test. Five in a row no
+    # longer ends it: it buys the client a minute of quiet, and only three such minutes with nothing
+    # answered between them end the asking. #59's build stopped on the first five because the five it
+    # counted were five in the *run* — and the appliance that gave up after 57 requests had a service
+    # that answered 414 of them twenty minutes later, which is the entire argument for waiting.
+    service = client(*_row(MAX_FAILURES * COOLDOWNS_PER_RUN))
+    for row in range(COOLDOWNS_PER_RUN):
+        for _ in range(MAX_FAILURES):
+            with pytest.raises(MusicBrainzUnavailableError):
+                service.recording("r")
+        assert service.available == (row < 2), f"the third row ends it, not the {row + 1}"
+    asked = MAX_FAILURES * COOLDOWNS_PER_RUN
+    assert len(service._opener.calls) == ATTEMPTS_PER_REQUEST * asked, "twice each, then quiet"
+    assert service.recording("r") is None, "and a run that has stopped asks nothing further"
+    assert len(service._opener.calls) == ATTEMPTS_PER_REQUEST * asked
+
+
+def test_an_answer_between_two_bad_rows_starts_the_next_one_at_one() -> None:
+    """The counter that ends a run is one the service can reset by being itself again.
+
+    Weather arrives in stretches, so a policy that counts stretches must also forget them. Two rows
+    with an answer in the middle are two rows that never happened to the run: the first is a bad
+    minute, the second is a different bad minute, and #59's build had a hundred minutes of both and
+    blamed the whole afternoon on the first five (#59).
+    """
+
+    service = client(*_row(MAX_FAILURES), recording_payload(), *_row(MAX_FAILURES))
+    for _ in range(MAX_FAILURES):
+        with pytest.raises(MusicBrainzUnavailableError):
+            service.recording("r")
+    assert service.available is True, "one row is a pause"
+    found = service.recording("r")
+    assert found is not None
+    assert found.recording_id == "recording-1"
     for _ in range(5):
         with pytest.raises(MusicBrainzUnavailableError):
             service.recording("r")
-    assert service.available is False
-    assert len(service._opener.calls) == 5, "the sixth question was never asked"
+    assert service.available is True, "and the second row started at one, as a row does"
+
+
+def test_a_404_ends_a_row_because_saying_no_is_an_answer() -> None:
+    """A miss clears the streak, and an identifier in a tag that does not exist is not weather.
+
+    The 404 was already excluded from the failure count, which is the right half; it did not end a
+    row, so a build walking a list of mistyped MBIDs with one real lookup among them could still be
+    told the service had gone away.
+    """
+
+    service = client(*_row(MAX_FAILURES - 1), _http_error(404))
+    for _ in range(MAX_FAILURES - 1):
+        with pytest.raises(MusicBrainzUnavailableError):
+            service.recording("r")
+    assert service.available is True
+    assert service.recording("r") is None
+    assert service._failures == 0, "the row restarted at the no, as a row does"
+
+
+def test_patience_is_a_budget_so_the_cooldown_cannot_run_the_build() -> None:
+    """A row costs a minute, and the run can afford only `PATIENCE` of them in total.
+
+    Without the budget the policy has no worst case. A service that refuses five, answers six,
+    refuses five more and answers six again never reaches `COOLDOWNS_PER_RUN` — an answer clears it —
+    so every fifth question would cost a minute of sleeping, and a build whose network is healthy
+    two thirds of the time would spend an hour on a ten-minute job and look hung, which is the
+    failure this whole file exists to avoid. The budget spends the *sleeping*, not the asking: rows
+    still count, so the third one still ends a run that has learned nothing.
+    """
+
+    service = HttpMusicBrainzClient(
+        opener=FakeOpener(*_row(MAX_FAILURES * COOLDOWNS_PER_RUN)),
+        minimum_interval=0.0,
+        retry_wait=0.0,
+        cooldown=3_600.0,
+        patience=0.05,
+    )
+    for _ in range(MAX_FAILURES * COOLDOWNS_PER_RUN):
+        with pytest.raises(MusicBrainzUnavailableError):
+            service.recording("r")
+    assert service._slept < 1.0, "an hour of cooldown, charged to a budget of fifty milliseconds"
+    assert service.available is False, "and the rows counted anyway, which was the point of them"
 
 
 def test_a_cap_stops_the_asking_without_an_error() -> None:
@@ -237,6 +403,24 @@ def test_a_cap_stops_the_asking_without_an_error() -> None:
     assert service.search(artist="A", release="B", track="C") is not None
     assert service.available is False
     assert service.search(artist="A", release="B", track="C") is None
+
+
+def test_the_default_timeout_is_longer_than_the_slowest_answer_measured() -> None:
+    """8 seconds was a guess, and the endpoints are not one speed.
+
+    Measured raw, with no client, no retry and no queue in the way — which is the only way to
+    measure the service rather than this build's argument with it: a recording search at a 0.68 s
+    median, a release search at 0.66 s, a Cover Art Archive front image at 0.55 s, and the slowest
+    of forty answers at 4.9 s. A timeout below the slowest answer is an outage the caller cannot
+    distinguish from a real one, which is half of what #59's report labelled "unavailable".
+
+    It is not the whole of it, and this assertion is where the two claims are kept apart. The
+    patience that matters is `COOLDOWN`'s, because weather ends and a hung socket may not; a build
+    that waits 45 s on each of two attempts is a build that spent a minute on a question the service
+    refused in 0.43 s, as measured in the sample above.
+    """
+
+    assert HttpMusicBrainzClient()._timeout >= 3 * 4.9
 
 
 def test_requests_are_spaced_at_a_second_apart() -> None:
@@ -267,7 +451,11 @@ class RawOpener:
     def __call__(self, request: Any, timeout: float = 0.0) -> FakeResponse:
         del timeout
         self.requests.append(request)
-        body = self.bodies.pop(0) if self.bodies else b""
+        if not self.bodies:
+            raise AssertionError(
+                f"the archive ran out of scripted bodies after {len(self.requests)} requests"
+            )
+        body = self.bodies.pop(0)
         if isinstance(body, Exception):
             raise body
         if isinstance(body, bytes):
@@ -279,7 +467,12 @@ def raw_client(
     *bodies: bytes | Mapping[str, Any] | Sequence[Any] | Exception, **kwargs: Any
 ) -> tuple[HttpMusicBrainzClient, RawOpener]:
     opener = RawOpener(*bodies)
-    return HttpMusicBrainzClient(opener=opener, minimum_interval=0, **kwargs), opener
+    return (
+        HttpMusicBrainzClient(
+            opener=opener, minimum_interval=0, retry_wait=kwargs.pop("retry_wait", 0.0), **kwargs
+        ),
+        opener,
+    )
 
 
 def release_payload(*releases: tuple[str, str, str]) -> dict[str, Any]:
@@ -383,6 +576,21 @@ def test_a_missing_cover_is_a_miss_and_not_an_outage() -> None:
     service = client(_http_error(404))
     assert service.cover("rel-1") is None
     assert service.available is True
+
+
+def test_the_wait_when_the_service_said_nothing_is_the_policy_not_the_spacing() -> None:
+    """The floor is a number someone chose, so it is written where a reader can disagree.
+
+    5 s, not the 1 s ordinary spacing: a repeat one interval later is the same question asked
+    louder. The refusals arrive in stretches rather than one at a time — 16 of 24 release searches
+    at ten past ten, none of 189 at twenty past eleven, at the same pacing both — so what a short
+    floor buys is a second failure on the same busy minute, and five questions in a row is what
+    `available` counts (#59).
+    """
+
+    assert _retry_after(_http_error(503), default=RETRY_WAIT) == RETRY_WAIT
+    assert RETRY_WAIT > 1.0
+    assert MAX_RETRY_WAIT > RETRY_WAIT
 
 
 def test_the_two_hosts_share_one_rate_limit() -> None:

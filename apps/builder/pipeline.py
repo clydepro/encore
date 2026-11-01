@@ -136,6 +136,11 @@ def run(options: BuildOptions, *, bus: EventBus | None = None) -> BuildReport:
 
     started = time.monotonic()
     options.temp_dir.mkdir(parents=True, exist_ok=True)
+    # One client per run, from here down. Two stages ask, and each used to be handed its own:
+    # `max_requests`, the failure row and the patience budget are all properties of *a run's*
+    # conversation with a service, and constructing the object twice per build silently doubled
+    # all three, on top of starting the one-request-per-second clock over between the stages.
+    client = _client(options)
     found = discover(options.music_dir)
     if found.scanned == 0:
         return _nothing_found(options, started)
@@ -154,7 +159,9 @@ def run(options: BuildOptions, *, bus: EventBus | None = None) -> BuildReport:
     earlier = _earlier(found.files, previous=previous, reused=reused)
     checkpoints.record(extracted)
     trees = tree_map(extracted, options.music_dir)
-    tracks, skips, enrichment = _catalogue(extracted, options=options, trees=trees, earlier=earlier)
+    tracks, skips, enrichment = _catalogue(
+        extracted, options=options, trees=trees, earlier=earlier, client=client
+    )
     duplicates = analyse_duplicates(tracks)
     # SAPRS 6.7's second precedence level, and ADR-016: an album whose files carry no picture of
     # their own asks the Cover Art Archive once. Grouping by `Track.group_key` is what makes the
@@ -164,7 +171,7 @@ def run(options: BuildOptions, *, bus: EventBus | None = None) -> BuildReport:
         tracks,
         # The archive is asked only by a build that is asking MusicBrainz at all: naming a
         # release is the same lookup, so an album-art flag alone never opens a socket (#57).
-        _client(options) if options.album_art else DisabledClient(),
+        client if _asks_for_covers(options) else DisabledClient(),
         carried=carried,
         earlier=earlier,
     )
@@ -278,6 +285,7 @@ def _catalogue(
     options: BuildOptions,
     trees: ArtistTrees,
     earlier: Mapping[Path, PreviousEnrichment],
+    client: MusicBrainzClient,
 ) -> tuple[list[Track], list[SkippedFile], EnrichmentOutcome]:
     """Stages 3 and 4, then the split between rows and the skip ledger.
 
@@ -311,7 +319,7 @@ def _catalogue(
         else:
             resolved.append(normalize_track(item, root=options.music_dir, trees=trees))
 
-    outcome = enrich(resolved, _client(options), previous=earlier)
+    outcome = enrich(resolved, client, previous=earlier)
     resolved = list(outcome.tracks)
 
     tracks = [track for track in resolved if track.catalogable]
@@ -497,7 +505,16 @@ def _assemble(
         albums=reference.albums,
         duplicates=duplicates.lines(),
         warnings=tuple(
-            _warnings(found, findings, previous, artwork, covers=covers, held=reference.artwork)
+            _warnings(
+                found,
+                findings,
+                previous,
+                artwork,
+                covers=covers,
+                held=reference.artwork,
+                enrichment=enrichment,
+                options=options,
+            )
         ),
         errors=tuple(finding.detail for finding in findings.failures),
         validation=tuple((f.name, f.label, f.detail) for f in findings.findings),
@@ -518,19 +535,47 @@ def _enrichment_sentence(options: BuildOptions, outcome: EnrichmentOutcome) -> s
     enrichment was off by default and nobody was asking — the line cannot distinguish a build
     that repaired nothing from one that repaired three thousand fields, which is the difference
     an operator needs when a build takes nine minutes instead of two (#57).
+
+    "unavailable" now means what it says: the client gave up, not that it blinked once. A build
+    that was refused a few questions and carried on says so beside its counts, because the two
+    sentences lead to different actions and #59 printed the first one for both.
     """
 
     if outcome.unavailable:
-        return "unavailable; what the last build knew was reused"
+        # The counts come first even in this sentence, because "unavailable" alone cannot tell a
+        # run that asked 900 questions and lost the thread at the end from one that asked three
+        # (#59). The second is a network; the first is a long afternoon.
+        return (
+            f"unavailable after {outcome.looked_up} lookups"
+            + (f", {outcome.repaired} fields repaired" if outcome.repaired else "")
+            + "; what the last build knew was reused"
+        )
     if not options.enrich:
         return (
             "off"
             if not outcome.reused
             else f"off, {outcome.reused} values kept from the last build"
         )
-    return f"enabled, {outcome.looked_up} lookups, {outcome.repaired} fields repaired" + (
-        f", {outcome.reused} reused" if outcome.reused else ""
+    return (
+        f"enabled, {outcome.looked_up} lookups, {outcome.repaired} fields repaired"
+        + (f", {outcome.reused} reused" if outcome.reused else "")
+        + (f", {outcome.failed} refused" if outcome.failed else "")
     )
+
+
+def _asks_for_covers(options: BuildOptions) -> bool:
+    """Whether this build is allowed to ask the Cover Art Archive for anything.
+
+    One predicate with three readers, because #57 established the rule and then stated it in
+    prose: `run` chooses the client with it, `_cover_sentence` describes the stage with it, and
+    `_warnings` decides whether a sentence about the network is a fact or an accusation. A build
+    that is not asking MusicBrainz has no archive to ask — naming a release is the same lookup —
+    and a stage that was never going to speak reports `unavailable` through its null client,
+    which is a true thing to say about the client and a misleading thing to print about a
+    network nobody tried.
+    """
+
+    return options.album_art and options.enrich
 
 
 def _cover_sentence(options: BuildOptions, covers: albumart.CoverOutcome) -> str:
@@ -540,25 +585,28 @@ def _cover_sentence(options: BuildOptions, covers: albumart.CoverOutcome) -> str
     working, not a failure of it: an album whose release cannot be named exactly is a tile left
     alone on purpose, and 400 lines of that would bury the four numbers an operator acts on.
 
-    Off is checked before the archive's own state, in both directions. A build that is not asking
-    MusicBrainz has no archive to ask — naming a release is the same lookup — and a stage that was
-    never going to speak reports `unavailable` through its null client, which is a true thing to
-    say about the client and a misleading thing to print about the network (#57).
+    Off is checked before the archive's own state, in both directions — see
+    `_asks_for_covers`, which is the one place that rule is written. And the counts are printed
+    even when the run stopped early, because #59's report said "archive unavailable" over 307
+    covers that had been fetched and written: the sentence was true of the last minute and false
+    about the build. "Unavailable" on its own now means nothing was asked at all.
     """
 
     if not options.album_art:
         return "off"
-    if not options.enrich:
+    if not _asks_for_covers(options):
         return "off, with MusicBrainz"
-    if covers.unavailable:
-        return "archive unavailable"
     if not covers.albums:
         return "nothing to ask about"
+    if not covers.requested:
+        return "archive unavailable"
     return (
         f"{covers.covered} of {covers.albums} albums without embedded art"
         f", {covers.requested} requests"
         + (f", {covers.unmatched} not named exactly" if covers.unmatched else "")
         + (f", {covers.uncovered} with no image" if covers.uncovered else "")
+        + (f", {covers.unanswered} refused" if covers.unanswered else "")
+        + (f", {covers.not_reached} left to ask" if covers.not_reached else "")
     )
 
 
@@ -619,6 +667,8 @@ def _warnings(
     *,
     held: int,
     covers: albumart.CoverOutcome | None = None,
+    enrichment: EnrichmentOutcome | None = None,
+    options: BuildOptions | None = None,
 ) -> list[str]:
     notes = [finding.detail or finding.name for finding in findings.findings if not finding.passed]
     if found.unreadable:
@@ -639,11 +689,21 @@ def _warnings(
         )
     if not previous.usable:
         notes.append("no previous library to reuse from; full build")
-    if covers is not None and covers.unavailable:
+    asks = options is None or _asks_for_covers(options)
+    if covers is not None and asks and (covers.unavailable or covers.unanswered):
         notes.append(
-            "the Cover Art Archive could not be reached; albums without embedded artwork kept "
-            "their tiles grey, and nothing already in the cache changed"
+            f"the Cover Art Archive did not answer about "
+            f"{covers.not_reached + covers.unanswered} of {covers.albums} albums; those tiles "
+            "stayed grey, nothing already in the cache changed, and the next build asks them "
+            "again"
         )
+    if enrichment is not None and enrichment.notes:
+        # The stage kept the sentence the transport actually said, and until #59 nothing read it.
+        # "unavailable" on its own is a word an operator cannot act on; "HTTP 503" and "timed
+        # out" are words they can, and they are the difference between a retry, an offline build
+        # and a proxy that is eating the requests.
+        first, *rest = enrichment.notes
+        notes.append(first if not rest else f"{first} ({len(rest) + 1} questions refused)")
     return notes
 
 
