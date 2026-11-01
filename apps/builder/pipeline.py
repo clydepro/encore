@@ -136,6 +136,11 @@ def run(options: BuildOptions, *, bus: EventBus | None = None) -> BuildReport:
 
     started = time.monotonic()
     options.temp_dir.mkdir(parents=True, exist_ok=True)
+    # One client per run, from here down. Two stages ask, and each used to be handed its own:
+    # `max_requests`, the failure row and the patience budget are all properties of *a run's*
+    # conversation with a service, and constructing the object twice per build silently doubled
+    # all three, on top of starting the one-request-per-second clock over between the stages.
+    client = _client(options)
     found = discover(options.music_dir)
     if found.scanned == 0:
         return _nothing_found(options, started)
@@ -154,7 +159,9 @@ def run(options: BuildOptions, *, bus: EventBus | None = None) -> BuildReport:
     earlier = _earlier(found.files, previous=previous, reused=reused)
     checkpoints.record(extracted)
     trees = tree_map(extracted, options.music_dir)
-    tracks, skips, enrichment = _catalogue(extracted, options=options, trees=trees, earlier=earlier)
+    tracks, skips, enrichment = _catalogue(
+        extracted, options=options, trees=trees, earlier=earlier, client=client
+    )
     duplicates = analyse_duplicates(tracks)
     # SAPRS 6.7's second precedence level, and ADR-016: an album whose files carry no picture of
     # their own asks the Cover Art Archive once. Grouping by `Track.group_key` is what makes the
@@ -164,7 +171,7 @@ def run(options: BuildOptions, *, bus: EventBus | None = None) -> BuildReport:
         tracks,
         # The archive is asked only by a build that is asking MusicBrainz at all: naming a
         # release is the same lookup, so an album-art flag alone never opens a socket (#57).
-        _client(options) if _asks_for_covers(options) else DisabledClient(),
+        client if _asks_for_covers(options) else DisabledClient(),
         carried=carried,
         earlier=earlier,
     )
@@ -278,6 +285,7 @@ def _catalogue(
     options: BuildOptions,
     trees: ArtistTrees,
     earlier: Mapping[Path, PreviousEnrichment],
+    client: MusicBrainzClient,
 ) -> tuple[list[Track], list[SkippedFile], EnrichmentOutcome]:
     """Stages 3 and 4, then the split between rows and the skip ledger.
 
@@ -311,7 +319,7 @@ def _catalogue(
         else:
             resolved.append(normalize_track(item, root=options.music_dir, trees=trees))
 
-    outcome = enrich(resolved, _client(options), previous=earlier)
+    outcome = enrich(resolved, client, previous=earlier)
     resolved = list(outcome.tracks)
 
     tracks = [track for track in resolved if track.catalogable]

@@ -579,18 +579,26 @@ The release process moves the section into a dated, bracketed version heading.
   minute of silence rather than the rest of the build.
 
   What the change actually buys is the asking surviving the weather, and one unchanged library
-  measured it five times. Before: 0 images written, 24.8 seconds, both services reported down. After,
+  measured it six times. Before: 0 images written, 24.8 seconds, both services reported down. After,
   at the service's own pace: 578 requests over 414 of its 417 needy albums and **307 images written
-  into an empty cache**, in 1,991 seconds. Two builds into a bad stretch, 152 requests and 80 — each
-  of them stopping at the fifth unanswered question in a row, which is decision 6's rule and not
-  anything #59 changed — and a 189-request probe of the same endpoint, at the same one-per-second
-  pacing twenty minutes later, met no failures at all. The difference between the issue's 24.8-second
-  build and the fix's 578-request one is not that the network improved. It is that a build now keeps
-  asking while the service keeps answering, and when it stops it says how far it got: the 80-request
-  build ends its line `369 left to ask`, those albums keep no identifier so tonight's build asks them
-  from the start, and nobody has to guess which of the two afternoons they are reading. The five-in-a
-  row rule those three builds died of is a cooldown now rather than a full stop, which is the last
-  half of what #59 was describing.
+  into an empty cache**, in 1,991 seconds. Two builds into a bad stretch asked 152 requests and then
+  80, each of them stopping at the fifth unanswered question in a row — a rule #59 had left in place
+  — and a 189-request probe of the same endpoint, at the same one-per-second pacing twenty minutes
+  later, met no failures at all. That contrast is the second half of this fix: five in a row is a
+  cooldown now rather than a full stop, and the build that changed it asked **587 requests**, worked
+  through **all 417** needy albums instead of the first 34 of them, wrote 305 images and printed no
+  `left to ask` for the first time, because there was nothing left. 2,586 seconds against 1,991 is
+  what waiting out a bad stretch costs, and `Duration` is the line that says so.
+
+  A third doubling, found while writing the tests for the second: `run` called its own `_client`
+  helper once per stage, so a build had two `HttpMusicBrainzClient` objects and every per-run number
+  in this file was really per-stage. The request cap was 4,000 rather than 2,000, six cooldowns were
+  allowed rather than three, twenty minutes of patience rather than ten, and the enforced one-second
+  spacing restarted at the boundary between the stages — two clients asking in turn is two requests
+  in a second, which is the one rule this client exists to keep. A build now constructs one client
+  and hands it to both, and `test_a_build_carries_its_whole_conversation_in_one_client` counts
+  constructions, because an injected client is shared by construction and would have passed either
+  way (#59).
 
   What the report can say grew from two words to five numbers. `CoverOutcome` gained `unanswered`
   (asked twice, never answered) and a derived `not_reached` (the pass stopped before getting there),

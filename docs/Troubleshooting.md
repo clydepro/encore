@@ -504,6 +504,12 @@ and a build that finished its list carries no `left to ask` column at all, whate
 in the middle of it. `refused` there is the number of *questions* the service could not answer, so
 a line with counts and no tail means a run that was annoyed rather than shut out.
 
+Waiting is why the two differ in duration as well. One library, built twice into weather of the same
+kind, took 33 minutes and 43 minutes; the longer of the two is the build that asked 587 questions
+about all 417 of its grey albums and stopped for a minute every fifth one, and the shorter stopped at
+album 34 with `3 left to ask`. A `Duration` that surprises you is usually this, and the totals either
+side of it are the same 417 albums.
+
 `archive unavailable`, with no numbers at all, means the asking never started.
 
 Two commands tell you whether it is the service or the box. The first is the report's own

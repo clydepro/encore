@@ -220,6 +220,22 @@ Then `tests/integration/test_installer_lifecycle.py`, which is this phase told a
   was `available`'s own docstring, which had said "five in a row" since #22 while the counter behind
   it subtracted nothing. A promise in prose that no test re-states is a promise the code is free to
   break, and this one was broken by the file that made it.
+- **A per-run limit is only per-run if one object holds it.** #59's fix added a cooldown, and the
+  first build of it took 43 minutes rather than 33; chasing that led to `run` calling its own
+  `_client()` helper once *per stage*, so a build had two clients and every number that docstring
+  called per-run was really per-stage: twice the request cap, twice the patience, six cooldowns
+  where the policy said three, and a one-request-per-second clock that restarted at the boundary
+  between them — which is the published rule, and two clients taking turns is two requests in a
+  second. The general form: when a new limit is expressed as instance state, grep for the
+  constructor. Counting constructions is also the only test that catches it — an injected client is
+  shared by construction, so a suite that injects one cannot tell the difference, which is why
+  `test_a_build_carries_its_whole_conversation_in_one_client` patches the class instead.
+- **Patience needs a budget, or it looks like a hang.** A retry that waits is correct right up to
+  the build that spends an hour waiting on a ten-minute job. `PATIENCE` is 10 minutes per run,
+  spent, after which rows still count and only the sleeping stops: the run still ends honestly with
+  `left to ask`, and the duration stays describable. Any policy whose worst case is "wait", and
+  especially any policy that waits on somebody else's capacity, wants its worst case written as a
+  number somewhere a test can read.
 - **`segno`, not a hand-rolled encoder.** A QR symbol is data encoding, Reed-Solomon over GF(256),
   mask selection by penalty score and a format string, in that order, and a mistake in any of the
   four produces an image that looks correct and does not scan — which surfaces at a party. The

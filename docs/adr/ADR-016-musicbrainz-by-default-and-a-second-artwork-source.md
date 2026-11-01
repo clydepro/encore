@@ -207,11 +207,14 @@ full row now costs `COOLDOWN` seconds of silence instead of the rest of the buil
 `COOLDOWNS_PER_RUN` rows with nothing answered between them are what `available` calls an outage.
 The appliance's own numbers are the argument. The same 417 grey albums, built four times in two
 hours at the same pacing from the same machine, got 578 requests out of musicbrainz.org and then
-152, 80 and 57 — and the 307 covers are all in the first of those four. A run that quits at its
-first five-in-a-row reports somebody else's afternoon as an absence, and the operator's next
-command is the one that proves it. Patience is a budget rather than a habit: `PATIENCE` seconds is
-what a run may spend asleep in total, after which rows still count and only the sleeping stops,
-because a client that is generous one question at a time can still be idle for an hour.
+152, 80 and 57 — and the 307 covers are all in the first of those four. The rule was then changed on
+the strength of those numbers, and the change is what the last row measures: a run that met the same
+kind of afternoon asked **587 requests**, worked through **all 417** needy albums rather than 34 of
+them, wrote 305 images and finished with no `left to ask` in its report at all. 43 minutes instead of
+33, which is what waiting costs and what the `Duration` line is for. Patience is a budget rather than
+a habit: `PATIENCE` seconds is what a run may spend asleep in total, after which rows still count and
+only the sleeping stops, because a client that is generous one question at a time can still be idle
+for an hour.
 
 **"Covered" is not one number.** `albumart.CoverOutcome` separates `unmatched` (the release could
 not be named exactly — the policy working), `uncovered` (named, no image), `unanswered` (refused

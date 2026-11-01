@@ -56,6 +56,7 @@ from typing import Any
 
 import pytest
 
+from apps.builder import musicbrainz
 from apps.builder.albumart import fetch
 from apps.builder.enrichment import enrich
 from apps.builder.musicbrainz import (
@@ -361,6 +362,39 @@ def test_a_run_that_stops_early_still_reports_what_it_covered(tmp_path: Path) ->
     assert "2 left to ask" in report.album_art, report.album_art
     assert "unavailable" not in report.album_art.lower(), report.album_art
     assert _artwork_rows(report) == 1, "the cover that was answered was published"
+
+
+def test_a_build_carries_its_whole_conversation_in_one_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run's budget is per run, which needs the run to be one conversation, not two.
+
+    `run` used to call `_client(options)` once per stage, so each stage built a fresh
+    `HttpMusicBrainzClient` with its own clock and its own counters — and nothing in the code chose
+    it. The 2,000-request cap became 4,000, `COOLDOWNS_PER_RUN` became six silences, `PATIENCE`
+    became twenty minutes, and the one-request-per-second spacing restarted at the stage boundary,
+    which is the published rule and two clients asking in turn can be two requests in a second.
+
+    The client is counted rather than injected, because an injected one is shared by construction
+    (`_client` returns `options.client` whatever the flags say) and would pass either way.
+    """
+
+    built: list[Service] = []
+
+    def factory(**kwargs: Any) -> Service:
+        del kwargs
+        service = _archive(recordings={f"{a.lower()} song 1": Recording(album=a) for a in _ALBUMS})
+        built.append(service)
+        return service
+
+    monkeypatch.setattr(musicbrainz, "HttpMusicBrainzClient", factory)
+    report = _build(
+        tmp_path / "home", _flac_library(tmp_path, gap=True), enrich=True, album_art=True
+    )
+    assert len(built) == 1, [service.asked for service in built]
+    assert "search" in built[0].asked, built[0].asked
+    assert "releases" in built[0].asked, built[0].asked
+    assert report.musicbrainz.startswith("enabled"), report.musicbrainz
 
 
 # -- the transport: a busy answer is a second chance, and a row is a row -----

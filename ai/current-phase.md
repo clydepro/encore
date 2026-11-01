@@ -384,25 +384,37 @@ Four defects, and each had a comment in the code saying the opposite of what the
    carried the transport's own sentence since #57, is finally read by `_warnings`: "unavailable" is
    not actionable, "`HTTP 503 from https://musicbrainz.org/ws/2/recording`" is.
 
-The verified before-and-after is the appliance's own library, unchanged, built four times in an
-hour. Before: **0 images written, 24.8 s, both services reported down**. After, the same tags:
+The verified before-and-after is the appliance's own library, unchanged, built six times in an
+afternoon. Before: **0 images written, 24.8 s, both services reported down**. After, the same tags:
 
 | When | Code | Requests | Albums asked | Images | Left to ask |
 | ---- | ---- | -------- | ------------ | ------ | ----------- |
-| 09:57 | fixed, 5 s wait, 30 s timeout | 578 | 414 of 417 | **307** | 3 |
-| 10:56 | fixed, 2 s before a repeat | 152 | 99 | 243 | 318 |
-| 11:10 | fixed, 5 s wait, 45 s timeout | 80 | 48 | 232 | 369 |
+| 09:57 | 5 s wait, 30 s timeout | 578 | 414 of 417 | **307** | 3 |
+| 10:56 | 2 s before a repeat | 152 | 99 | 243 | 318 |
+| 11:10 | 5 s wait, 45 s timeout | 80 | 48 | 232 | 369 |
 | 11:20 | the client alone, 189 release searches | 189 | — | — | **no failures at all** |
-| 11:47 | fixed, as shipped | 57 | 34 | 232 | 383 |
+| 11:47 | as first committed | 57 | 34 | 232 | 383 |
+| 12:21 | five in a row costs a minute | **587** | **417 of 417** | 305 | **none** |
+| 12:21 | five in a row = a cooldown | **587** | **417 of 417** | **305** | **none** |
+
+The last row is the one the first five asked for. The same afternoon's weather, met with a minute of
+silence rather than a full stop, let the pass reach the end of its own list: 587 requests, every one
+of the 417 needy albums asked, `293 not named exactly, 22 with no image, 19 refused` and no `left to
+ask` anywhere in the line — which is the first time this appliance reported a cover stage that
+*finished* rather than one that gave up. 43 minutes, against 33 for the healthiest run above; that is
+what waiting out a bad stretch costs, and the `Duration` line is where an operator sees it.
 
 Read as one experiment it says something better than "the bug is fixed": the asking now continues for
 exactly as long as the service continues answering, and stops reporting a network fault when it was a
 network *moment*. 307 images where the report said 0, and 325 of 703 albums carrying artwork where the
-published library had 240. The 80-request build is the honest half: five consecutive unanswered
-questions still end a run, which is ADR-016 declining to hammer someone else's server, those albums
-keep no identifier so tonight's build asks them from the start, and the line ends in `369 left to
-ask` instead of a word that meant three things. A cooldown that recovers rather than a switch that
-latches is the shape of the rest of it, and it is named in the issue rather than half-done here.
+published library had 240. The 57-request build is the honest half of the picture: five consecutive
+unanswered questions ended it, which was ADR-016 declining to hammer someone else's server, those
+albums kept no identifier so the next build asked them from the start, and the line ended in `383
+left to ask` instead of a word that meant three things. The last row is what happens when that rule
+becomes a minute of waiting instead of a full stop: 587 requests, every one of the 417 needy albums
+asked about, and the first cover pass this appliance has run that had nothing left to ask. 43 minutes
+rather than 33, 305 images, 19 albums the service refused twice — a build that finished, and a report
+that says which parts of it did not.
 
 The eleventh instance of the standing finding, after #38, #41, #43, #44, #46, #48, #51, #52 and #55:
 **an error string is not a diagnosis, and a report that paraphrases one has stopped reporting.**
