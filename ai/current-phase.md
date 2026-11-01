@@ -330,6 +330,71 @@ configuration file is a default that has never been examined.** `MusicBrainz: di
 100% of this appliance's builds without one person choosing it, and the report line nobody could
 account for was the same document that said the library was healthy.
 
+## What an appliance's build report could not say (#59)
+
+The #57 fix shipped, the appliance was rebuilt with both flags on, and the tiles were grey a third
+time — with a report that said why, in words that were not the reason:
+
+```console
+$ sudo encore-builder
+  Artwork            0  images written to the cache (222 in this library)
+  MusicBrainz        unavailable; what the last build knew was reused
+  Cover art          archive unavailable
+  Build: full, 24.8s
+```
+
+24.8 seconds is the whole finding. At the client's own one request per second, 481 needy albums are
+about sixteen minutes of asking; the build asked three questions and stopped talking to the
+internet. MusicBrainz was not down — a probe of 24 of the library's own unidentified albums,
+answered properly, found 16 releases and fetched 5 real covers, and 18 of those 24 requests had
+come back `HTTP 503`, which is musicbrainz.org's *"The MusicBrainz web server is currently busy.
+Please try again later."* page. Asking the same 24 at three-second spacing instead of one failed
+16 rather than 18, on the same queries both times: someone else's search server having a busy hour,
+and a client that had no word for it.
+
+Four defects, and each had a comment in the code saying the opposite of what the code did.
+
+1. **Two stages kept a stricter outage policy than the client's.** `enrichment._lookup` returned
+   "the service is down" for its first exception and `enrich` latched off for the remaining 3,042
+   tracks; `albumart.fetch` did the same with a `break`, ending the pass over 478 unasked albums.
+   Both now continue while `client.available` says to, which is the contract the module docstring
+   had always advertised and nothing had ever enforced. A refused album additionally goes to the
+   *back of the pass* rather than the bin — "try again later", and later is what a queue of
+   several hundred requests at one per second actually offers, minutes rather than a sleep.
+2. **`available` counted failures in a run, not in a row.** `MAX_FAILURES = 5` is documented as
+   "five in a row, because a single dropped request in a 20-minute build is the internet", and
+   `_failures` was never cleared by a success. A thousand-request build was down by its fifth blink
+   of the afternoon. A success resets it, and a question that fails and is repeated counts once.
+3. **8 seconds was a guess, and it was the wrong kind of wrong.** Measured here: a release search's
+   ninetieth percentile is 6.1 s and its tail passes 45 s; a lookup of a recording by MBID sits at a
+   13.7 s median; one Cover Art Archive `front` took 20.9 s and arrived perfectly well. A timeout
+   that arrives before the answer is indistinguishable, downstream, from a service that never
+   answers — 41% of a 200-request sample were socket timeouts against a service holding 86% of the
+   lookups in its own database. The default is 45 s now, and the 1 request/second rule is what
+   actually bounds a build, which is the sentence the Administrator Guide had not been saying.
+4. **The report had four words for three states.** `unmatched` (this library could not name the
+   release exactly — the policy working), `uncovered` (named, no image), `unanswered` (asked twice,
+   never answered) and `not_reached` (the pass stopped before getting there) are now four numbers,
+   and they sum to the candidates they were taken from. And `EnrichmentOutcome.notes`, which has
+   carried the transport's own sentence since #57, is finally read by `_warnings`: "unavailable" is
+   not actionable, "`HTTP 503 from https://musicbrainz.org/ws/2/recording`" is.
+
+The verified before-and-after is the appliance's own library, unchanged, one build with the fix in
+place: **578 requests over the 417 albums that had no picture, 307 images written into an empty
+cache where the report had said 0, 325 of 703 albums carrying artwork where it had said 240, in
+1,991 seconds, with 3 albums left to ask.** The line that build would print now reads
+`Cover art: 85 of 417 albums without embedded art, 578 requests, 291 not named exactly, 26 with no
+image, 12 refused, 3 left to ask`, and the big number in it is the policy working: 291 releases this
+library could not name exactly are ADR-016 declining to guess, not the network failing. What the
+issue asked for is the last column and the word count: the build is now long because it asked.
+
+The tenth instance of the standing finding, after #38, #41, #43, #44, #46, #48, #51, #52 and #55:
+**an error string is not a diagnosis, and a report that paraphrases one has stopped reporting.**
+"unavailable" was the client's word for a state it had never been asked about, and it was printed
+over a network that was fine, a queue that was never reached, and a disabled client that was never
+given a socket to open. The lesson for step 16 generalises further than this bug: when a boolean
+means three things, the third is the one that gets believed.
+
 ## What running it on a machine with systemd found (#43, #44)
 
 The first `sudo encore-install install` — not staged, not `--no-service`, on a host with systemd as

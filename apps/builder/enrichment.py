@@ -100,10 +100,14 @@ class EnrichmentOutcome:
         looked_up: Recordings retrieved. A run with 3,000 lookups and 3 repairs is
             visibly the run it is, which is the only way a bad search policy gets
             noticed.
-        unavailable: Set once the service proves unreachable. The report then says
+        unavailable: Set once the service stops answering. The report then says
             "MusicBrainz unavailable", rather than reporting a build that never
             asked as one that found nothing.
         reused: Tracks backfilled from the previous build instead.
+        failed: Questions the service could not answer, whether or not it went on to
+            answer the next one. The number that tells a run that blinked apart from a run
+            that was refused for the rest of the afternoon: `unavailable` was the only word
+            for both, and it was set by the first of them (#59).
     """
 
     tracks: Sequence[Track] = ()
@@ -111,6 +115,7 @@ class EnrichmentOutcome:
     looked_up: int = 0
     unavailable: bool = False
     reused: int = 0
+    failed: int = 0
     notes: tuple[str, ...] = field(default=())
 
 
@@ -132,6 +137,11 @@ def enrich(
         An `EnrichmentOutcome`. Never raises — 6.6's "must not prevent processing
         otherwise valid music" is a requirement on this function rather than an
         attitude in the caller.
+
+        One failed question is not an outage and does not end the asking. It costs the one track
+        its answer, and the next track is asked normally; the asking stops when the *client*
+        says it has had enough, which is `available`'s whole job and was not reached by anything
+        here until #59. What this function owns is the reuse, not the network's health.
     """
 
     cache: Mapping[Path, PreviousEnrichment] = previous if previous is not None else {}
@@ -147,8 +157,13 @@ def enrich(
             continue
         recording: Recording | None = None
         if not down and _worth_asking(gaps):
-            recording, down = _lookup(track, client, notes, earlier=cache.get(track.path))
-            if recording is not None:
+            recording, refused = _lookup(track, client, notes, earlier=cache.get(track.path))
+            if refused:
+                outcome.failed += 1
+                # The client's count of failures in a row, not this loop's: one refused question
+                # in a busy minute is a reason to carry on asking, and five is a reason to stop.
+                down = not client.available
+            elif recording is not None:
                 outcome.looked_up += 1
         if recording is not None:
             filled, changed = _apply(recording, track, gaps)
@@ -166,6 +181,7 @@ def enrich(
         looked_up=outcome.looked_up,
         unavailable=down,
         reused=outcome.reused,
+        failed=outcome.failed,
         notes=tuple(notes),
     )
 
@@ -177,6 +193,7 @@ class _Counter:
     repaired: int = 0
     looked_up: int = 0
     reused: int = 0
+    failed: int = 0
 
 
 def _gaps(track: Track) -> tuple[str, ...]:
@@ -226,7 +243,12 @@ def _lookup(
     *,
     earlier: PreviousEnrichment | None = None,
 ) -> tuple[Recording | None, bool]:
-    """Ask once for one track. Returns `(answer, service_is_down)`.
+    """Ask once for one track. Returns `(answer, the question was refused)`.
+
+    The second half is an observation, not a verdict: `enrich` decides whether to keep asking by
+    asking the client, which is the only thing that knows how many failures it has counted. The
+    first version of this signature answered "the service is down", the stage believed it, and one
+    refused request was the end of the run's enrichment (#59).
 
     An identifier wins over a search, in either source: the tag's, because a tag is evidence
     about this file, and otherwise the last build's, because a lookup by MBID cannot guess wrong

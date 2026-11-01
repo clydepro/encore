@@ -184,3 +184,32 @@ the Server's `paths` for the same reason.
 
 **Leave `NORMALIZATION_RULES_VERSION` at 1 and let incremental builds keep their conclusions.**
 Rejected: that is the bug, cached. ADR-010 priced this exact trade and the price is one rebuild.
+
+## Implementation notes
+
+Found while turning the two flags on, and changing nothing decided above.
+
+**A public service answers three ways, and the code had two words for them.** A miss, a refusal and
+an absence. `None` was the answer to the last two, which is how one 503 — musicbrainz.org's
+*"currently busy, please try again later"*, three quarters of the requests in a measured sample —
+ended the run's asking and appeared in the report as an outage. The client now repeats a refused
+request once, spaced by any `Retry-After` it was given, and `available` counts failures *in a row*
+as its docstring always claimed; it had been counting them cumulatively and clearing none.
+
+**"Covered" is not one number.** `albumart.CoverOutcome` separates `unmatched` (the release could
+not be named exactly — the policy working), `uncovered` (named, no image), `unanswered` (refused
+twice) and `not_reached` (never got to), because a build over 481 grey albums once asked three
+questions and reported zero of the other three, which read as "the archive has nothing".
+
+**Measured, for the next person setting a timeout.** A release search runs 0.4 s usually and past
+8 s often; one Cover Art Archive `front` took 20.9 s and was fine. 8 s per request turned 41% of a
+200-request sample into socket timeouts against a service holding 86% of the lookups in its
+database. The default is 30 s now; the 1 request/second rule above is what actually bounds a build.
+
+**The cost stated above was a guess, and the appliance's is higher.** "About a minute per hundred
+files" counts files; the asking is per *album*, and the dominant term is one request per second
+times the albums with no picture of their own. Measured on this corpus, first full build: 417 needy
+albums, 578 requests, 1,991 seconds — half an hour, of which the rate limit is most and the
+service's bad minutes are nearly all the rest. The second build costs 1 request per album, because
+the identifier found the first time is stored on the album row, and a build where nothing changed
+costs nothing. That is what "run it before the party rather than during it" means in numbers.

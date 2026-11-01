@@ -46,15 +46,24 @@ class FakeClient:
         *,
         by_id: dict[str, Recording] | None = None,
         outage: bool = False,
+        refuse: Sequence[str] = (),
     ) -> None:
         self.answers = answers or {}
         self.by_id = by_id or {}
         self.outage = outage
+        self.refuse = set(refuse)
         self.searches: list[tuple[str, str, str]] = []
 
     @property
     def available(self) -> bool:
         return not self.outage
+
+    def _answer(self, track: str) -> None:
+        """Refuse this one question, or raise, depending on which kind of no the test asked for."""
+
+        if track in self.refuse:
+            self.refuse.discard(track)
+            raise MusicBrainzUnavailableError("the server is currently busy")
 
     def recording(self, recording_id: str) -> Recording | None:
         if self.outage:
@@ -65,6 +74,7 @@ class FakeClient:
         self.searches.append((artist, release, track))
         if self.outage:
             raise MusicBrainzUnavailableError("simulated outage")
+        self._answer(track)
         return self.answers.get(track.lower())
 
     # #57 grew the protocol by two questions. This fake is never asked either — it is handed to
@@ -313,6 +323,28 @@ def test_an_outage_leaves_the_build_intact(tmp_path: Path) -> None:
     assert outcome.unavailable is True
     assert outcome.tracks[0].title == "Tagged Title"
     assert any("unavailable" in note.lower() for note in outcome.notes)
+
+
+def test_a_refused_question_is_counted_and_the_asking_carries_on(tmp_path: Path) -> None:
+    """One busy answer is one track without an answer, not a build without MusicBrainz (#59).
+
+    `available` is the client's own five-in-a-row policy, and this stage used to keep a stricter
+    one of its own: the first exception set `down`, and 3,042 tracks later the report said the
+    service was unavailable. The count stays visible either way, because a build that blinked is
+    worth reading about even when it did not stop.
+    """
+
+    client = FakeClient(
+        {"one": Recording(album="Found One"), "three": Recording(album="Found Three")},
+        refuse=["Two"],
+    )
+    tracks = [
+        _track(tmp_path, f"{name}.mp3", title=name, album=None) for name in ("One", "Two", "Three")
+    ]
+    outcome = enrich(tracks, client)
+    assert outcome.unavailable is False
+    assert outcome.failed == 1
+    assert [track.album for track in outcome.tracks] == ["Found One", None, "Found Three"]
 
 
 def test_only_the_first_query_is_attempted_once_the_service_is_down(tmp_path: Path) -> None:

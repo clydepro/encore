@@ -13,6 +13,20 @@ distinction that matters is between *nothing found* and *nothing reachable*: the
 first is a fact about a recording and the second is a fact about this afternoon,
 and only the first may be cached.
 
+There is a third answer, and #59 is the build that could not tell it apart from the second one.
+`HTTP 503` from musicbrainz.org is a page that says *"The MusicBrainz web server is currently
+busy. Please try again later."* — not unreachable, not a miss, an invitation to ask again in a
+minute. Measured over this library's own unidentified albums: 19 of 24 release searches came back
+unusable, 16 of them that way — and pacing explains none of it, because asking the same 24 once
+every three seconds failed 16 times as well, and `HTTP 429`, the status that *is* the published
+rate limit, never appeared at all. It is somebody else's search service having a busy hour, and a
+client that reads that as an outage stops drawing covers over a service asking, by name, to be
+asked again later. Three things follow, and they are
+most of this file's policy: a refused request is repeated once, after a wait the answer may name;
+`available` counts failures *in a row* rather than in a run; and the wait for an answer is long
+enough for the slowest endpoint this client uses, because to everyone downstream a timeout and an
+outage are the same event.
+
 The identifiers Encore already has in tags are looked up directly; searching by
 name is available but off unless asked for, because ADR-010 measured these tags as
 better than a blind match and because a fuzzy match that files 200 songs under the
@@ -32,7 +46,11 @@ from threading import Lock
 from typing import Any, Final, Protocol
 
 __all__ = [
+    "ATTEMPTS_PER_REQUEST",
+    "MAX_FAILURES",
     "REQUESTS_PER_SECOND",
+    "RETRYABLE_STATUS",
+    "RETRY_WAIT",
     "DisabledClient",
     "HttpMusicBrainzClient",
     "MusicBrainzClient",
@@ -52,6 +70,33 @@ REQUESTS_PER_SECOND: Final = 1.0
 MAX_FAILURES: Final = 5
 HTTP_NOT_FOUND: Final = 404
 _YEAR_LENGTH: Final = 4
+
+#: Answers that say "come back" rather than "gone" or "not here". 503 is musicbrainz.org's busy
+#: page and 429 the same sentence in a newer dialect; 500, 502 and 504 come from the gateway in
+#: front of the Cover Art Archive, which is a hosted service with its own bad afternoons. Each
+#: is worth one more request. None of them is worth ending the run.
+RETRYABLE_STATUS: Final = frozenset({429, 500, 502, 503, 504})
+
+#: Attempts per question, the first one included. Two, not four: the condition a repeat cannot
+#: fix is an outage, and an outage already has `MAX_FAILURES` to end it. A repeated request is
+#: still one request per second at minimum, because being refused is not a licence to ask faster.
+ATTEMPTS_PER_REQUEST: Final = 2
+
+#: How long a repeat waits when the answer did not say. This number is load-bearing in a way the
+#: comment around it does not suggest, and two builds of the same library proved it. At 2 s the
+#: repeat landed while the service was still busy, so a question failed twice, `available` counted
+#: five of those in a row and the pass ended with **318 of 417 albums left to ask** in 420 seconds.
+#: At 5 s the repeat usually arrived *after* the busy moment, failures stopped stacking, and the
+#: same build made 578 requests, asked about 414 albums and finished its list in 1,991. The wait
+#: between attempts is therefore not politeness toward the service, it is the run's own survival:
+#: `MAX_FAILURES` measures consecutive questions, and this decides how many of them a single bad
+#: minute gets to burn. `albumart`'s end-of-pass deferral is the second chance; this is the first.
+RETRY_WAIT: Final = 5.0
+
+#: The ceiling on a wait the service asked for by name. `Retry-After` is honoured, and a service
+#: that says an hour is a service this build will not obey, because a build asleep for an hour
+#: publishes nothing and looks hung; 60 s so that the cap does not undercut the timeout below.
+MAX_RETRY_WAIT: Final = 60.0
 
 #: A JSON answer is small. The limit is a backstop against a redirect to something that is
 #: not a MusicBrainz document, not a tuning knob.
@@ -180,25 +225,34 @@ class HttpMusicBrainzClient:
 
     Args:
         timeout: Seconds per request. Generous, because a slow answer is still an
-            answer and a timeout is a rebuild.
+            answer and a timeout is a rebuild — which is the sentence that made 8.0 s wrong.
+            Measured, per endpoint, on the queries this build makes: a recording search runs at a
+            0.46 s median, a release search at 5.3 s with a tail past 45, a lookup by identifier at
+            a 13.7 s median, and one Cover Art Archive `front` took 20.9 s and arrived perfectly
+            well. Anything under 45 reports those as an outage, which is half of what #59
+            measured as "unavailable" (#59).
         minimum_interval: Enforced spacing between requests.
         max_requests: Cap per run. A corpus with no identifiers in its tags would
             otherwise search 3,049 times at one request per second; the cap keeps
             a build's worst case bounded and puts the rest in the report as
             "not enriched", which is honest rather than complete.
+        retry_wait: How long before repeating a question the service refused. A parameter so a
+            test can assert the policy without paying for the seconds.
     """
 
     def __init__(
         self,
         *,
-        timeout: float = 8.0,
+        timeout: float = 45.0,
         minimum_interval: float = 1.0 / REQUESTS_PER_SECOND,
         max_requests: int = 2_000,
+        retry_wait: float = RETRY_WAIT,
         opener: Any = None,
     ) -> None:
         self._timeout = timeout
         self._interval = minimum_interval
         self._cap = max_requests
+        self._retry_wait = retry_wait
         self._opener = opener
         self._lock = Lock()
         self._last_request = 0.0
@@ -213,6 +267,12 @@ class HttpMusicBrainzClient:
         is the internet, and five in a row is musicbrainz.org deciding it has had
         enough. After that the pipeline stops asking and finishes from tags, which
         is 6.6's requirement rather than a fallback.
+
+        *In a row* is the claim, and it is the one the counter had stopped making: `_failures`
+        was raised by every failure in the run and cleared by nothing, so five blinks spread
+        over an hour ended the asking on a service that had answered nine hundred other
+        questions. A success resets it — which is also what makes the retry in `_body` worth
+        having, because without it a busy minute is indistinguishable from an outage.
         """
 
         return self._requests < self._cap and self._failures < MAX_FAILURES
@@ -304,11 +364,16 @@ class HttpMusicBrainzClient:
         that MusicBrainz does not know is a fact about the tag, and treating it as
         an outage would switch enrichment off for the rest of the run because one
         file had a mistyped MBID.
+
+        A 503 is neither, and #59 is the build that read it as the second. A request the service
+        refused with "try again later" is asked once more, later, and only becomes a failure if
+        the repeat is refused too. Counting a refusal as a failure, and a failure as an outage,
+        is what made one busy minute on someone else's search server the end of a whole build's
+        artwork — on a run whose report then blamed the network.
         """
 
         if not self.available:
             return None
-        self._wait()
         full = f"{url}?{urllib.parse.urlencode(params)}" if params else url
         request = urllib.request.Request(  # noqa: S310 - `url` is one of the two constants above, https-only
             full,
@@ -320,38 +385,86 @@ class HttpMusicBrainzClient:
                 "Accept": "image/*" if url.startswith(_COVER_BASE) else "application/json",
             },
         )
-        try:
-            with (self._opener or urllib.request.urlopen)(
-                request, timeout=self._timeout
-            ) as response:
-                # `limit + 1`, so "too big" is decided by a length rather than by trusting a
-                # `Content-Length` header an image host is not obliged to send.
-                body: bytes = response.read(limit + 1)
-        except urllib.error.HTTPError as error:
-            if error.code == HTTP_NOT_FOUND:
-                return None
-            self._failures += 1
-            raise MusicBrainzUnavailableError(f"HTTP {error.code} from {url}") from error
-        except (TimeoutError, urllib.error.URLError, OSError, ValueError) as error:
-            self._failures += 1
-            raise MusicBrainzUnavailableError(f"cannot reach {url}: {error}") from error
-        self._requests += 1
-        # An answer bigger than the promise is not a picture Encore meant to fetch: the cache
-        # would reduce it to 640 px anyway, and the way to lose a party is to hold a 40 MB body
-        # in memory to find out. None, which is "this album has no cover" as far as the report is
-        # concerned — and honest, because a host that sends that is not this host's image store.
-        return body if len(body) <= limit else None
+        attempt, wait = 1, 0.0
+        while True:
+            self._wait(after=wait)
+            try:
+                body = self._send(request, limit=limit)
+            except urllib.error.HTTPError as error:
+                if error.code == HTTP_NOT_FOUND:
+                    return None
+                if error.code in RETRYABLE_STATUS and self._may_repeat(attempt):
+                    attempt, wait = attempt + 1, _retry_after(error, default=self._retry_wait)
+                    continue
+                self._failures += 1
+                raise MusicBrainzUnavailableError(f"HTTP {error.code} from {url}") from error
+            except (TimeoutError, urllib.error.URLError, OSError, ValueError) as error:
+                if self._may_repeat(attempt):
+                    attempt, wait = attempt + 1, self._retry_wait
+                    continue
+                self._failures += 1
+                raise MusicBrainzUnavailableError(f"cannot reach {url}: {error}") from error
+            self._failures = 0
+            self._requests += 1
+            # An answer bigger than the promise is not a picture Encore meant to fetch: the cache
+            # would reduce it to 640 px anyway, and the way to lose a party is to hold a 40 MB body
+            # in memory to find out. None, which is "this album has no cover" as far as the report is
+            # concerned — and honest, because a host that sends that is not this host's image store.
+            return body if len(body) <= limit else None
 
-    def _wait(self) -> None:
-        """Space requests by at least `minimum_interval`, under the lock."""
+    def _send(self, request: urllib.request.Request, *, limit: int) -> bytes:
+        """One attempt at one URL. What an attempt *means* is decided by `_body`, here and nowhere.
+
+        `limit + 1` rather than `limit`, so "too big" is a length the client measured rather than
+        a `Content-Length` header an image host is not obliged to send.
+        """
+
+        with (self._opener or urllib.request.urlopen)(request, timeout=self._timeout) as response:
+            body: bytes = response.read(limit + 1)
+            return body
+
+    def _may_repeat(self, attempt: int) -> bool:
+        """Whether this run may spend a request on repeating itself.
+
+        Two bounds, both already this client's own: an attempt counter, and `available`, which
+        stops a run that has hit five in a row or spent its allowance from turning one bad minute
+        into two requests per question forever. Being refused is a reason to ask again once, not
+        a reason to ask forever.
+        """
+
+        return attempt < ATTEMPTS_PER_REQUEST and self.available
+
+    def _wait(self, *, after: float = 0.0) -> None:
+        """Space requests by at least `minimum_interval`, or by `after` when repeating one."""
 
         with self._lock:
+            floor = max(self._interval, after)
             now = time.monotonic()
-            delay = self._interval - (now - self._last_request)
+            delay = floor - (now - self._last_request)
             if delay > 0:
                 time.sleep(delay)
                 now = time.monotonic()
             self._last_request = now
+
+
+def _retry_after(error: urllib.error.HTTPError, *, default: float) -> float:
+    """How long the service asked to be given, which is a number only when it said one.
+
+    `Retry-After` is honoured because asking faster than a rate-limited client was told to is the
+    one thing this client must not do. It is floored at `default` and capped, because
+    musicbrainz.org's busy page sends `retry-after: 0` — a fact about the gateway's window, not
+    an invitation to fire the next request now — and because a build that sleeps for an hour is
+    a build that publishes nothing.
+    """
+
+    stated = error.headers.get("Retry-After") if error.headers is not None else None
+    try:
+        seconds = float(stated) if stated is not None else None
+    except ValueError:
+        return default
+    if seconds is None:
+        return default
+    return min(max(seconds, default), MAX_RETRY_WAIT)
 
 
 def _recording_from(payload: Mapping[str, Any] | None) -> Recording | None:
